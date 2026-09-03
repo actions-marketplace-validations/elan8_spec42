@@ -2,7 +2,7 @@
 //!
 //! These specifically guard the property that motivated the whole migration: a slow
 //! background rebuild (relink, or the startup workspace scan) must never block an unrelated,
-//! cheap read request (hover) behind it. Before the migration, `sysml_model_result` held the
+//! cheap read request (hover) behind it. Before the migration, the mutable model result held the
 //! server's single `RwLock` read guard for the duration of a full workspace visualization
 //! rebuild, so *any* concurrent request queued behind it for as long as that rebuild took
 //! (20-30+ seconds on a real workspace). Under the actor, reads only ever look at the latest
@@ -51,7 +51,7 @@ fn hover_request_not_blocked_by_concurrent_relink() {
         &serde_json::json!({ "jsonrpc": "2.0", "method": "initialized", "params": {} }).to_string(),
     );
 
-    // Open the document — this schedules an async relink (90ms debounced) that runs in a
+    // Open the document — this schedules a debounced async relink that runs in a
     // detached task, entirely independent of the request below.
     send_message(
         &mut stdin,
@@ -88,6 +88,16 @@ fn hover_request_not_blocked_by_concurrent_relink() {
     assert!(
         elapsed < NOT_BLOCKED_BOUND,
         "hover must not block behind a concurrent relink; took {elapsed:?}: {hover_resp}"
+    );
+    let hover_json: serde_json::Value =
+        serde_json::from_str(&hover_resp).expect("parse hover response");
+    let contents = hover_json["result"]["contents"]["value"]
+        .as_str()
+        .or_else(|| hover_json["result"]["contents"].as_str())
+        .unwrap_or_default();
+    assert!(
+        !contents.contains("Unresolved"),
+        "an in-flight first publication must report loading, not a settled resolution failure: {contents}"
     );
 
     let _ = child.kill();
@@ -171,7 +181,8 @@ fn superseded_relink_result_is_dropped_and_does_not_regress_diagnostics() {
     let mut stdout = child.stdout.take().expect("stdout");
 
     let uri = "file:///superseded_relink.sysml";
-    let broken = "package P {\n  part def Vehicle {\n    part engine : MissingEngineType;\n  }\n}\n";
+    let broken =
+        "package P {\n  part def Vehicle {\n    part engine : MissingEngineType;\n  }\n}\n";
     let fixed = "package P {\n  part def MissingEngineType;\n  part def Vehicle {\n    part engine : MissingEngineType;\n  }\n}\n";
 
     let init_id = next_id();
@@ -197,7 +208,7 @@ fn superseded_relink_result_is_dropped_and_does_not_regress_diagnostics() {
     );
 
     // Open with the broken (unresolved-reference) content, then immediately edit to the fixed
-    // content — both land before the first edit's 90ms relink debounce can fire, so the first
+    // content — both land before the first edit's relink debounce can fire, so the first
     // relink (still reflecting the broken content) must be superseded and its result dropped
     // when it eventually completes; only the second (fixed) edit's relink should ever publish.
     send_message(
@@ -246,7 +257,8 @@ fn superseded_relink_result_is_dropped_and_does_not_regress_diagnostics() {
             .to_string(),
         );
         loop {
-            let msg = read_message(&mut stdout).expect("expected message while waiting for barrier");
+            let msg =
+                read_message(&mut stdout).expect("expected message while waiting for barrier");
             let json: serde_json::Value = serde_json::from_str(&msg).unwrap_or_default();
             if json["method"].as_str() == Some("textDocument/publishDiagnostics")
                 && json["params"]["uri"].as_str() == Some(uri)

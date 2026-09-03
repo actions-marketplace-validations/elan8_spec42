@@ -3,7 +3,7 @@ import path from "path";
 import { fileURLToPath } from "url";
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
-const vscodeTestVersion = process.env.VSCODE_TEST_VERSION || "1.99.0";
+const vscodeTestVersion = process.env.VSCODE_TEST_VERSION || "1.106.0";
 const serverBinary = path.resolve(
   __dirname,
   "..",
@@ -15,7 +15,6 @@ const serverBinary = path.resolve(
 export default defineConfig({
   files: [
     "out/test/suite/extension.test.js",
-    "out/test/suite/visualization.test.js",
     "out/test/suite/placeholder.test.js",
     "out/test/suite/messageHandlers.test.js",
   ],

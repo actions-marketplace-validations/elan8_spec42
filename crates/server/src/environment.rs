@@ -1,28 +1,21 @@
-﻿use std::collections::BTreeSet;
+use std::collections::{BTreeMap, BTreeSet};
 use std::fs;
 use std::path::{Path, PathBuf};
 
 use serde::{Deserialize, Serialize};
 
 use crate::cli::Cli;
-use crate::domain_libraries::{
-    managed_status as domain_managed_status,
-    DomainLibrariesConfig, DomainLibrariesPaths, DomainLibrariesStatus,
-};
 use crate::stdlib::{
-    managed_status, project_dirs, StandardLibraryConfig,
-    StandardLibraryPaths, StandardLibraryStatus,
+    managed_status, project_dirs, StandardLibraryConfig, StandardLibraryPaths,
+    StandardLibraryStatus,
 };
 use crate::sysand::{dependency_roots_from_status, detect_sysand_status, SysandStatus};
-use workspace::{
-    catalog::HostLibraryRequest,
-    EngineBuilder, Spec42Engine,
-};
+use library_catalog::library::managed::{managed_status as kpar_managed_status, KparLibraryStatus};
+use library_catalog::{HostLibraryRequest, KparLibraryComponent};
+use workspace::{EngineBuilder, Spec42Engine};
 
 #[cfg(test)]
-use workspace::catalog::{
-    resolve_domain_libraries_component_for_test, resolve_stdlib_component_for_test,
-};
+use library_catalog::catalog::resolve_stdlib_component_for_test;
 
 #[derive(Debug, Clone, Deserialize, Default)]
 pub struct ConfigFile {
@@ -32,6 +25,8 @@ pub struct ConfigFile {
     pub standard_library_version: Option<String>,
     pub standard_library_repo: Option<String>,
     pub standard_library_content_path: Option<String>,
+    pub disabled_libraries: Option<Vec<String>>,
+    pub project_libraries: Option<BTreeMap<String, String>>,
 }
 
 #[derive(Debug, Clone)]
@@ -44,13 +39,20 @@ pub struct ResolvedEnvironment {
     pub stdlib_roots: Vec<PathBuf>,
     pub stdlib_source: Option<String>,
     pub used_legacy_vscode_fallback: bool,
-    pub domain_libraries_path: Option<PathBuf>,
-    pub domain_libraries_source: Option<String>,
+    pub kpar_libraries: Vec<KparLibraryComponent>,
     pub sysand: SysandStatus,
     pub standard_library: StandardLibraryConfig,
     pub standard_library_paths: StandardLibraryPaths,
-    pub domain_libraries: DomainLibrariesConfig,
-    pub domain_libraries_paths: DomainLibrariesPaths,
+}
+
+#[derive(Debug, Clone, Serialize)]
+pub struct DoctorKparLibrary {
+    pub id: String,
+    pub display_name: String,
+    pub path: Option<String>,
+    pub source: Option<String>,
+    pub source_kind: String,
+    pub status: KparLibraryStatus,
 }
 
 #[derive(Debug, Clone, Serialize)]
@@ -65,12 +67,9 @@ pub struct DoctorReport {
     pub stdlib_source: Option<String>,
     pub stdlib_source_kind: String,
     pub used_legacy_vscode_fallback: bool,
-    pub resolved_domain_libraries_path: Option<String>,
-    pub domain_libraries_source: Option<String>,
-    pub domain_libraries_source_kind: String,
     pub sysand: SysandStatus,
     pub standard_library_status: StandardLibraryStatus,
-    pub domain_libraries_status: DomainLibrariesStatus,
+    pub kpar_libraries: Vec<DoctorKparLibrary>,
     pub library_paths: Vec<DoctorPathStatus>,
 }
 
@@ -125,7 +124,6 @@ fn resolve_environment_with_dirs(
     };
 
     let standard_library = resolve_standard_library_config(cli, &explicit_config, &default_config);
-    let domain_libraries = resolve_domain_libraries_config(cli, &explicit_config, &default_config);
 
     let sysand = detect_sysand_status();
     let sysand_dependency_roots = dependency_roots_from_status(&sysand);
@@ -136,7 +134,6 @@ fn resolve_environment_with_dirs(
         data_dir.clone(),
         &sysand_dependency_roots,
         standard_library.clone(),
-        domain_libraries.clone(),
     )?;
     let engine = EngineBuilder::from_request(request)
         .build()
@@ -152,13 +149,10 @@ fn resolve_environment_with_dirs(
         stdlib_roots: catalog.stdlib.roots.clone(),
         stdlib_source: catalog.stdlib.source.clone(),
         used_legacy_vscode_fallback: catalog.stdlib.used_legacy_vscode_fallback,
-        domain_libraries_path: catalog.domain_libraries.path.clone(),
-        domain_libraries_source: catalog.domain_libraries.source.clone(),
+        kpar_libraries: catalog.kpar_libraries.clone(),
         sysand,
         standard_library,
         standard_library_paths: catalog.standard_library_paths.clone(),
-        domain_libraries,
-        domain_libraries_paths: catalog.domain_libraries_paths.clone(),
     })
 }
 
@@ -198,7 +192,6 @@ fn build_engine_with_dirs(
     };
 
     let standard_library = resolve_standard_library_config(cli, &explicit_config, &default_config);
-    let domain_libraries = resolve_domain_libraries_config(cli, &explicit_config, &default_config);
     let sysand = detect_sysand_status();
     let sysand_dependency_roots = dependency_roots_from_status(&sysand);
     let request = build_host_library_request(
@@ -208,7 +201,6 @@ fn build_engine_with_dirs(
         data_dir,
         &sysand_dependency_roots,
         standard_library,
-        domain_libraries,
     )?;
     EngineBuilder::from_request(request)
         .build()
@@ -241,26 +233,12 @@ pub fn build_doctor_report(
             status.is_installed = status.is_installed && stdlib_path.is_dir();
         }
     }
-    let mut domain_status = domain_managed_status(
-        &environment.domain_libraries_paths,
-        &environment.domain_libraries,
-    )?;
-    if domain_status.install_path.is_none() {
-        domain_status.install_path = environment
-            .domain_libraries_path
-            .as_ref()
-            .map(|path| path.display().to_string());
-    }
-    if domain_status.source.is_none() {
-        domain_status.source = environment.domain_libraries_source.clone();
-    }
-    if let Some(domain_path) = &environment.domain_libraries_path {
-        if environment.domain_libraries_source.as_deref() != Some("flag")
-            && environment.domain_libraries_source.as_deref() != Some("env")
-        {
-            domain_status.is_installed = domain_status.is_installed && domain_path.is_dir();
-        }
-    }
+
+    let kpar_libraries = environment
+        .kpar_libraries
+        .iter()
+        .map(build_doctor_kpar_library)
+        .collect::<Result<Vec<_>, String>>()?;
 
     Ok(DoctorReport {
         version: env!("CARGO_PKG_VERSION").to_string(),
@@ -293,27 +271,9 @@ pub fn build_doctor_report(
             "none".to_string()
         },
         used_legacy_vscode_fallback: environment.used_legacy_vscode_fallback,
-        resolved_domain_libraries_path: environment
-            .domain_libraries_path
-            .as_ref()
-            .map(|path| path.display().to_string()),
-        domain_libraries_source: environment.domain_libraries_source.clone(),
-        domain_libraries_source_kind: if environment.domain_libraries_source.as_deref()
-            == Some("bundled")
-        {
-            "bundled".to_string()
-        } else if environment.domain_libraries_source.as_deref() == Some("managed") {
-            "canonical-managed".to_string()
-        } else if environment.domain_libraries_source.as_deref() == Some("flag")
-            || environment.domain_libraries_source.as_deref() == Some("env")
-        {
-            "override".to_string()
-        } else {
-            "none".to_string()
-        },
         sysand: environment.sysand.clone(),
         standard_library_status: status,
-        domain_libraries_status: domain_status,
+        kpar_libraries,
         library_paths: environment
             .library_paths
             .iter()
@@ -322,6 +282,52 @@ pub fn build_doctor_report(
                 exists: path.is_dir(),
             })
             .collect(),
+    })
+}
+
+fn kpar_library_source_kind(source: Option<&str>) -> String {
+    match source {
+        Some("bundled") => "bundled".to_string(),
+        Some("managed") => "canonical-managed".to_string(),
+        Some("flag") | Some("env") => "override".to_string(),
+        Some("custom") => "custom".to_string(),
+        Some("disabled") => "disabled".to_string(),
+        _ => "none".to_string(),
+    }
+}
+
+fn build_doctor_kpar_library(
+    component: &KparLibraryComponent,
+) -> Result<DoctorKparLibrary, String> {
+    let mut status = kpar_managed_status(&component.paths, &component.config)?;
+    if status.install_path.is_none() {
+        status.install_path = component
+            .path
+            .as_ref()
+            .map(|path| path.display().to_string());
+    }
+    if status.source.is_none() {
+        status.source = component.source.clone();
+    }
+    if let Some(path) = &component.path {
+        if !matches!(
+            component.source.as_deref(),
+            Some("flag") | Some("env") | Some("custom")
+        ) {
+            status.is_installed = status.is_installed && path.is_dir();
+        }
+    }
+
+    Ok(DoctorKparLibrary {
+        id: component.id.clone(),
+        display_name: component.display_name.clone(),
+        path: component
+            .path
+            .as_ref()
+            .map(|path| path.display().to_string()),
+        source: component.source.clone(),
+        source_kind: kpar_library_source_kind(component.source.as_deref()),
+        status,
     })
 }
 
@@ -374,7 +380,6 @@ fn build_host_library_request(
     cache_dir: PathBuf,
     sysand_dependency_roots: &[PathBuf],
     standard_library: StandardLibraryConfig,
-    domain_libraries: DomainLibrariesConfig,
 ) -> Result<HostLibraryRequest, String> {
     let library_paths = resolve_explicit_library_paths(cli, explicit_config, default_config);
     let config_stdlib_path = explicit_config
@@ -382,26 +387,128 @@ fn build_host_library_request(
         .as_ref()
         .or(default_config.stdlib_path.as_ref())
         .map(|path| canonicalize_lossy(Path::new(path)));
-    let config_no_stdlib = explicit_config.no_stdlib.unwrap_or(false)
-        || default_config.no_stdlib.unwrap_or(false);
-
-    let use_embedded_stdlib = cfg!(feature = "embed-stdlib");
-    let use_embedded_domain_libraries = cfg!(feature = "embed-domain-libraries");
+    let config_no_stdlib =
+        explicit_config.no_stdlib.unwrap_or(false) || default_config.no_stdlib.unwrap_or(false);
 
     Ok(HostLibraryRequest {
         cache_dir,
         no_stdlib: cli.no_stdlib,
         stdlib_path_override: cli.stdlib_path.clone(),
-        domain_libraries_path_override: cli.domain_libraries_path.clone(),
+        kpar_library_path_overrides: parse_kpar_library_path_overrides(&cli.kpar_library_paths)?,
+        project_library_paths: resolve_project_library_paths(cli, explicit_config, default_config)?,
+        disabled_kpar_libraries: resolve_disabled_kpar_libraries(
+            cli,
+            explicit_config,
+            default_config,
+        ),
         library_paths,
         standard_library,
-        domain_libraries,
-        use_embedded_stdlib,
-        use_embedded_domain_libraries,
+        use_embedded_stdlib: cfg!(feature = "embed-stdlib"),
+        use_embedded_kpar_libraries: cfg!(feature = "embed-kpar-libraries"),
         config_stdlib_path,
         config_no_stdlib,
         extra_library_paths: sysand_dependency_roots.to_vec(),
     })
+}
+
+fn resolve_project_library_paths(
+    cli: &Cli,
+    explicit_config: &ConfigFile,
+    default_config: &ConfigFile,
+) -> Result<BTreeMap<String, PathBuf>, String> {
+    let mut entries = Vec::new();
+    if let Some(configured) = &default_config.project_libraries {
+        entries.extend(
+            configured
+                .iter()
+                .map(|(resource, path)| format!("{resource}={path}")),
+        );
+    }
+    if let Some(configured) = &explicit_config.project_libraries {
+        entries.extend(
+            configured
+                .iter()
+                .map(|(resource, path)| format!("{resource}={path}")),
+        );
+    }
+    if let Ok(value) = std::env::var("SPEC42_PROJECT_LIBRARIES") {
+        entries.extend(
+            value
+                .split(',')
+                .map(str::trim)
+                .filter(|entry| !entry.is_empty())
+                .map(str::to_owned),
+        );
+    }
+    entries.extend(cli.project_libraries.iter().cloned());
+    parse_resource_path_mappings(&entries, "project library")
+}
+
+fn parse_resource_path_mappings(
+    entries: &[String],
+    label: &str,
+) -> Result<BTreeMap<String, PathBuf>, String> {
+    let mut mappings = BTreeMap::new();
+    for entry in entries {
+        let (resource, path) = entry
+            .rsplit_once('=')
+            .ok_or_else(|| format!("invalid {label} '{entry}' (expected RESOURCE=PATH)"))?;
+        let resource = resource.trim();
+        let path = path.trim();
+        if resource.is_empty() || path.is_empty() {
+            return Err(format!(
+                "invalid {label} '{entry}' (empty resource or path)"
+            ));
+        }
+        mappings.insert(resource.to_owned(), canonicalize_lossy(Path::new(path)));
+    }
+    Ok(mappings)
+}
+
+fn resolve_disabled_kpar_libraries(
+    cli: &Cli,
+    explicit_config: &ConfigFile,
+    default_config: &ConfigFile,
+) -> BTreeSet<String> {
+    let mut disabled: BTreeSet<String> = cli.disabled_kpar_libraries.iter().cloned().collect();
+    if let Some(value) = std::env::var_os("SPEC42_DISABLED_KPAR_LIBRARIES") {
+        if let Some(value) = value.to_str() {
+            disabled.extend(
+                value
+                    .split(',')
+                    .map(str::trim)
+                    .filter(|id| !id.is_empty())
+                    .map(str::to_string),
+            );
+        }
+    }
+    if let Some(ids) = &explicit_config.disabled_libraries {
+        disabled.extend(ids.iter().cloned());
+    }
+    if let Some(ids) = &default_config.disabled_libraries {
+        disabled.extend(ids.iter().cloned());
+    }
+    disabled
+}
+
+fn parse_kpar_library_path_overrides(
+    entries: &[String],
+) -> Result<BTreeMap<String, PathBuf>, String> {
+    let mut overrides = BTreeMap::new();
+    for entry in entries {
+        let (id, path) = entry
+            .split_once('=')
+            .ok_or_else(|| format!("invalid --kpar-library-path '{entry}' (expected ID=PATH)"))?;
+        let id = id.trim();
+        let path = path.trim();
+        if id.is_empty() || path.is_empty() {
+            return Err(format!(
+                "invalid --kpar-library-path '{entry}' (empty id or path)"
+            ));
+        }
+        overrides.insert(id.to_string(), canonicalize_lossy(Path::new(path)));
+    }
+    Ok(overrides)
 }
 
 fn resolve_explicit_library_paths(
@@ -409,7 +516,7 @@ fn resolve_explicit_library_paths(
     explicit_config: &ConfigFile,
     default_config: &ConfigFile,
 ) -> Vec<PathBuf> {
-    resolve_library_paths(cli, explicit_config, default_config, &[], &[], None)
+    resolve_library_paths(cli, explicit_config, default_config, &[], &[])
 }
 
 fn resolve_library_paths(
@@ -418,7 +525,6 @@ fn resolve_library_paths(
     default_config: &ConfigFile,
     sysand_dependency_roots: &[PathBuf],
     stdlib_roots: &[PathBuf],
-    domain_libraries_path: Option<&PathBuf>,
 ) -> Vec<PathBuf> {
     let mut paths = if !cli.library_paths.is_empty() {
         cli.library_paths
@@ -445,9 +551,6 @@ fn resolve_library_paths(
 
     paths.extend(sysand_dependency_roots.iter().cloned());
     paths.extend(stdlib_roots.iter().cloned());
-    if let Some(domain_libraries_path) = domain_libraries_path {
-        paths.push(domain_libraries_path.clone());
-    }
 
     let mut deduped = BTreeSet::new();
     paths
@@ -457,51 +560,8 @@ fn resolve_library_paths(
 }
 
 #[cfg(test)]
-struct DomainLibrariesResolution {
-    path: Option<PathBuf>,
-    source: Option<String>,
-}
-
-#[cfg(test)]
-fn resolve_domain_libraries_path(
-    cli: &Cli,
-    domain_libraries: &DomainLibrariesConfig,
-    domain_libraries_paths: &DomainLibrariesPaths,
-) -> Result<DomainLibrariesResolution, String> {
-    let request = HostLibraryRequest {
-        cache_dir: domain_libraries_paths.managed_root.clone(),
-        no_stdlib: true,
-        stdlib_path_override: None,
-        domain_libraries_path_override: cli.domain_libraries_path.clone(),
-        library_paths: Vec::new(),
-        standard_library: StandardLibraryConfig::default(),
-        domain_libraries: domain_libraries.clone(),
-        use_embedded_stdlib: false,
-        use_embedded_domain_libraries: cfg!(feature = "embed-domain-libraries"),
-        config_stdlib_path: None,
-        config_no_stdlib: true,
-        extra_library_paths: Vec::new(),
-    };
-    let component = resolve_domain_libraries_component_for_test(&request, domain_libraries_paths)
-        .map_err(|error| error.to_string())?;
-    Ok(DomainLibrariesResolution {
-        path: component.path,
-        source: component.source,
-    })
-}
-
-fn resolve_domain_libraries_config(
-    _cli: &Cli,
-    _explicit_config: &ConfigFile,
-    _default_config: &ConfigFile,
-) -> DomainLibrariesConfig {
-    DomainLibrariesConfig::default()
-}
-
-#[cfg(test)]
 struct StdlibResolution {
     path: Option<PathBuf>,
-    roots: Vec<PathBuf>,
     source: Option<String>,
     used_legacy_vscode_fallback: bool,
 }
@@ -519,18 +579,19 @@ fn resolve_stdlib_path(
         .as_ref()
         .or(default_config.stdlib_path.as_ref())
         .map(|path| canonicalize_lossy(Path::new(path)));
-    let config_no_stdlib = explicit_config.no_stdlib.unwrap_or(false)
-        || default_config.no_stdlib.unwrap_or(false);
+    let config_no_stdlib =
+        explicit_config.no_stdlib.unwrap_or(false) || default_config.no_stdlib.unwrap_or(false);
     let request = HostLibraryRequest {
         cache_dir: standard_library_paths.managed_root.clone(),
         no_stdlib: cli.no_stdlib,
         stdlib_path_override: cli.stdlib_path.clone(),
-        domain_libraries_path_override: None,
+        kpar_library_path_overrides: BTreeMap::new(),
+        project_library_paths: BTreeMap::new(),
+        disabled_kpar_libraries: BTreeSet::new(),
         library_paths: Vec::new(),
         standard_library: standard_library.clone(),
-        domain_libraries: DomainLibrariesConfig::default(),
         use_embedded_stdlib: cfg!(feature = "embed-stdlib"),
-        use_embedded_domain_libraries: false,
+        use_embedded_kpar_libraries: false,
         config_stdlib_path,
         config_no_stdlib,
         extra_library_paths: Vec::new(),
@@ -539,7 +600,6 @@ fn resolve_stdlib_path(
         .map_err(|error| error.to_string())?;
     Ok(StdlibResolution {
         path: component.path,
-        roots: component.roots,
         source: component.source,
         used_legacy_vscode_fallback: component.used_legacy_vscode_fallback,
     })
@@ -568,62 +628,11 @@ fn canonicalize_lossy(path: &Path) -> PathBuf {
     path.canonicalize().unwrap_or_else(|_| path.to_path_buf())
 }
 
-/// True when any `.sysml` / `.kerml` file under `path` references common standard-library packages.
-pub fn workspace_references_standard_library(path: &Path) -> bool {
-    fn file_references_stdlib(path: &Path) -> bool {
-        let Ok(content) = fs::read_to_string(path) else {
-            return false;
-        };
-        content.contains("ScalarValues")
-            || content.contains("ISQ::")
-            || content.contains("ISQ ")
-            || content.contains("SI::")
-            || content.contains("import ISQ")
-            || content.contains("import SI")
-    }
-
-    fn walk(dir: &Path, budget: &mut usize) -> bool {
-        if *budget == 0 {
-            return false;
-        }
-        let Ok(entries) = fs::read_dir(dir) else {
-            return false;
-        };
-        for entry in entries.flatten() {
-            if *budget == 0 {
-                break;
-            }
-            let path = entry.path();
-            if path.is_dir() {
-                if walk(&path, budget) {
-                    return true;
-                }
-            } else if path
-                .extension()
-                .is_some_and(|ext| ext == "sysml" || ext == "kerml")
-            {
-                *budget = budget.saturating_sub(1);
-                if file_references_stdlib(&path) {
-                    return true;
-                }
-            }
-        }
-        false
-    }
-
-    if path.is_file() {
-        return file_references_stdlib(path);
-    }
-    let mut budget = 256usize;
-    walk(path, &mut budget)
-}
-
 #[cfg(test)]
 mod tests {
     use std::sync::Mutex;
 
     use super::*;
-    use crate::domain_libraries::domain_libraries_paths_from_data_dir;
     use crate::stdlib::{
         save_managed_metadata, standard_library_paths_from_data_dir, DEFAULT_STDLIB_CONTENT_PATH,
         EMBEDDED_STDLIB_REPO,
@@ -632,61 +641,143 @@ mod tests {
     /// Serializes tests that mutate `APPDATA` (global process environment).
     static APPDATA_TEST_LOCK: Mutex<()> = Mutex::new(());
 
-    #[test]
-    fn explicit_library_paths_take_precedence() {
-        let cli = Cli {
+    fn empty_cli() -> Cli {
+        Cli {
             config_path: None,
-            library_paths: vec![PathBuf::from("C:/models/lib")],
+            library_paths: Vec::new(),
             stdlib_path: None,
-            domain_libraries_path: None,
+            kpar_library_paths: Vec::new(),
+            project_libraries: Vec::new(),
+            disabled_kpar_libraries: Vec::new(),
             no_stdlib: false,
             stdio: false,
             command: None,
-        };
+        }
+    }
+
+    #[test]
+    fn explicit_library_paths_take_precedence() {
+        let mut cli = empty_cli();
+        cli.library_paths = vec![PathBuf::from("C:/models/lib")];
         let paths = resolve_library_paths(
             &cli,
             &ConfigFile::default(),
             &ConfigFile::default(),
             &[],
             &[],
-            None,
         );
         assert_eq!(paths, vec![PathBuf::from("C:/models/lib")]);
     }
 
     #[test]
-    fn explicit_domain_libraries_path_flag() {
-        let temp = tempfile::tempdir().expect("temp dir");
-        let root = temp.path().join("domain-lib-root");
-        std::fs::create_dir_all(&root).expect("create domain root");
-        let cli = Cli {
-            config_path: None,
-            library_paths: Vec::new(),
-            stdlib_path: None,
-            domain_libraries_path: Some(root.clone()),
-            no_stdlib: false,
-            stdio: false,
-            command: None,
+    fn parse_kpar_library_path_overrides_accepts_id_path() {
+        let overrides = parse_kpar_library_path_overrides(&["domain=C:/libs/domain".to_string()])
+            .expect("parse");
+        assert_eq!(
+            overrides
+                .get("domain")
+                .map(|path| path.display().to_string()),
+            Some(
+                canonicalize_lossy(Path::new("C:/libs/domain"))
+                    .display()
+                    .to_string()
+            )
+        );
+    }
+
+    #[test]
+    fn project_library_config_and_cli_bind_authored_resources_without_name_inference() {
+        let mut cli = empty_cli();
+        cli.project_libraries = vec!["https://example.test/std=/tmp/alternate.kpar".into()];
+        let default_config = ConfigFile {
+            project_libraries: Some(BTreeMap::from([(
+                "https://example.test/domain".into(),
+                "/tmp/domain.kpar".into(),
+            )])),
+            ..ConfigFile::default()
         };
-        let paths = domain_libraries_paths_from_data_dir(temp.path().join("data"));
-        let resolution =
-            resolve_domain_libraries_path(&cli, &DomainLibrariesConfig::default(), &paths)
-                .expect("resolve domain libraries");
-        assert_eq!(resolution.source.as_deref(), Some("flag"));
-        assert_eq!(resolution.path, Some(canonicalize_lossy(&root)));
+        let mappings = resolve_project_library_paths(&cli, &ConfigFile::default(), &default_config)
+            .expect("explicit resource mappings");
+        assert_eq!(mappings.len(), 2);
+        assert_eq!(
+            mappings["https://example.test/std"],
+            canonicalize_lossy(Path::new("/tmp/alternate.kpar"))
+        );
+    }
+
+    #[test]
+    fn disabled_kpar_library_is_excluded_from_resolution() {
+        let temp = tempfile::tempdir().expect("temp dir");
+        let config_dir = temp.path().join("config");
+        let data_dir = temp.path().join("data");
+        std::fs::create_dir_all(&config_dir).expect("create config dir");
+        std::fs::create_dir_all(&data_dir).expect("create data dir");
+
+        let mut cli = empty_cli();
+        cli.no_stdlib = true;
+        cli.disabled_kpar_libraries = vec!["domain".to_string()];
+        let environment =
+            resolve_environment_with_dirs(&cli, config_dir, data_dir).expect("environment");
+
+        let domain = environment
+            .kpar_libraries
+            .iter()
+            .find(|library| library.id == "domain")
+            .expect("domain library");
+        assert_eq!(domain.source.as_deref(), Some("disabled"));
+        assert!(domain.path.is_none());
+        assert!(!environment
+            .library_paths
+            .iter()
+            .any(|path| domain.path.as_ref() == Some(path)));
+
+        let doctor = build_doctor_report("doctor", &environment).expect("doctor");
+        let domain_doctor = doctor
+            .kpar_libraries
+            .iter()
+            .find(|library| library.id == "domain")
+            .expect("domain doctor entry");
+        assert_eq!(domain_doctor.source_kind, "disabled");
+    }
+
+    #[test]
+    fn unregistered_kpar_library_path_registers_ad_hoc_library() {
+        let temp = tempfile::tempdir().expect("temp dir");
+        let config_dir = temp.path().join("config");
+        let data_dir = temp.path().join("data");
+        let custom_lib_dir = temp.path().join("mylib");
+        std::fs::create_dir_all(&config_dir).expect("create config dir");
+        std::fs::create_dir_all(&data_dir).expect("create data dir");
+        std::fs::create_dir_all(&custom_lib_dir).expect("create custom lib dir");
+        std::fs::write(custom_lib_dir.join("Custom.sysml"), "package Custom { }")
+            .expect("write custom sysml file");
+
+        let mut cli = empty_cli();
+        cli.no_stdlib = true;
+        cli.kpar_library_paths = vec![format!("mylib={}", custom_lib_dir.display())];
+        let environment =
+            resolve_environment_with_dirs(&cli, config_dir, data_dir).expect("environment");
+
+        let custom = environment
+            .kpar_libraries
+            .iter()
+            .find(|library| library.id == "mylib")
+            .expect("ad-hoc mylib library");
+        assert_eq!(custom.source.as_deref(), Some("custom"));
+        assert_eq!(
+            custom.path.as_ref().map(|p| canonicalize_lossy(p)),
+            Some(canonicalize_lossy(&custom_lib_dir))
+        );
+        assert!(environment
+            .library_paths
+            .iter()
+            .any(|path| custom.path.as_ref() == Some(path)));
     }
 
     #[test]
     fn explicit_no_stdlib_disables_resolution() {
-        let cli = Cli {
-            config_path: None,
-            library_paths: Vec::new(),
-            stdlib_path: None,
-            domain_libraries_path: None,
-            no_stdlib: true,
-            stdio: false,
-            command: None,
-        };
+        let mut cli = empty_cli();
+        cli.no_stdlib = true;
         let resolution = resolve_stdlib_path(
             &cli,
             &ConfigFile::default(),
@@ -714,15 +805,8 @@ mod tests {
         std::env::set_var("SPEC42_CONFIG_DIR", &config_dir);
         std::env::set_var("SPEC42_DATA_DIR", &data_dir);
 
-        let cli = Cli {
-            config_path: None,
-            library_paths: Vec::new(),
-            stdlib_path: None,
-            domain_libraries_path: None,
-            no_stdlib: true,
-            stdio: false,
-            command: None,
-        };
+        let mut cli = empty_cli();
+        cli.no_stdlib = true;
         let environment = resolve_environment(&cli).expect("environment");
 
         match old_config_dir {
@@ -776,15 +860,7 @@ mod tests {
         )
         .expect("save metadata");
 
-        let cli = Cli {
-            config_path: None,
-            library_paths: Vec::new(),
-            stdlib_path: None,
-            domain_libraries_path: None,
-            no_stdlib: false,
-            stdio: false,
-            command: None,
-        };
+        let cli = empty_cli();
         let environment =
             resolve_environment_with_dirs(&cli, config_dir, data_dir).expect("environment");
         assert_eq!(environment.stdlib_source.as_deref(), Some("managed"));
@@ -827,15 +903,7 @@ mod tests {
         )
         .expect("save metadata");
 
-        let cli = Cli {
-            config_path: None,
-            library_paths: Vec::new(),
-            stdlib_path: None,
-            domain_libraries_path: None,
-            no_stdlib: false,
-            stdio: false,
-            command: None,
-        };
+        let cli = empty_cli();
         let environment =
             resolve_environment_with_dirs(&cli, config_dir, data_dir).expect("environment");
         assert_ne!(environment.stdlib_path.as_ref(), Some(&stale_install_path));
@@ -878,15 +946,7 @@ mod tests {
         )
         .expect("save metadata");
 
-        let cli = Cli {
-            config_path: None,
-            library_paths: Vec::new(),
-            stdlib_path: None,
-            domain_libraries_path: None,
-            no_stdlib: false,
-            stdio: false,
-            command: None,
-        };
+        let cli = empty_cli();
         let environment =
             resolve_environment_with_dirs(&cli, config_dir, data_dir).expect("environment");
         let expected_path = crate::stdlib::managed_install_path(
@@ -904,8 +964,6 @@ mod tests {
         );
     }
 
-    /// When both an embedded archive and a legacy VS Code install exist, resolution must use the
-    /// bundled materialization first (not `legacy-vscode`).
     #[cfg(feature = "embed-stdlib")]
     #[test]
     fn embedded_stdlib_precedes_legacy_vscode_path() {
@@ -932,15 +990,7 @@ mod tests {
         std::env::set_var("APPDATA", &fake_appdata);
 
         let paths = standard_library_paths_from_data_dir(data_dir);
-        let cli = Cli {
-            config_path: None,
-            library_paths: Vec::new(),
-            stdlib_path: None,
-            domain_libraries_path: None,
-            no_stdlib: false,
-            stdio: false,
-            command: None,
-        };
+        let cli = empty_cli();
         let resolution = resolve_stdlib_path(
             &cli,
             &ConfigFile::default(),
@@ -960,39 +1010,47 @@ mod tests {
         assert!(resolution.path.is_some());
     }
 
-    #[cfg(feature = "embed-domain-libraries")]
+    #[cfg(feature = "embed-kpar-libraries")]
     #[test]
-    fn resolve_environment_materializes_embedded_domain_libraries() {
+    fn resolve_environment_materializes_embedded_kpar_libraries() {
         let temp = tempfile::tempdir().expect("temp dir");
         let config_dir = temp.path().join("config");
         let data_dir = temp.path().join("data");
         std::fs::create_dir_all(&config_dir).expect("create config dir");
         std::fs::create_dir_all(&data_dir).expect("create data dir");
 
-        let cli = Cli {
-            config_path: None,
-            library_paths: Vec::new(),
-            stdlib_path: None,
-            domain_libraries_path: None,
-            no_stdlib: true,
-            stdio: false,
-            command: None,
-        };
+        let mut cli = empty_cli();
+        cli.no_stdlib = true;
         let environment =
             resolve_environment_with_dirs(&cli, config_dir, data_dir).expect("environment");
 
-        assert_eq!(
-            environment.domain_libraries_source.as_deref(),
-            Some("bundled")
-        );
-        assert!(environment.domain_libraries_path.is_some());
+        let domain = environment
+            .kpar_libraries
+            .iter()
+            .find(|library| library.id == "domain")
+            .expect("domain library");
+        assert_eq!(domain.source.as_deref(), Some("bundled"));
+        assert!(domain.path.is_some());
         assert!(environment
             .library_paths
             .iter()
-            .any(|path| environment.domain_libraries_path.as_ref() == Some(path)));
+            .any(|path| domain.path.as_ref() == Some(path)));
+
         let doctor = build_doctor_report("doctor", &environment).expect("doctor");
-        assert_eq!(doctor.domain_libraries_source_kind, "bundled");
-        assert!(doctor.resolved_domain_libraries_path.is_some());
-        assert!(doctor.domain_libraries_status.is_installed);
+        let domain_doctor = doctor
+            .kpar_libraries
+            .iter()
+            .find(|library| library.id == "domain")
+            .expect("domain doctor entry");
+        assert_eq!(domain_doctor.source_kind, "bundled");
+        assert!(domain_doctor.status.is_installed);
+
+        let method = doctor
+            .kpar_libraries
+            .iter()
+            .find(|library| library.id == "method")
+            .expect("method doctor entry");
+        assert_eq!(method.source_kind, "bundled");
+        assert!(method.status.is_installed);
     }
 }

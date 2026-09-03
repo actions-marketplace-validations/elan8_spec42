@@ -5,13 +5,10 @@
 //! AST-driven ranges override lexer heuristics when a parse succeeds.
 
 mod ast_ranges;
-mod ast_util;
-mod keywords;
 mod lexer;
 mod types;
 
-pub use ast_ranges::ast_semantic_ranges;
-pub use ast_util::{identification_name, refine_declaration_ranges, span_to_source_range, SourceRange};
+pub use ast_ranges::{ast_semantic_ranges, refine_declaration_ranges, SourceRange};
 pub use types::*;
 
 use lexer::tokenize_line;
@@ -127,7 +124,14 @@ fn apply_ast_semantic_ranges(
                 if *type_idx == TYPE_TYPE && ast_type == TYPE_PROPERTY {
                     continue;
                 }
-                if *type_idx == TYPE_KEYWORD && ast_type != TYPE_KEYWORD {
+                // Reserved-keyword text (e.g. `entry`, `standard`, `concern`) can also be a
+                // legal identifier (enum member, attribute name) elsewhere in the grammar.
+                // The lexer classifies purely by spelling, so only let the AST's precisely
+                // spanned identifier classification override it -- not looser AST guesses.
+                if *type_idx == TYPE_KEYWORD
+                    && ast_type != TYPE_KEYWORD
+                    && ast_type != TYPE_PROPERTY
+                {
                     continue;
                 }
                 if let Some(log) = log_out.as_mut() {
@@ -228,6 +232,24 @@ pub fn semantic_tokens_full(
         },
         log_lines,
     )
+}
+
+/// Parse text and return Spec42 semantic tokens with AST refinement.
+///
+/// Hosts (LSP, Babel42, WASM) should call this instead of depending on
+/// `sysml-v2-parser` directly. Uses a partial/editor parse when possible so
+/// highlighting still works on incomplete documents; falls back to lexer-only
+/// classification when the AST contributes no ranges.
+#[must_use]
+pub fn semantic_tokens_for_text(text: &str) -> SemanticTokensDto {
+    let parsed = sysml_query::syntax::SyntaxService::new().parse_text(text);
+    let ranges = ast_semantic_ranges(&parsed, text);
+    let (dto, _) = if ranges.is_empty() {
+        semantic_tokens_full(text, None)
+    } else {
+        semantic_tokens_full(text, Some(&ranges))
+    };
+    dto
 }
 
 fn block_comment_state_after_line(lines: &[&str], through_line: u32) -> bool {
@@ -333,5 +355,19 @@ mod tests {
         let (tokens, _) = semantic_tokens_full(text, None);
         assert!(!tokens.data.is_empty());
         assert_eq!(tokens.data.len() % 5, 0);
+    }
+
+    #[test]
+    fn semantic_tokens_for_text_applies_ast_ranges() {
+        let text = "package Demo {\n  part def Vehicle;\n}\n";
+        let tokens = semantic_tokens_for_text(text);
+        assert!(!tokens.data.is_empty());
+        assert_eq!(tokens.data.len() % 5, 0);
+        // AST path should classify declaration names beyond bare lexer keywords.
+        let lexer_only = semantic_tokens_full(text, None).0;
+        assert_ne!(
+            tokens.data, lexer_only.data,
+            "AST refinement should change token classification for part def names"
+        );
     }
 }

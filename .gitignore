@@ -8,6 +8,7 @@ vscode/testFixture/test-output/
 temp
 sysml-parser/test-logs/
 vscode/out/
+vscode/generators/diagram.wasm
 vscode/media/webview/visualizer.js
 vscode/media/webview/visualizer.js.map
 internal_docs/
@@ -18,3 +19,9 @@ tmp/
 third_party/
 crates/kernel/tests/output/*
 perf.data
+__pycache__/
+
+# Agent worktrees created by Claude Code
+.claude/worktrees/
+
+*.vsix

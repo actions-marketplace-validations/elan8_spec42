@@ -1,12 +1,18 @@
-﻿use workspace::{compare_snapshots, HostWorkspaceSnapshot};
+use workspace::{compare_snapshots, HostWorkspaceSnapshot};
 
 pub fn assert_snapshot_parity(
     label: &str,
     expected: &HostWorkspaceSnapshot,
     actual: &HostWorkspaceSnapshot,
 ) {
-    let expected_summary = &expected.validation().summary;
-    let actual_summary = &actual.validation().summary;
+    let expected_summary = &expected
+        .ensure_validation()
+        .expect("expected validation")
+        .summary;
+    let actual_summary = &actual
+        .ensure_validation()
+        .expect("actual validation")
+        .summary;
     assert_eq!(
         expected_summary.document_count, actual_summary.document_count,
         "{label}: document_count mismatch"

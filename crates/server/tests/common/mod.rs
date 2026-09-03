@@ -1,15 +1,8 @@
 //! Shared helpers for integration tests that mutate process-global env vars.
-
-/// Reason string for `#[ignore]` on slow agent/API/MCP integration tests.
-///
-/// Default `cargo test` skips these; CI and focused runs use `--include-ignored`:
-///
-/// ```bash
-/// cargo test -p spec42 --test api_http --test mcp_tools --test mcp_protocol \
-///   --test mcp_binary --test cli_ai_tools -- --include-ignored
-/// ```
-pub const AGENT_SURFACE_IGNORE: &str =
-    "agent/API/MCP integration; run: cargo test -p spec42 -- --include-ignored";
+//!
+//! Included (via `#[path]`) into every sibling integration-test binary under `tests/`; each
+//! binary only exercises a subset, so unused-in-this-binary is expected.
+#![allow(dead_code)]
 
 use tempfile::TempDir;
 use tokio::sync::Mutex;

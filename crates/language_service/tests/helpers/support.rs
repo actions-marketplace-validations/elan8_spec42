@@ -1,20 +1,24 @@
-﻿use language_service::{complete, dto::SourceLocation, InMemoryWorkspace};
-use sysml_model::{SysmlDocument, SysmlDocumentSourceKind, TextPosition};
+// Shared support helpers included (via `#[path]`) into every sibling integration-test binary
+// under `tests/`; each binary only exercises a subset, so unused-in-this-binary is expected.
+#![allow(dead_code)]
 
-pub fn document(path: &str, content: &str) -> SysmlDocument {
-    SysmlDocument::from_memory_path(
-        "test",
-        path,
-        content.to_string(),
-        SysmlDocumentSourceKind::Workspace,
-        None,
-        None,
-    )
-    .expect("document")
+use language_service::{complete, dto::SourceLocation, InMemoryWorkspace};
+use sysml_query::resolved_slice::TextPosition;
+use sysml_query::source::{SourceDocument, SourceKind, SourceService};
+
+pub fn document(path: &str, content: &str) -> SourceDocument {
+    SourceService::new()
+        .admit_memory("test", path, content, SourceKind::Workspace)
+        .expect("document")
 }
 
-pub fn workspace_from_docs(docs: Vec<SysmlDocument>) -> InMemoryWorkspace {
-    InMemoryWorkspace::from_documents(docs).expect("workspace")
+pub fn workspace_from_docs(docs: Vec<SourceDocument>) -> InMemoryWorkspace {
+    let services = sysml_query::Services::new();
+    let publication = services
+        .publication
+        .publish(&docs, [])
+        .expect("publication");
+    InMemoryWorkspace::from_documents_and_publication(docs, publication).expect("workspace")
 }
 
 pub fn single_doc(path: &str, content: &str) -> InMemoryWorkspace {
@@ -75,20 +79,12 @@ pub fn completion_labels(
     position: TextPosition,
 ) -> Vec<String> {
     complete(workspace, path, position)
-        .map(|result| {
-            result
-                .items
-                .into_iter()
-                .map(|item| item.label)
-                .collect()
-        })
+        .map(|result| result.items.into_iter().map(|item| item.label).collect())
         .unwrap_or_default()
 }
 
 pub fn any_on_line(locations: &[SourceLocation], line: u32) -> bool {
-    locations
-        .iter()
-        .any(|loc| loc.range.start.line == line)
+    locations.iter().any(|loc| loc.range.start.line == line)
 }
 
 pub fn count_on_line(locations: &[SourceLocation], line: u32) -> usize {
@@ -99,9 +95,9 @@ pub fn count_on_line(locations: &[SourceLocation], line: u32) -> usize {
 }
 
 pub fn any_on_line_at(locations: &[SourceLocation], line: u32, character: u32) -> bool {
-    locations.iter().any(|loc| {
-        loc.range.start.line == line && loc.range.start.character == character
-    })
+    locations
+        .iter()
+        .any(|loc| loc.range.start.line == line && loc.range.start.character == character)
 }
 
 pub fn paths(locations: &[SourceLocation]) -> Vec<&str> {

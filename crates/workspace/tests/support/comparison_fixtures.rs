@@ -1,11 +1,14 @@
-﻿use std::sync::Arc;
+// Shared support helpers included (via `#[path]`) into every sibling integration-test binary
+// under `tests/`; each binary only exercises a subset, so unused-in-this-binary is expected.
+#![allow(dead_code)]
 
-use workspace::{
-    EngineBuilder, HostContext, HostWorkspaceSnapshot, InMemoryDocumentProvider,
-    Spec42Engine, SysmlDocument, SysmlDocumentSourceKind, WorkspaceLoadRequest,
-};
+use std::sync::Arc;
+
 use tempfile::TempDir;
-use url::Url;
+use workspace::{
+    path_to_file_url, EngineBuilder, HostContext, HostWorkspaceSnapshot, InMemoryProvider,
+    SourceDocument, SourceKind, Spec42Engine, WorkspaceLoadRequest,
+};
 
 pub fn test_engine(cache: &TempDir) -> Spec42Engine {
     EngineBuilder::default()
@@ -15,17 +18,16 @@ pub fn test_engine(cache: &TempDir) -> Spec42Engine {
         .expect("engine")
 }
 
-pub fn memory_document(path: &std::path::Path, content: &str) -> SysmlDocument {
-    let uri = Url::from_file_path(path).expect("file uri");
-    SysmlDocument {
-        uri,
-        content: content.to_string(),
-        path_hint: path
-            .file_name()
-            .map(|name| name.to_string_lossy().replace('\\', "/")),
-        source_kind: SysmlDocumentSourceKind::Workspace,
-        sha256: None,
-        byte_size: None,
+pub fn memory_document(path: &std::path::Path, content: &str) -> SourceDocument {
+    // Match the snapshot target URI's canonicalization (notably macOS's
+    // `/var` -> `/private/var` alias) so projection filters retain the parsed
+    // document's canonical semantic facts.
+    let uri = path_to_file_url(path).expect("file uri");
+    let document =
+        sysml_query::source::SourceService::new().admit_url(uri, content, SourceKind::Workspace);
+    match path.file_name() {
+        Some(name) => document.with_path_hint(name.to_string_lossy().replace('\\', "/")),
+        None => document,
     }
 }
 
@@ -38,7 +40,7 @@ pub fn load_snapshot(
     let model_path = cache.path().join(filename);
     std::fs::write(&model_path, content).expect("write model file");
     let document = memory_document(&model_path, content);
-    let provider = InMemoryDocumentProvider::new(vec![document]);
+    let provider = InMemoryProvider::new(vec![document]);
     engine
         .load_workspace(
             provider,

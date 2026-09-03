@@ -1,0 +1,11 @@
+[package]
+name = "sysml_diagnostics"
+version.workspace = true
+edition.workspace = true
+authors.workspace = true
+license.workspace = true
+description = "Transport-neutral diagnostic DTOs and host reporting policy for Spec42"
+
+[dependencies]
+sysml_query = { path = "../sysml_query" }
+url = { version = "2", features = ["serde"] }

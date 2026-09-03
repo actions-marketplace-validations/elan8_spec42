@@ -5,9 +5,7 @@ use thiserror::Error;
 
 mod map;
 
-pub(crate) use map::{
-    map_language_service_error, map_provider_error, map_render_snapshot_error, map_view_error,
-};
+pub(crate) use map::map_provider_error;
 
 #[derive(Debug, Error, Serialize)]
 #[serde(tag = "code", content = "details")]
@@ -24,12 +22,14 @@ pub enum WorkspaceError {
     },
     #[error("unresolved_library_environment: {message}")]
     UnresolvedLibraryEnvironment { message: String },
-    #[error("unsupported_view: {view}: {message}")]
-    UnsupportedView { view: String, message: String },
     #[error("cancelled")]
     Cancelled,
     #[error("resource_limit_exceeded: {limit}: {message}")]
     ResourceLimitExceeded { limit: String, message: String },
+    #[error("duplicate_comparison_identity: {category}: {identity}")]
+    DuplicateComparisonIdentity { category: String, identity: String },
+    #[error("missing_comparison_identity: {category}")]
+    MissingComparisonIdentity { category: String },
     #[error("internal_invariant_failure: {message}")]
     InternalInvariantFailure { message: String },
 }
@@ -54,13 +54,6 @@ impl WorkspaceError {
         }
     }
 
-    pub fn unsupported_view(view: impl Into<String>, message: impl Into<String>) -> Self {
-        Self::UnsupportedView {
-            view: view.into(),
-            message: message.into(),
-        }
-    }
-
     pub fn cancelled() -> Self {
         Self::Cancelled
     }
@@ -69,6 +62,22 @@ impl WorkspaceError {
         Self::ResourceLimitExceeded {
             limit: limit.into(),
             message: message.into(),
+        }
+    }
+
+    pub fn duplicate_comparison_identity(
+        category: impl Into<String>,
+        identity: impl Into<String>,
+    ) -> Self {
+        Self::DuplicateComparisonIdentity {
+            category: category.into(),
+            identity: identity.into(),
+        }
+    }
+
+    pub fn missing_comparison_identity(category: impl Into<String>) -> Self {
+        Self::MissingComparisonIdentity {
+            category: category.into(),
         }
     }
 
@@ -83,9 +92,10 @@ impl WorkspaceError {
             Self::InvalidDocumentUri { .. } => "invalid_document_uri",
             Self::ParserFailure { .. } => "parser_failure",
             Self::UnresolvedLibraryEnvironment { .. } => "unresolved_library_environment",
-            Self::UnsupportedView { .. } => "unsupported_view",
             Self::Cancelled => "cancelled",
             Self::ResourceLimitExceeded { .. } => "resource_limit_exceeded",
+            Self::DuplicateComparisonIdentity { .. } => "duplicate_comparison_identity",
+            Self::MissingComparisonIdentity { .. } => "missing_comparison_identity",
             Self::InternalInvariantFailure { .. } => "internal_invariant_failure",
         }
     }

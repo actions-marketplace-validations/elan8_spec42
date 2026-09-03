@@ -1,12 +1,48 @@
 import * as vscode from "vscode";
 import { LibraryWebviewViewProvider } from "../../library/libraryWebviewViewProvider";
-import { getDomainLibrariesConfig, getStandardLibraryConfig } from "../configBridge";
+import { KPAR_LIBRARIES_DEFAULTS, kparLibraryDefaults } from "../../generated/kparLibrariesDefaults";
+import { classifyKparLibraryStatus } from "../../library/libraryStatusViewModel";
+import {
+  getDisabledLibraries,
+  getKparLibraryPathOverrides,
+  getStandardLibraryConfig,
+} from "../configBridge";
 import type { LspClientHandles } from "../lspClient";
+
+const CONFIG_SECTION = "spec42";
+
+function configurationTarget(): vscode.ConfigurationTarget {
+  return (vscode.workspace.workspaceFolders?.length ?? 0) > 0
+    ? vscode.ConfigurationTarget.Workspace
+    : vscode.ConfigurationTarget.Global;
+}
+
+async function updateDisabledLibraries(ids: string[]): Promise<void> {
+  await vscode.workspace
+    .getConfiguration(CONFIG_SECTION)
+    .update("disabledLibraries", ids, configurationTarget());
+}
+
+async function updateKparLibraryPaths(paths: Record<string, string>): Promise<void> {
+  await vscode.workspace
+    .getConfiguration(CONFIG_SECTION)
+    .update("kparLibraryPaths", paths, configurationTarget());
+}
+
+async function promptRestartToApplyLibraryChange(message: string): Promise<void> {
+  const selection = await vscode.window.showInformationMessage(message, "Restart Server");
+  if (selection === "Restart Server") {
+    await vscode.commands.executeCommand("sysml.restartServer");
+  }
+}
 
 export function registerLibraryCommands(
   context: vscode.ExtensionContext,
   libraryWebviewProvider: LibraryWebviewViewProvider,
-  handles: Pick<LspClientHandles, "readSysandStatus">
+  handles: Pick<
+    LspClientHandles,
+    "readSysandStatus" | "lspModelProvider"
+  >
 ): void {
   context.subscriptions.push(
     vscode.commands.registerCommand("sysml.library.refresh", () => {
@@ -39,12 +75,187 @@ export function registerLibraryCommands(
   );
 
   context.subscriptions.push(
+    vscode.commands.registerCommand(
+      "sysml.library.showKparLibraryStatus",
+      async (libraryId?: string) => {
+        const id = String(libraryId ?? "domain");
+        const defaults = kparLibraryDefaults(id);
+        try {
+          const status = await handles.lspModelProvider.getLibraryStatus();
+          const library =
+            status.kparLibraries.find((entry) => entry.id === id) ??
+            (defaults
+              ? {
+                  id,
+                  displayName: defaults.displayName,
+                  pinnedVersion: defaults.version,
+                  format: defaults.format,
+                  available: false,
+                  sourceKind: "none",
+                  versionMatches: false,
+                  isInstalled: false,
+                }
+              : undefined);
+          if (!library) {
+            void vscode.window.showWarningMessage(`Unknown managed library '${id}'.`);
+            return;
+          }
+          const version = library.installedVersion
+            ? `${library.pinnedVersion} (installed ${library.installedVersion})`
+            : library.pinnedVersion;
+          if (library.sourceKind === "disabled") {
+            void vscode.window.showInformationMessage(
+              `${library.displayName} is disabled (spec42.disabledLibraries). Enable it to resume indexing.`
+            );
+            return;
+          }
+          const { label } = classifyKparLibraryStatus(library);
+          const sourceDescription =
+            library.sourceKind === "override" || library.sourceKind === "custom"
+              ? label.toLowerCase()
+              : `source ${library.sourceKind}`;
+          void vscode.window.showInformationMessage(
+            `${library.displayName} are bundled with Spec42 as ${library.format.toUpperCase()} (revision ${version}; ${sourceDescription}).`
+          );
+        } catch (error) {
+          if (defaults) {
+            void vscode.window.showInformationMessage(
+              `${defaults.displayName} are bundled with Spec42 as ${defaults.format.toUpperCase()} (revision ${defaults.version}).`
+            );
+            return;
+          }
+          void vscode.window.showErrorMessage(
+            `Unable to read library status: ${error instanceof Error ? error.message : String(error)}`
+          );
+        }
+      }
+    )
+  );
+
+  context.subscriptions.push(
     vscode.commands.registerCommand("sysml.library.showDomainLibrariesStatus", async () => {
-      const cfg = getDomainLibrariesConfig();
-      void vscode.window.showInformationMessage(
-        `Elan8 domain libraries are bundled with the Spec42 language server as ${cfg.format.toUpperCase()} (revision ${cfg.version}). They materialize under your Spec42 data directory on first use.`
-      );
+      await vscode.commands.executeCommand("sysml.library.showKparLibraryStatus", "domain");
     })
+  );
+
+  context.subscriptions.push(
+    vscode.commands.registerCommand(
+      "sysml.library.toggleLibrary",
+      async (libraryId?: string) => {
+        const disabled = getDisabledLibraries();
+        let id = libraryId;
+        if (!id) {
+          const knownIds = new Set<string>([
+            ...KPAR_LIBRARIES_DEFAULTS.map((library) => library.id),
+            ...Object.keys(getKparLibraryPathOverrides()),
+            ...disabled,
+          ]);
+          const picked = await vscode.window.showQuickPick(
+            Array.from(knownIds).map((candidateId) => ({
+              label: candidateId,
+              description: disabled.includes(candidateId) ? "Disabled" : "Enabled",
+            })),
+            { placeHolder: "Select a library to enable/disable" }
+          );
+          id = picked?.label;
+        }
+        if (!id) {
+          return;
+        }
+        const nextDisabled = disabled.includes(id)
+          ? disabled.filter((entry) => entry !== id)
+          : [...disabled, id];
+        await updateDisabledLibraries(nextDisabled);
+        libraryWebviewProvider.refresh();
+        await promptRestartToApplyLibraryChange(
+          `${id} is now ${nextDisabled.includes(id) ? "disabled" : "enabled"}. Restart the SysML language server to apply this change.`
+        );
+      }
+    )
+  );
+
+  context.subscriptions.push(
+    vscode.commands.registerCommand(
+      "sysml.library.setLocalLibraryPath",
+      async (libraryId?: string) => {
+        let id = libraryId;
+        if (!id) {
+          const knownIds = KPAR_LIBRARIES_DEFAULTS.map((library) => library.id);
+          const customEntry = "$(add) Add a custom library id...";
+          const picked = await vscode.window.showQuickPick([...knownIds, customEntry], {
+            placeHolder: "Select a library id, or add a custom one",
+          });
+          if (!picked) {
+            return;
+          }
+          if (picked === customEntry) {
+            id = (
+              await vscode.window.showInputBox({
+                prompt: "Custom KPAR library id (letters, numbers, hyphens)",
+                validateInput: (value) =>
+                  /^[a-zA-Z0-9-]+$/.test(value.trim())
+                    ? undefined
+                    : "Use letters, numbers, and hyphens only.",
+              })
+            )?.trim();
+          } else {
+            id = picked;
+          }
+        }
+        if (!id) {
+          return;
+        }
+        const selection = await vscode.window.showOpenDialog({
+          canSelectFiles: true,
+          canSelectFolders: true,
+          canSelectMany: false,
+          openLabel: `Use as local "${id}" library`,
+          title: `Select a directory or .kpar file for library "${id}"`,
+        });
+        const picked = selection?.[0];
+        if (!picked) {
+          return;
+        }
+        const overrides = { ...getKparLibraryPathOverrides(), [id]: picked.fsPath };
+        await updateKparLibraryPaths(overrides);
+        libraryWebviewProvider.refresh();
+        await promptRestartToApplyLibraryChange(
+          `Library "${id}" will use ${picked.fsPath}. Restart the SysML language server to apply this change.`
+        );
+      }
+    )
+  );
+
+  context.subscriptions.push(
+    vscode.commands.registerCommand(
+      "sysml.library.removeLocalLibraryPath",
+      async (libraryId?: string) => {
+        const overrides = getKparLibraryPathOverrides();
+        let id = libraryId;
+        if (!id) {
+          const ids = Object.keys(overrides);
+          if (ids.length === 0) {
+            void vscode.window.showInformationMessage(
+              "No local or custom library paths are configured."
+            );
+            return;
+          }
+          id = await vscode.window.showQuickPick(ids, {
+            placeHolder: "Select a local/custom library path to remove",
+          });
+        }
+        if (!id || !(id in overrides)) {
+          return;
+        }
+        const next = { ...overrides };
+        delete next[id];
+        await updateKparLibraryPaths(next);
+        libraryWebviewProvider.refresh();
+        await promptRestartToApplyLibraryChange(
+          `Removed the local/custom path for "${id}". Restart the SysML language server to apply this change.`
+        );
+      }
+    )
   );
 
   context.subscriptions.push(

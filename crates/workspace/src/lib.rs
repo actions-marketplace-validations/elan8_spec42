@@ -1,68 +1,42 @@
-﻿//! Protocol-neutral workspace build, snapshot, comparison and library management for Spec42.
+#![recursion_limit = "256"]
 
-pub mod catalog;
-pub mod semantic;
+//! The batch host: engine, directory snapshots, validation, comparison and schema versions over
+//! the `sysml_query` services. Library provisioning is `library_catalog`'s; closure, parsing and
+//! publication are the authorities'.
+
 pub mod comparison;
 pub mod engine;
 pub mod error;
-pub mod incremental;
-pub mod library;
-pub mod library_graph_cache;
-pub mod parse_cache;
 pub mod provider;
-pub mod robot_vacuum_perf;
-pub mod session;
 pub mod snapshot;
+pub mod validation;
 pub mod version;
-pub mod view_cache;
 
-pub use catalog::{HostConfigFile, HostLibraryRequest, LibraryCatalog};
 pub use comparison::{
     compare_snapshots, HostDiagnosticComparison, HostDiagnosticIdentity,
-    HostDocumentDiagnosticComparison, HostElementChange, HostElementComparison,
-    HostElementFieldChange, HostElementIdentity, HostRelationshipComparison,
-    HostRelationshipIdentity, HostViewCatalogChange, HostViewCatalogEntry,
-    HostViewCatalogFieldChange, HostViewComparison, HostViewPayloadChange,
-    IdentityPreservationStatus, SemanticComparisonReport,
+    HostDiagnosticRelatedInformation, HostDocumentDiagnosticComparison, IdentityPreservationStatus,
+    SemanticComparisonReport,
 };
 pub use engine::{EngineBuilder, HostEngineMetadata, Spec42Engine};
-pub use error::{WorkspaceResult, WorkspaceError};
-pub use incremental::{
-    build_view_catalog, project_semantic_model, render_view, validate_workspace,
-    IncrementalWorkspace, WorkspaceUpdateMetrics,
+pub use error::{WorkspaceError, WorkspaceResult};
+pub use library_catalog::{
+    HostConfigFile, HostLibraryRequest, LibraryCatalog, StandardLibraryConfig,
 };
-pub use library::{
-    bundle::LibraryBundleConfig,
-    domain::{
-        domain_libraries_paths_from_data_dir, DomainLibrariesConfig, DomainLibrariesPaths,
-        DomainLibrariesStatus,
-    },
-    resolve_explicit_library_path, LibraryArchive, LibraryBundle, LibraryInstallRoot,
-    LibraryPackageRoots, LibrarySource, ResolvedExplicitLibrary,
-    stdlib::{
-        project_dirs, standard_library_paths_from_data_dir, StandardLibraryConfig,
-        StandardLibraryPaths, StandardLibraryStatus,
-    },
-};
-pub use provider::{
-    ChangesetDocumentProvider, FileSystemDocumentProvider, HostFilesystemProvider,
-    InMemoryDocumentProvider, SysmlDocument, SysmlDocumentProvider, SysmlDocumentSourceKind,
-};
-pub use session::{RelinkToken, SessionLifecycle, WorkspaceSession};
-pub use view_cache::{
-    visualization_response_is_cacheable, workspace_root_for_uri, ViewCacheKey,
-    ViewRenderCache, VisualizationBuildOutcome,
-};
-pub use snapshot::{
-    apply_document_changes, enrich_document_hashes, CancellationToken, DocumentChanges,
-    HostContext, HostPipelinePhase, HostResourceLimits, HostSemanticModelNode,
-    HostSemanticModelRelationship, HostSemanticProjection, HostValidatedDocument,
-    HostValidationReport, HostValidationSummary, HostWorkspaceSnapshot, Spec42ProjectionOutput,
-    ValidationTiming, WorkspaceLoadRequest,
-};
+pub use provider::{ChangesetDocumentProvider, FileSystemDocumentProvider, HostFilesystemProvider};
 pub use snapshot::discovery::{discover_target_files, path_to_file_url, resolve_workspace_root};
-pub use version::{HostArtifactMetadata, HostSchemaVersions};
-pub use semantic::{
-    add_cross_document_edges_for_uri, build_graph_from_doc, evaluate_expressions,
-    hover_markdown_for_node, NodeId, RelationshipKind, SemanticGraph, SemanticNode,
+pub use snapshot::{
+    apply_document_changes, CancellationToken, DocumentChanges, HostContext, HostPipelinePhase,
+    HostResourceLimits, HostValidatedDocument, HostValidationReport, HostValidationSummary,
+    HostWorkspaceSnapshot, Spec42ProjectionOutput, ValidationState, ValidationTiming,
+    WorkspaceLoadRequest,
 };
+pub use sysml_query::library::{LibraryClosureOptions, LibraryRoot};
+pub use sysml_query::publication::{PublicationBuildFailure, PublicationFailureStage};
+pub use sysml_query::source::{
+    ContentDigest, InMemoryProvider, RootDigest, SourceDocument, SourceKind, SourceProvider,
+};
+pub use validation::{
+    built_workspace_input_from_snapshot, report_from_built_workspace, validate_paths,
+    BuiltWorkspaceInput, PipelineHook, ValidationPipelineHook, ValidationRequest,
+};
+pub use version::{HostArtifactMetadata, HostSchemaVersions};

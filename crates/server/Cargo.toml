@@ -1,6 +1,6 @@
 ﻿[package]
 name = "server"
-version = "0.35.0"
+version.workspace = true
 edition = "2021"
 description = "Language server for SysML v2 (LSP over stdio)"
 
@@ -8,23 +8,26 @@ description = "Language server for SysML v2 (LSP over stdio)"
 name = "spec42"
 path = "src/main.rs"
 
-[[bin]]
-name = "spec42-mcp"
-path = "src/bin/spec42_mcp.rs"
-
 [lib]
 name = "spec42"
 path = "src/lib.rs"
 
 [features]
-default = ["embed-stdlib", "embed-domain-libraries"]
-embed-stdlib = ["workspace/embed-stdlib"]
-embed-domain-libraries = ["workspace/embed-domain-libraries"]
+default = ["embed-stdlib", "embed-kpar-libraries"]
+embed-stdlib = ["library_catalog/embed-stdlib"]
+embed-kpar-libraries = ["library_catalog/embed-kpar-libraries"]
 
 [dependencies]
-workspace = { path = "../workspace", default-features = false }
+# The batch host: validation, reports, engine and snapshots.
+workspace = { path = "../workspace" }
+library_catalog = { path = "../library_catalog", default-features = false }
+# Launch-only: `run_lsp`, `default_server_config`, `init_tracing`, and the custom-RPC traits.
+# Nothing semantic and no validation crosses this edge — see `crates/sysml_query/tests/architecture.rs`.
 lsp_server = { path = "../lsp_server" }
-sysml_model = { path = "../sysml_model" }
+sysml_diagnostics = { path = "../sysml_diagnostics" }
+sysml_query = { path = "../sysml_query" }
+generator_api = { path = "../generator_api" }
+generator_host = { path = "../generator_host" }
 kpar = { path = "../kpar" }
 tokio = { version = "1", features = ["full"] }
 serde_json = { workspace = true }
@@ -34,23 +37,15 @@ directories = "5"
 toml = "0.8"
 zip = { version = "2", default-features = false, features = ["deflate"] }
 tower-lsp = "0.20"
-rmcp = { workspace = true }
-schemars = { workspace = true }
 rquickjs = "0.11"
-axum = "0.8"
-tower = "0.5"
-tower-http = { version = "0.6", features = ["cors", "trace"] }
-serde_yaml = "0.9"
+sha2 = { workspace = true }
+tempfile = "3"
 
 [dev-dependencies]
+wat = "1"
 lsp_server = { path = "../lsp_server" }
-sysml-v2-parser = { workspace = true }
 serde_json = { workspace = true }
 tempfile = "3"
 tower-lsp = "0.20"
 url = "2"
-rmcp = { workspace = true, features = ["client", "server", "transport-child-process"] }
 anyhow = "1"
-reqwest = { version = "0.12", default-features = false, features = ["json", "rustls-tls"] }
-tower = { version = "0.5", features = ["util"] }
-http-body-util = "0.1"

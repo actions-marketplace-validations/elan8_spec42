@@ -8,7 +8,7 @@ const {
   resolveCliPathFromVSCodeExecutablePath,
   runTests,
 } = require("@vscode/test-electron");
-const vscodeTestVersion = process.env.VSCODE_TEST_VERSION || "1.99.0";
+const vscodeTestVersion = process.env.VSCODE_TEST_VERSION || "1.106.0";
 
 function getArg(name) {
   const idx = process.argv.indexOf(name);
@@ -82,7 +82,7 @@ function writeSmokeTestHost(tempDir) {
     private: true,
     publisher: "spec42",
     engines: {
-      vscode: "^1.99.0",
+      vscode: "^1.106.0",
     },
   };
   const smokeTest = `"use strict";
@@ -117,7 +117,7 @@ async function run() {
   await extension.activate();
 
   const commands = await vscode.commands.getCommands(true);
-  const required = ["sysml.restartServer", "sysml.showVisualizer"];
+  const required = ["sysml.restartServer"];
   const missing = required.filter((cmd) => !commands.includes(cmd));
   if (missing.length > 0) {
     throw new Error(\`Extension activated but expected commands are missing: \${missing.join(", ")}\`);

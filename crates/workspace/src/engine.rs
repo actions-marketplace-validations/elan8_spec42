@@ -1,15 +1,15 @@
-﻿use std::path::{Path, PathBuf};
+use std::collections::{BTreeMap, BTreeSet};
+use std::path::{Path, PathBuf};
 
-use crate::catalog::{resolve_library_catalog, HostLibraryRequest, LibraryCatalog};
-use crate::error::{WorkspaceResult, WorkspaceError};
-use crate::library::{
-    domain::DomainLibrariesConfig,
-    stdlib::StandardLibraryConfig,
-};
+use crate::error::{WorkspaceError, WorkspaceResult};
 use crate::snapshot::{HostContext, HostWorkspaceSnapshot, WorkspaceLoadRequest};
 use crate::version::HostSchemaVersions;
-use sysml_model::SysmlDocumentProvider;
+use library_catalog::{
+    resolve_library_catalog, HostLibraryRequest, LibraryCatalog, StandardLibraryConfig,
+};
 use std::sync::Arc;
+use sysml_query::source::{SourceProvider, SourceService};
+use sysml_query::Services;
 
 /// Engine-level metadata (version identity for built snapshots).
 #[derive(Debug, Clone)]
@@ -23,7 +23,7 @@ pub struct Spec42Engine {
     cache_dir: PathBuf,
     catalog: LibraryCatalog,
     metadata: HostEngineMetadata,
-    experimental_incremental_updates: bool,
+    services: Services,
 }
 
 #[derive(Debug, Default)]
@@ -32,16 +32,16 @@ pub struct EngineBuilder {
     server_embedding_mode: bool,
     no_stdlib: bool,
     stdlib_path_override: Option<PathBuf>,
-    domain_libraries_path_override: Option<PathBuf>,
+    kpar_library_path_overrides: BTreeMap<String, PathBuf>,
+    project_library_paths: BTreeMap<String, PathBuf>,
+    disabled_kpar_libraries: BTreeSet<String>,
     library_paths: Vec<PathBuf>,
     extra_library_paths: Vec<PathBuf>,
     standard_library: StandardLibraryConfig,
-    domain_libraries: DomainLibrariesConfig,
     use_embedded_stdlib: bool,
-    use_embedded_domain_libraries: bool,
+    use_embedded_kpar_libraries: bool,
     config_stdlib_path: Option<PathBuf>,
     config_no_stdlib: bool,
-    experimental_incremental_updates: bool,
 }
 
 impl Spec42Engine {
@@ -65,17 +65,24 @@ impl Spec42Engine {
         &self.metadata
     }
 
+    /// The one set of services this engine publishes through. A host embedding the engine in a
+    /// server shares these with the editor host rather than constructing its own.
+    pub fn services(&self) -> &Services {
+        &self.services
+    }
+
+    /// The source service every document of this engine is admitted through.
+    pub fn source(&self) -> &SourceService {
+        &self.services.source
+    }
+
     pub fn schema_versions(&self) -> HostSchemaVersions {
         self.metadata.schema_versions
     }
 
-    pub fn experimental_incremental_updates(&self) -> bool {
-        self.experimental_incremental_updates
-    }
-
     pub fn load_workspace(
         &self,
-        provider: impl SysmlDocumentProvider,
+        provider: impl SourceProvider,
         request: WorkspaceLoadRequest,
         context: HostContext,
     ) -> WorkspaceResult<Arc<HostWorkspaceSnapshot>> {
@@ -94,8 +101,8 @@ impl Spec42Engine {
 }
 
 impl EngineBuilder {
-    pub fn cache_dir(mut self, cache_dir: impl Into<PathBuf>) -> Self {
-        self.cache_dir = Some(cache_dir.into());
+    pub fn cache_dir(mut self, path: impl Into<PathBuf>) -> Self {
+        self.cache_dir = Some(path.into());
         self
     }
 
@@ -114,8 +121,24 @@ impl EngineBuilder {
         self
     }
 
-    pub fn domain_libraries_path(mut self, path: impl Into<PathBuf>) -> Self {
-        self.domain_libraries_path_override = Some(path.into());
+    pub fn kpar_library_path(mut self, id: impl Into<String>, path: impl Into<PathBuf>) -> Self {
+        self.kpar_library_path_overrides
+            .insert(id.into(), path.into());
+        self
+    }
+
+    pub fn project_library_path(
+        mut self,
+        resource: impl Into<String>,
+        path: impl Into<PathBuf>,
+    ) -> Self {
+        self.project_library_paths
+            .insert(resource.into(), path.into());
+        self
+    }
+
+    pub fn disable_kpar_library(mut self, id: impl Into<String>) -> Self {
+        self.disabled_kpar_libraries.insert(id.into());
         self
     }
 
@@ -134,11 +157,6 @@ impl EngineBuilder {
         self
     }
 
-    pub fn domain_libraries_config(mut self, config: DomainLibrariesConfig) -> Self {
-        self.domain_libraries = config;
-        self
-    }
-
     pub fn config_stdlib_path(mut self, path: impl Into<PathBuf>) -> Self {
         self.config_stdlib_path = Some(path.into());
         self
@@ -154,13 +172,8 @@ impl EngineBuilder {
         self
     }
 
-    pub fn embed_domain_libraries(mut self) -> Self {
-        self.use_embedded_domain_libraries = true;
-        self
-    }
-
-    pub fn experimental_incremental_updates(mut self, enabled: bool) -> Self {
-        self.experimental_incremental_updates = enabled;
+    pub fn embed_kpar_libraries(mut self) -> Self {
+        self.use_embedded_kpar_libraries = true;
         self
     }
 
@@ -170,28 +183,25 @@ impl EngineBuilder {
                 "cache_dir is required to build a Spec42Engine",
             )
         })?;
-        if self.server_embedding_mode && self.use_embedded_stdlib && self.stdlib_path_override.is_none()
-        {
-            // Embedding hosts must either supply explicit library roots or opt into embedded bundles
-            // with an explicit cache directory. No implicit profile writes occur in this mode.
-        }
 
         let request = HostLibraryRequest {
             cache_dir: cache_dir.clone(),
             no_stdlib: self.no_stdlib,
             stdlib_path_override: self.stdlib_path_override,
-            domain_libraries_path_override: self.domain_libraries_path_override,
+            kpar_library_path_overrides: self.kpar_library_path_overrides,
+            project_library_paths: self.project_library_paths,
+            disabled_kpar_libraries: self.disabled_kpar_libraries,
             library_paths: self.library_paths,
             standard_library: self.standard_library,
-            domain_libraries: self.domain_libraries,
             use_embedded_stdlib: self.use_embedded_stdlib,
-            use_embedded_domain_libraries: self.use_embedded_domain_libraries,
+            use_embedded_kpar_libraries: self.use_embedded_kpar_libraries,
             config_stdlib_path: self.config_stdlib_path,
             config_no_stdlib: self.config_no_stdlib,
             extra_library_paths: self.extra_library_paths,
         };
 
-        let catalog = resolve_library_catalog(&request)?;
+        let catalog = resolve_library_catalog(&request)
+            .map_err(|error| WorkspaceError::unresolved_library_environment(error.to_string()))?;
         Ok(Spec42Engine {
             cache_dir,
             catalog,
@@ -199,7 +209,7 @@ impl EngineBuilder {
                 engine_version: env!("CARGO_PKG_VERSION").to_string(),
                 schema_versions: HostSchemaVersions::current(),
             },
-            experimental_incremental_updates: self.experimental_incremental_updates,
+            services: Services::new(),
         })
     }
 
@@ -210,13 +220,12 @@ impl EngineBuilder {
             .config_no_stdlib(request.config_no_stdlib)
             .library_paths(request.library_paths)
             .extra_library_paths(request.extra_library_paths)
-            .standard_library_config(request.standard_library)
-            .domain_libraries_config(request.domain_libraries);
+            .standard_library_config(request.standard_library);
+        builder.kpar_library_path_overrides = request.kpar_library_path_overrides;
+        builder.project_library_paths = request.project_library_paths;
+        builder.disabled_kpar_libraries = request.disabled_kpar_libraries;
         if let Some(path) = request.stdlib_path_override {
             builder = builder.standard_library_path(path);
-        }
-        if let Some(path) = request.domain_libraries_path_override {
-            builder = builder.domain_libraries_path(path);
         }
         if let Some(path) = request.config_stdlib_path {
             builder = builder.config_stdlib_path(path);
@@ -224,8 +233,8 @@ impl EngineBuilder {
         if request.use_embedded_stdlib {
             builder = builder.embed_standard_library();
         }
-        if request.use_embedded_domain_libraries {
-            builder = builder.embed_domain_libraries();
+        if request.use_embedded_kpar_libraries {
+            builder = builder.embed_kpar_libraries();
         }
         builder
     }

@@ -1,25 +1,15 @@
-﻿//! Semantic comparison between two immutable workspace snapshots.
+//! Semantic comparison between two immutable workspace snapshots.
 
 mod diagnostics;
-mod elements;
 mod identity;
-mod relationships;
-mod views;
 
 use std::time::SystemTime;
 
 pub use diagnostics::{
-    HostDiagnosticComparison, HostDiagnosticIdentity, HostDocumentDiagnosticComparison,
-};
-pub use elements::{
-    HostElementChange, HostElementComparison, HostElementFieldChange, HostElementIdentity,
+    HostDiagnosticComparison, HostDiagnosticIdentity, HostDiagnosticRelatedInformation,
+    HostDocumentDiagnosticComparison,
 };
 pub use identity::IdentityPreservationStatus;
-pub use relationships::{HostRelationshipComparison, HostRelationshipIdentity};
-pub use views::{
-    HostViewCatalogChange, HostViewCatalogEntry, HostViewCatalogFieldChange, HostViewComparison,
-    HostViewPayloadChange,
-};
 
 use crate::error::WorkspaceResult;
 use crate::snapshot::HostWorkspaceSnapshot;
@@ -33,10 +23,7 @@ pub struct SemanticComparisonReport {
     pub previous_artifact: HostArtifactMetadata,
     pub next_artifact: HostArtifactMetadata,
     pub identity_preservation: IdentityPreservationStatus,
-    pub elements: HostElementComparison,
-    pub relationships: HostRelationshipComparison,
     pub diagnostics: HostDiagnosticComparison,
-    pub views: HostViewComparison,
 }
 
 /// Compare two immutable workspace snapshots and return a versioned facts-only report.
@@ -49,17 +36,8 @@ pub fn compare_snapshots(
     let identity_preservation =
         identity::assess_identity_preservation(&previous_artifact, &next_artifact);
 
-    let elements = elements::compare_elements(
-        previous.semantic_projection(),
-        next.semantic_projection(),
-    );
-    let relationships = relationships::compare_relationships(
-        previous.semantic_projection(),
-        next.semantic_projection(),
-    );
     let diagnostics =
-        diagnostics::compare_diagnostics(previous.validation(), next.validation());
-    let views = views::compare_views(previous, next)?;
+        diagnostics::compare_diagnostics(previous.ensure_validation()?, next.ensure_validation()?)?;
 
     Ok(SemanticComparisonReport {
         schema_versions: HostSchemaVersions::current(),
@@ -67,9 +45,6 @@ pub fn compare_snapshots(
         previous_artifact,
         next_artifact,
         identity_preservation,
-        elements,
-        relationships,
         diagnostics,
-        views,
     })
 }

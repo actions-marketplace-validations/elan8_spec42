@@ -17,31 +17,30 @@ import { registerSpec42LmTools } from "../lmTools/spec42LmTools";
 import { runSpec42Json } from "../lmTools/spec42Cli";
 import type { SysandStatusViewModel } from "../library/libraryStatusViewModel";
 import { LspModelProvider } from "../providers/lspModelProvider";
-import { VisualizationPanel } from "../visualization/visualizationPanel";
 import { notifyWorkspaceLifecycleChanged } from "./workspaceLifecycle";
-import { setVisualizationGateState } from "../visualization/visualizationGate";
 import {
   getConfigBoolean,
   getConfigString,
   getConfigStringArray,
+  getDisabledLibraries,
+  getKparLibraryPathOverrides,
   isDefaultServerPath,
 } from "./configBridge";
-import { setServerHealth } from "./statusBar";
+import {
+  getServerHealthDetail,
+  getServerHealthState,
+  setServerHealth,
+} from "./statusBar";
 
 type RawSysandStatus = {
   installed?: boolean;
-  executablePath?: string;
-  version?: string;
-  projectRoot?: string;
+  version?: string | null;
+  executablePath?: string | null;
+  projectRoot?: string | null;
   manifestPresent?: boolean;
   lockPresent?: boolean;
   dependencyRoots?: string[];
   warnings?: string[];
-};
-
-type RawDoctorReport = {
-  resolved_domain_libraries_path?: string;
-  domain_libraries_source_kind?: string;
 };
 
 export type LspClientHandles = {
@@ -53,10 +52,6 @@ export type LspClientHandles = {
   missingLibraryPaths: string[];
   workspaceRoot: string;
   readSysandStatus: () => Promise<SysandStatusViewModel>;
-  readDomainLibrariesStatus: () => Promise<{
-    resolvedPath?: string;
-    sourceKind: string;
-  }>;
 };
 
 let client: LanguageClient | undefined;
@@ -200,9 +195,9 @@ function normalizeSysandStatus(
 ): SysandStatusViewModel {
   return {
     installed: !!status?.installed,
-    executablePath: status?.executablePath,
-    version: status?.version,
-    projectRoot: status?.projectRoot,
+    executablePath: status?.executablePath ?? undefined,
+    version: status?.version ?? undefined,
+    projectRoot: status?.projectRoot ?? undefined,
     manifestPresent: !!status?.manifestPresent,
     lockPresent: !!status?.lockPresent,
     dependencyRoots: Array.isArray(status?.dependencyRoots)
@@ -229,10 +224,20 @@ export function startLanguageClient(
   const libraryPaths = customLibraryPaths.filter(
     (value, index, all) => all.indexOf(value) === index
   );
+  const disabledLibraries = getDisabledLibraries();
+  const kparLibraryPathOverridesRaw = getKparLibraryPathOverrides();
+  const kparLibraryPathOverrides: Record<string, string> = {};
+  for (const [id, rawPath] of Object.entries(kparLibraryPathOverridesRaw)) {
+    kparLibraryPathOverrides[id] = path.isAbsolute(rawPath)
+      ? rawPath
+      : path.resolve(workspaceRoot, rawPath);
+  }
   logPerf?.("activate:configResolved", {
     workspaceFolderCount: vscode.workspace.workspaceFolders?.length ?? 0,
     libraryPathCount: libraryPaths.length,
     customLibraryPathCount: customLibraryPaths.length,
+    disabledLibraryCount: disabledLibraries.length,
+    kparLibraryPathOverrideCount: Object.keys(kparLibraryPathOverrides).length,
   });
 
   const serverCommandResolutionStartedAt = Date.now();
@@ -254,6 +259,12 @@ export function startLanguageClient(
   }
 
   const serverArgs = ["lsp"];
+  for (const id of disabledLibraries) {
+    serverArgs.push("--disable-kpar-library", id);
+  }
+  for (const [id, resolvedPath] of Object.entries(kparLibraryPathOverrides)) {
+    serverArgs.push("--kpar-library-path", `${id}=${resolvedPath}`);
+  }
   logPerf?.("activate:serverCommandResolved", {
     totalMs: Date.now() - serverCommandResolutionStartedAt,
     serverCommand,
@@ -268,6 +279,17 @@ export function startLanguageClient(
       "warning"
     );
   }
+  const missingKparLibraryPaths = Object.entries(kparLibraryPathOverrides).filter(
+    ([, resolvedPath]) => !fs.existsSync(resolvedPath)
+  );
+  if (missingKparLibraryPaths.length > 0) {
+    void showServerIssue(
+      `Some spec42.kparLibraryPaths entries do not exist and will be ignored: ${missingKparLibraryPaths
+        .map(([id, resolvedPath]) => `${id}=${resolvedPath}`)
+        .join(", ")}`,
+      "warning"
+    );
+  }
 
   const readSysandStatus = async (): Promise<SysandStatusViewModel> => {
     const status = (await runSpec42Json(
@@ -276,21 +298,6 @@ export function startLanguageClient(
       workspaceRoot
     )) as RawSysandStatus;
     return normalizeSysandStatus(status);
-  };
-
-  const readDomainLibrariesStatus = async (): Promise<{
-    resolvedPath?: string;
-    sourceKind: string;
-  }> => {
-    const report = (await runSpec42Json(
-      serverCommand,
-      ["doctor", "--format", "json"],
-      workspaceRoot
-    )) as RawDoctorReport;
-    return {
-      resolvedPath: report.resolved_domain_libraries_path,
-      sourceKind: report.domain_libraries_source_kind ?? "none",
-    };
   };
 
   log("Server command:", serverCommand, "args:", serverArgs, "libraryPaths:", libraryPaths);
@@ -379,6 +386,9 @@ export function startLanguageClient(
       performanceLogging: {
         enabled: getConfigBoolean("performanceLogging.enabled", false),
       },
+      diagnostics: {
+        includeLibraryPaths: getConfigBoolean("development.diagnoseLibraryPaths", false),
+      },
     },
     initializationFailedHandler: (error) => {
       const detail =
@@ -411,12 +421,10 @@ export function startLanguageClient(
   context.subscriptions.push(
     client.onDidChangeState(({ newState }) => {
       if (newState === State.Starting) {
-        setVisualizationGateState({ languageClientReady: false });
         setServerHealth(context, "starting", "Starting SysML language server.");
       } else if (newState === State.Running) {
         restartCount = 0;
         crashDialogShown = false;
-        setVisualizationGateState({ languageClientReady: true });
         setServerHealth(context, "ready", "SysML language server is ready.");
         notifyWorkspaceLifecycleChanged();
       } else if (newState === State.Stopped && !manualStopInProgress) {
@@ -429,19 +437,16 @@ export function startLanguageClient(
       restartCount = 0;
       crashDialogShown = false;
       languageClientReady = true;
-      setVisualizationGateState({ languageClientReady: true });
       setServerHealth(context, "ready", "SysML language server is ready.");
       notifyWorkspaceLifecycleChanged();
       log("Language client ready, waiting for semantic index before workspace model load");
       logStartupPhase("languageClient:ready");
       onClientReady();
-      VisualizationPanel.currentPanel?.notifyWorkspaceLifecycleChanged();
     })
     .catch((error) => {
       const detail =
         error instanceof Error ? error.message : String(error ?? "unknown startup failure");
       languageClientReady = false;
-      setVisualizationGateState({ languageClientReady: false });
       setServerHealth(context, "crashed", `Startup failed: ${detail}`);
       logError("Language client failed to start", error);
       void showServerIssue(
@@ -466,7 +471,6 @@ export function startLanguageClient(
     missingLibraryPaths,
     workspaceRoot,
     readSysandStatus,
-    readDomainLibrariesStatus,
   };
 }
 
@@ -509,7 +513,6 @@ async function performLanguageClientRestart(
   const stopTimeoutMs = process.env.CI ? 20000 : 10000;
   const waitTimeoutMs = restartWaitMs();
 
-  handles.lspModelProvider.clearModelCache();
   callbacks.onBeforeRestart?.();
   languageClientReady = false;
   manualStopInProgress = true;
@@ -533,7 +536,6 @@ async function performLanguageClientRestart(
     const startPromise = handles.client.start();
     activeClientReadyPromise = startPromise.then(() => undefined);
     await startPromise;
-    handles.lspModelProvider.clearModelCache();
     callbacks.onRestartComplete();
     vscode.window.showInformationMessage("SysML language server restarted.");
   } finally {
@@ -604,6 +606,12 @@ export function registerLanguageClientDebugCommands(
         return;
       }
       await waitForClientState(handles.client, new Set([State.Running]), restartWaitMs());
+    }),
+    vscode.commands.registerCommand("sysml.debug.getExtensionState", () => {
+      return {
+        serverHealthState: getServerHealthState(),
+        serverHealthDetail: getServerHealthDetail(),
+      };
     })
   );
 }
@@ -620,18 +628,10 @@ export function registerServerConfigChangeHandler(
         event.affectsConfiguration("sysml-language-server.debug");
       const performanceLoggingConfigChanged =
         event.affectsConfiguration("spec42.performanceLogging.enabled") ||
-        event.affectsConfiguration("sysml-language-server.performanceLogging.enabled");
-
-      if (verboseLoggingChanged && VisualizationPanel.currentPanel) {
-        const panelDoc = VisualizationPanel.currentPanel.getDocument();
-        VisualizationPanel.currentPanel.dispose();
-        VisualizationPanel.createOrShow(
-          context,
-          panelDoc,
-          undefined,
-          lspModelProviderRef
-        );
-      }
+        event.affectsConfiguration("sysml-language-server.performanceLogging.enabled") ||
+        event.affectsConfiguration("spec42.disabledLibraries") ||
+        event.affectsConfiguration("spec42.kparLibraryPaths") ||
+        event.affectsConfiguration("spec42.development.diagnoseLibraryPaths");
 
       if (performanceLoggingConfigChanged) {
         void vscode.window

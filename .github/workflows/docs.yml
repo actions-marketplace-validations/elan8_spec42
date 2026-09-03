@@ -1,11 +1,16 @@
+# Publish the VitePress docs site to GitHub Pages.
+# Release triggers this on `main` (required by the github-pages environment branch
+# policy) and passes the release tag as `ref` so the site still tracks product pins.
+# Manual runs can leave `ref` empty to build the current workflow ref.
 name: Deploy Docs
 
 on:
-  push:
-    branches: [main]
-    paths:
-      - "docs-site/**"
   workflow_dispatch:
+    inputs:
+      ref:
+        description: Git ref to build (release tag, branch, or SHA). Leave empty for the workflow ref.
+        required: false
+        type: string
 
 permissions:
   contents: read
@@ -21,9 +26,12 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
+        with:
+          # Explicit release tag / dispatch input — never workflow_run head_sha.
+          ref: ${{ inputs.ref || github.sha }}
       - uses: actions/setup-node@v4
         with:
-          node-version: 20
+          node-version: 24
           cache: npm
           cache-dependency-path: docs-site/package-lock.json
       - run: npm ci

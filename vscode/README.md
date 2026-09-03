@@ -2,138 +2,66 @@
   <img src="https://raw.githubusercontent.com/elan8/spec42/HEAD/vscode/media/screenshot.png" alt="Spec42 SysML v2 Editor Screenshot" />
 </p>
 
-# Spec42 VS Code Extension
+# Spec42 for VS Code
 
-Spec42 brings practical [SysML v2](https://www.omg.org/sysml/sysmlv2/) and KerML language tooling to VS Code. It is built around the same `spec42` analysis engine used by the CLI, GitHub Action, HTTP API, and assistant integrations, so editor feedback and automated validation stay aligned.
+Spec42 is open, local-first tooling for [SysML v2](https://www.omg.org/sysml/sysmlv2/) and KerML: edit textual models with live feedback, understand structure and behavior beyond the source, and keep the same analysis engine in the editor, CI, and assistant workflows.
 
-Published Marketplace builds include the matching language server binary. Most users can install the extension, open a `.sysml` or `.kerml` file, and start modeling without a separate CLI setup.
+This extension is the primary modeling surface. Marketplace builds include the matching language server, standard library, and Elan8 domain/method libraries — install, open a `.sysml` or `.kerml` file, and start modeling.
 
-## Highlights
+## Why Spec42 in the editor
+
+Textual SysML v2 is only as useful as the feedback around it. Spec42 focuses on three things that matter while you work:
+
+- **Confidence while editing** — diagnostics, navigation, and completion that stay with you as the model grows across files.
+- **Understanding beyond the source** — Feature Inspector shows resolved semantics, not just tokens.
+- **Continuity outside the IDE** — the same engine powers CLI checks, GitHub Actions, and assistant tools, so editor results and automation stay aligned.
+
+Everything runs locally. Models stay in your workspace; Spec42 does not require a cloud modeling runtime.
+
+## What you get
 
 - Live diagnostics, semantic highlighting, completion, hover, snippets, and formatting.
-- Definitions, references, rename, document symbols, call hierarchy, and type hierarchy.
-- Workspace-first indexing for multi-file models and configured libraries.
-- Model Explorer for structural navigation.
-- Model Visualizer for supported SysML v2 graphical views.
-- Bundled SysML standard-library support through the `spec42` server.
-- Built-in Copilot Language Model Tools for validation and model inspection.
+- Definitions, references, rename, document symbols, and hierarchy navigation.
+- Workspace-aware indexing for multi-file models and configured libraries.
+- **Feature Inspector** for resolved typing, inheritance, relationships, values, and keyword help.
+- Bundled SysML standard library plus searchable Elan8 domain and method libraries.
+- A local **Open Diagram** command backed by the packaged Rust WASM generator and D3/ELK renderer.
+  Its picker is filtered by the standard view usages authored in the active file. State-transition
+  projections are implemented; the other declared views currently identify their missing typed
+  query explicitly in the diagram panel.
+- Built-in Copilot Language Model Tools for check, doctor, model summary, and diagnostic explanation.
 
-## Getting Started
+## Views
+
+| View | What it is for |
+| --- | --- |
+| General View | Structure and relationships across the exposed model. |
+| Interconnection View | Parts, ports, connectors, and architecture wiring. |
+| Action Flow View | Control and data flow through actions. |
+| State Transition View | States and transitions for lifecycle behavior. |
+| Sequence View | Lifelines and messages for interaction-oriented models. |
+| Browser View | Hierarchical membership browsing. |
+| Grid View | Tabular arrangement of exposed elements and relationships. |
+| Geometry View | Spatial items (partial while authored geometry and 3D catch up). |
+
+## Get started
 
 1. Install **SysML v2 Editor** from the Visual Studio Marketplace.
-2. Open a `.sysml` or `.kerml` file.
-3. Try `examples/timer/KitchenTimer.sysml` if you want a compact first model.
-4. Run **SysML: Show SysML Model Explorer** to browse the model.
-5. Run **SysML: Open SysML Visualizer** to inspect graphical views.
+2. Open a `.sysml` or `.kerml` file — or pick the starred **timer** example from the Spec42 sidebar.
+3. Use navigation, diagnostics, **Feature Inspector**, and **Open Diagram** as you explore.
 
-Useful commands:
+Full walkthrough: **[Getting Started](https://elan8.github.io/spec42/guide/getting-started)**.
 
-- `SysML: Show SysML Model Explorer`
-- `SysML: Open SysML Visualizer`
-- `SysML: Refresh SysML Model Explorer`
-- `SysML: Refresh Visualization`
-- `SysML: Validate Model`
-- `SysML: Show SysML Output (Logs)`
+For CLI checks, CI, environment diagnostics, and other AI hosts, see the [main Spec42 README](https://github.com/elan8/spec42#readme) and the docs linked below. Editor and automation share the same analysis engine.
 
-The Spec42 sidebar also includes example and library views for opening recommended sample workspaces and inspecting configured library state.
+## Learn more
 
-## Supported Views
-
-| View | Purpose |
-| --- | --- |
-| General View | High-level structure and relationships across a model. |
-| Interconnection View | Parts, ports, connectors, and architecture wiring. |
-| Action Flow View | Control and data flow through actions in a behavior. |
-| State Transition View | States and transitions for lifecycle-oriented behavior. |
-| Sequence View | Lifelines and messages for Spec42 `SequenceView` models. |
-| Browser, Grid, and Geometry Views | Provisional standard-view renderers while upstream SysML graphical notation settles. |
-
-All visualizer views use the shared diagram renderer from `shared/diagram-renderer`. The legacy SysML renderer fallback has been removed.
-
-## Extension Settings
-
-Core settings:
-
-| Setting | Default | Purpose |
-| --- | --- | --- |
-| `spec42.serverPath` | `spec42` | Path to the `spec42` server binary. Published builds prefer the bundled binary when this stays at the default. |
-| `spec42.libraryPaths` | `[]` | Additional library roots indexed for hover, references, completion, and validation. |
-| `spec42.workspace.maxFilesPerPattern` | `500` | Discovery cap per workspace folder and file type. |
-| `spec42.startup.workspaceIndexing` | `background` | Controls when the full workspace model is loaded: `lazy`, `background`, or `eager`. |
-| `spec42.visualization.exportScale` | `2` | Scale factor used for visualizer export. |
-| `spec42.statusBar.enabled` | `true` | Shows Spec42 workspace status in the status bar. |
-| `spec42.codeLens.enabled` | `true` | Enables Spec42 CodeLens actions where available. |
-| `spec42.logging.verbose` | `false` | Enables verbose runtime logs. |
-| `spec42.performanceLogging.enabled` | `false` | Emits performance-oriented logs for indexing and visualization diagnostics. |
-| `spec42.debug` | `false` | Enables extension debug behavior for development and troubleshooting. |
-
-Standard-library settings are retained for compatibility and display:
-
-| Setting | Purpose |
-| --- | --- |
-| `spec42.standardLibrary.enabled` | Legacy setting; the standard library is bundled with the server. |
-| `spec42.standardLibrary.version` | Display-only hint for the bundled SysML release. |
-| `spec42.standardLibrary.repo` | Legacy metadata for the upstream release repository. |
-| `spec42.standardLibrary.contentPath` | Legacy metadata for the release content folder. |
-
-Example `settings.json`:
-
-```json
-{
-  "spec42.libraryPaths": ["../SysML-v2-Release", "./my-company-sysml-library"],
-  "spec42.startup.workspaceIndexing": "background"
-}
-```
-
-## Editor And CLI
-
-The extension focuses on interactive modeling. For terminal workflows, CI, and environment diagnostics, use the `spec42` CLI from a release archive.
-
-```bash
-spec42 doctor
-spec42 check path/to/model-or-workspace
-spec42 check path/to/model-or-workspace --format sarif
-```
-
-Both paths use the same analysis engine, so diagnostics should stay consistent between VS Code and automation.
-
-## AI Assistants
-
-With VS Code 1.99+ and Copilot Agent, the extension ships four built-in Language Model Tools:
-
-- `#spec42Check`
-- `#spec42Doctor`
-- `#spec42ModelSummary`
-- `#spec42ExplainDiagnostic`
-
-These tools call the bundled `spec42` CLI; no `mcp.json` is required for the VS Code Copilot path.
-
-For Cursor and other MCP hosts, use the `spec42-mcp` stdio server from the release archive. See [AI assistant setup](https://github.com/elan8/spec42/blob/HEAD/docs/user/AI-ASSISTANTS.md) and the [MCP configuration example](https://github.com/elan8/spec42/blob/HEAD/docs/examples/mcp-vscode.json).
-
-## Troubleshooting
-
-- If the server cannot start, check `spec42.serverPath` and open **SysML: Show SysML Output (Logs)**.
-- If imports or library symbols do not resolve, check `spec42.libraryPaths` and run `spec42 doctor`.
-- If the Model Explorer looks incomplete, increase `spec42.workspace.maxFilesPerPattern` or run **SysML: Refresh SysML Model Explorer**.
-- If the visualizer appears stale, run **SysML: Refresh Visualization** and inspect the SysML output channel.
-
-For broader guidance, see [Troubleshooting](https://github.com/elan8/spec42/blob/HEAD/docs/user/TROUBLESHOOTING.md).
-
-## Development
-
-After changing `shared/diagram-renderer` or webview TypeScript, rebuild the visualizer bundle:
-
-```bash
-cd vscode
-npm run build:webview
-```
-
-`media/webview/visualizer.js` is generated and gitignored.
-
-## Links
-
+- [User documentation](https://elan8.github.io/spec42/)
+- [Feature Inspector guide](https://elan8.github.io/spec42/guide/feature-inspector)
+- [Libraries](https://elan8.github.io/spec42/guide/libraries)
+- [AI assistants](https://github.com/elan8/spec42/blob/HEAD/docs/user/AI-ASSISTANTS.md)
+- [Troubleshooting](https://github.com/elan8/spec42/blob/HEAD/docs/user/TROUBLESHOOTING.md)
 - [Source and releases](https://github.com/elan8/spec42)
 - [Issues](https://github.com/elan8/spec42/issues)
-- [Main README](https://github.com/elan8/spec42#readme)
-- [SysML v2](https://www.omg.org/sysml/sysmlv2/)
-- [SysML v2 reference libraries](https://github.com/Systems-Modeling/SysML-v2-Release)
+
+Settings, advanced configuration, and contributor notes live in the docs site and repository development guide rather than this Marketplace overview.

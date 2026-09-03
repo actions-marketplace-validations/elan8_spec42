@@ -1,301 +1,527 @@
-# SysML notation inventory (generated)
+# SysML graphical notation coverage (generated)
 
-Generated: 2026-06-01
+Source: `Systems-Modeling/SysML-v2-Release` release `2026-04`, `bnf/SysML-graphical-bnf.html`.
 
-Source: `C:\Git\SysML-v2-Release\bnf\images` (284 entries)
+Productions: **513**; supported: **30**; partial: **248**; unsupported: **235**.
 
-Shipped product views: **general-view**, **interconnection-view** (+ behavior views). See [GENERAL-IBD-BNF-SIGNOFF.md](../archive/GENERAL-IBD-BNF-SIGNOFF.md) for sign-off checklist.
+| Production | Clause | SVG examples | Status |
+| --- | --- | --- | --- |
+| `a-direction` | `c8.2.3.13` | — | unsupported |
+| `a-property` | `c8.2.3.13` | — | unsupported |
+| `a-redefinition` | `c8.2.3.13` | — | unsupported |
+| `a-subsetting` | `c8.2.3.13` | — | unsupported |
+| `accept-action-expression` | `c8.2.3.17` | — | unsupported |
+| `accept-action-name-compartment` | `c8.2.3.17` | — | partial |
+| `accept-action-node` | `c8.2.3.17` | `accept-action-node.svg` | unsupported |
+| `action` | `c8.2.3.17` | `action.svg` | supported |
+| `action-body` | `c8.2.3.17` | — | unsupported |
+| `action-body-textual` | `c8.2.3.17` | — | unsupported |
+| `action-def` | `c8.2.3.17` | `action-def.svg` | supported |
+| `action-def-name-compartment` | `c8.2.3.17` | — | partial |
+| `action-flow-compartment` | `c8.2.3.17` | `action-flow-compartment.svg` | partial |
+| `action-flow-node` | `c8.2.3.17` | — | unsupported |
+| `action-flow-relationship` | `c8.2.3.17` | — | unsupported |
+| `action-flow-view` | `c8.2.3.17` | — | unsupported |
+| `action-name-compartment` | `c8.2.3.17` | — | partial |
+| `action-ref` | `c8.2.3.17` | `action-ref.svg` | unsupported |
+| `actions-compartment` | `c8.2.3.17` | `actions-compartment.svg` | partial |
+| `actions-compartment-contents` | `c8.2.3.17` | — | partial |
+| `actions-compartment-element` | `c8.2.3.17` | — | partial |
+| `actor` | `c8.2.3.21` | `actor-1.svg`, `actor-2.svg` | unsupported |
+| `actor-name` | `c8.2.3.21` | — | unsupported |
+| `actors-compartment` | `c8.2.3.21` | `actors-compartment.svg` | partial |
+| `actors-compartment-contents` | `c8.2.3.21` | — | partial |
+| `actors-compartment-element` | `c8.2.3.21` | — | partial |
+| `aflow-succession` | `c8.2.3.17` | `aflow-succession.svg` | partial |
+| `allocate-relationship` | `c8.2.3.15` | `allocate-relationship.svg` | unsupported |
+| `allocation` | `c8.2.3.15` | `allocation.svg` | unsupported |
+| `allocation-def` | `c8.2.3.15` | `allocation-def.svg` | unsupported |
+| `allocation-def-name-compartment` | `c8.2.3.15` | — | partial |
+| `allocation-name-compartment` | `c8.2.3.15` | — | partial |
+| `allocation-node` | `c8.2.3.15` | — | unsupported |
+| `allocations-compartment` | `c8.2.3.15` | `allocations-compartment.svg` | partial |
+| `allocations-compartment-contents` | `c8.2.3.15` | — | partial |
+| `allocations-compartment-element` | `c8.2.3.15` | — | partial |
+| `analyses-compartment` | `c8.2.3.23` | `analyses-compartment.svg` | partial |
+| `analyses-compartment-contents` | `c8.2.3.23` | — | partial |
+| `analyses-compartment-element` | `c8.2.3.23` | — | partial |
+| `analysis` | `c8.2.3.23` | `analysis.svg` | unsupported |
+| `analysis-def` | `c8.2.3.23` | `analysis-def.svg` | unsupported |
+| `analysis-def-name-compartment` | `c8.2.3.23` | — | partial |
+| `analysis-name-compartment` | `c8.2.3.23` | — | partial |
+| `annotated-element` | `c8.2.3.4` | — | unsupported |
+| `annotation-link` | `c8.2.3.4` | `annotation-link.svg` | unsupported |
+| `annotation-node` | `c8.2.3.4` | — | unsupported |
+| `assert-constraint-name-compartment` | `c8.2.3.20` | — | partial |
+| `assert-constraint-node` | `c8.2.3.20` | `assert-constraint-node.svg` | unsupported |
+| `assert-constraints-compartment` | `c8.2.3.20` | `assert-constraints-compartment.svg` | partial |
+| `assert-constraints-compartment-contents` | `c8.2.3.20` | — | partial |
+| `assert-constraints-compartment-element` | `c8.2.3.20` | — | partial |
+| `assert-edge` | `c8.2.3.20` | `assert-edge.svg` | unsupported |
+| `assertor` | `c8.2.3.20` | — | unsupported |
+| `assign-action-name-compartment` | `c8.2.3.17` | — | partial |
+| `assign-action-node` | `c8.2.3.17` | `assign-action-node.svg` | unsupported |
+| `assume-constraint-name-compartment` | `c8.2.3.20` | — | partial |
+| `assume-constraint-node` | `c8.2.3.20` | `assume-constraint-node.svg` | unsupported |
+| `assume-constraints-compartment` | `c8.2.3.21` | `assume-constraints-compartment.svg` | partial |
+| `assume-constraints-compartment-contents` | `c8.2.3.21` | — | partial |
+| `assume-edge` | `c8.2.3.20` | `assume-edge.svg` | unsupported |
+| `assumer` | `c8.2.3.20` | — | unsupported |
+| `attribute` | `c8.2.3.7` | `attribute.svg` | supported |
+| `attribute-def` | `c8.2.3.7` | `attribute-def.svg` | supported |
+| `attribute-def-name-compartment` | `c8.2.3.7` | — | partial |
+| `attribute-name-compartment` | `c8.2.3.7` | — | partial |
+| `attributes-compartment` | `c8.2.3.7` | `attributes-compartment.svg` | partial |
+| `attributes-compartment-contents` | `c8.2.3.7` | — | partial |
+| `attributes-compartment-element` | `c8.2.3.7` | — | partial |
+| `binary-dependency` | `c8.2.3.3` | `binary-dependency.svg` | supported |
+| `binding-connection` | `c8.2.3.13` | `binding-connection.svg` | supported |
+| `c-adornment` | `c8.2.3.13` | — | unsupported |
+| `calc` | `c8.2.3.19` | `calc.svg` | unsupported |
+| `calc-def` | `c8.2.3.19` | `calc-def.svg` | unsupported |
+| `calc-def-name-compartment` | `c8.2.3.19` | — | partial |
+| `calc-name-compartment` | `c8.2.3.19` | — | partial |
+| `calcs-compartment` | `c8.2.3.19` | `calcs-compartment.svg` | partial |
+| `calcs-compartment-contents` | `c8.2.3.19` | — | partial |
+| `calcs-compartment-element` | `c8.2.3.19` | — | partial |
+| `cdef-label` | `c8.2.3.13` | — | unsupported |
+| `cdot-label` | `c8.2.3.13` | — | unsupported |
+| `comment-node` | `c8.2.3.4` | — | unsupported |
+| `comment-with-keyword` | `c8.2.3.4` | `comment-with-keyword.svg` | unsupported |
+| `comment-without-keyword` | `c8.2.3.4` | `comment-without-keyword.svg` | unsupported |
+| `compartment-stack` | `c8.2.3.6` | — | partial |
+| `composite-feature-membership` | `c8.2.3.6` | `composite-feature-membership.svg` | unsupported |
+| `concern` | `c8.2.3.21` | `concern.svg` | unsupported |
+| `concern-def` | `c8.2.3.21` | `concern-def.svg` | unsupported |
+| `concern-def-name-compartment` | `c8.2.3.21` | — | partial |
+| `concern-name-compartment` | `c8.2.3.21` | — | partial |
+| `concern-stakeholder-link` | `c8.2.3.21` | `concern-stakeholder-link.svg` | unsupported |
+| `concerns-compartment` | `c8.2.3.21` | `concerns-compartment.svg` | partial |
+| `condition-expression` | `c8.2.3.17` | — | unsupported |
+| `connection` | `c8.2.3.13` | `connection.svg` | supported |
+| `connection-def` | `c8.2.3.13` | `connection-def.svg` | unsupported |
+| `connection-def-graphical` | `c8.2.3.13` | `connection-def-graphical-1.svg`, `connection-def-graphical-2.svg` | unsupported |
+| `connection-def-name-compartment` | `c8.2.3.13` | — | partial |
+| `connection-definition-elaboration` | `c8.2.3.13` | `connection-definition-elaboration.svg` | unsupported |
+| `connection-end` | `c8.2.3.13` | — | unsupported |
+| `connection-graphical` | `c8.2.3.13` | `connection-graphical-1.svg`, `connection-graphical-2.svg` | unsupported |
+| `connection-label` | `c8.2.3.13` | — | unsupported |
+| `connection-name-compartment` | `c8.2.3.13` | — | partial |
+| `connection-relationship` | `c8.2.3.13` | — | unsupported |
+| `connection-usage-elaboration` | `c8.2.3.13` | `connection-usage-elaboration.svg` | unsupported |
+| `connections-compartment` | `c8.2.3.13` | `connections-compartment.svg` | partial |
+| `connections-compartment-contents` | `c8.2.3.13` | — | partial |
+| `connections-compartment-element` | `c8.2.3.13` | — | partial |
+| `constraint` | `c8.2.3.20` | `constraint.svg` | unsupported |
+| `constraint-def` | `c8.2.3.20` | `constraint-def.svg` | unsupported |
+| `constraint-def-name-compartment` | `c8.2.3.20` | — | partial |
+| `constraint-name-compartment` | `c8.2.3.20` | — | partial |
+| `constraint-ref` | `c8.2.3.20` | `constraint-ref.svg` | unsupported |
+| `constraints-compartment` | `c8.2.3.20` | `constraints-compartment.svg` | partial |
+| `constraints-compartment-contents` | `c8.2.3.20` | — | partial |
+| `constraints-usage-compartment-element` | `c8.2.3.20` | — | partial |
+| `decision-node` | `c8.2.3.17` | `decision-node.svg` | unsupported |
+| `definition` | `c8.2.3.6` | `definition.svg` | supported |
+| `definition-name-with-alias` | `c8.2.3.6` | — | unsupported |
+| `directed-features-compartment` | `c8.2.3.11` | `directed-features-compartment.svg` | partial |
+| `directed-features-compartment-contents` | `c8.2.3.11` | — | partial |
+| `directed-features-compartment-element` | `c8.2.3.11` | — | partial |
+| `distinguished-parameter` | `c8.2.3.21` | — | unsupported |
+| `distinguished-parameter-link` | `c8.2.3.21` | `distinguished-parameter-link.svg` | unsupported |
+| `do-action` | `c8.2.3.18` | `do-action.svg` | unsupported |
+| `do-action-name-comp` | `c8.2.3.18` | — | unsupported |
+| `documentation-compartment` | `c8.2.3.4` | `documentation-compartment.svg` | partial |
+| `documentation-node` | `c8.2.3.4` | `documentation-node.svg` | unsupported |
+| `done-node` | `c8.2.3.17` | `done-node.svg` | unsupported |
+| `el-prefix` | `c8.2.3.6` | — | unsupported |
+| `element` | `c8.2.3.2` | — | unsupported |
+| `element-inside-textual-compartment` | `c8.2.3.2` | `element-inside-textual-compartment.svg` | partial |
+| `element-node` | `c8.2.3.2` | — | unsupported |
+| `ellipsis-at-lower-left-corner` | `c8.2.3.2` | — | unsupported |
+| `else-body` | `c8.2.3.17` | `else-body.svg` | unsupported |
+| `else-branch` | `c8.2.3.17` | `else-branch.svg` | unsupported |
+| `ends-compartment` | `c8.2.3.14` | `ends-compartment.svg` | partial |
+| `ends-compartment-contents` | `c8.2.3.14` | — | partial |
+| `ends-compartment-element` | `c8.2.3.14` | — | partial |
+| `entry-action` | `c8.2.3.18` | `entry-action-1.svg`, `entry-action-2.svg` | unsupported |
+| `entry-action-name-comp` | `c8.2.3.18` | — | unsupported |
+| `enumeration` | `c8.2.3.8` | `enumeration.svg` | unsupported |
+| `enumeration-def` | `c8.2.3.8` | `enumeration-def.svg` | unsupported |
+| `enumeration-def-name-compartment` | `c8.2.3.8` | — | partial |
+| `enumeration-name-compartment` | `c8.2.3.8` | — | partial |
+| `enums-compartment` | `c8.2.3.8` | `enums-compartment.svg` | partial |
+| `enums-compartment-contents` | `c8.2.3.8` | — | partial |
+| `enums-compartment-element` | `c8.2.3.8` | — | partial |
+| `event-edge` | `c8.2.3.9` | `event-edge.svg` | unsupported |
+| `event-occurrence` | `c8.2.3.9` | `event-occurrence.svg` | unsupported |
+| `event-occurrence-def` | `c8.2.3.9` | `event-occurrence-def.svg` | unsupported |
+| `event-occurrence-def-name-compartment` | `c8.2.3.9` | — | partial |
+| `event-occurrence-name-compartment` | `c8.2.3.9` | — | partial |
+| `eventer` | `c8.2.3.9` | — | unsupported |
+| `exhibit-edge` | `c8.2.3.18` | `exhibit-edge.svg` | unsupported |
+| `exhibit-state-name-compartment` | `c8.2.3.18` | — | partial |
+| `exhibit-state-usage` | `c8.2.3.18` | `exhibit-state-usage.svg` | unsupported |
+| `exhibit-states-compartment` | `c8.2.3.18` | `exhibit-states-compartment.svg` | partial |
+| `exhibit-states-compartment-contents` | `c8.2.3.18` | — | partial |
+| `exhibit-states-compartment-element-compartment` | `c8.2.3.18` | — | partial |
+| `exhibitor` | `c8.2.3.18` | — | unsupported |
+| `exit-action` | `c8.2.3.18` | `exit-action.svg` | unsupported |
+| `exit-action-name-comp` | `c8.2.3.18` | — | unsupported |
+| `expose-r` | `c8.2.3.26` | `expose-r.svg` | unsupported |
+| `expose-relationship` | `c8.2.3.26` | — | unsupported |
+| `exposes-compartment` | `c8.2.3.26` | `exposes-compartment.svg` | partial |
+| `exposes-compartment-contents` | `c8.2.3.26` | — | partial |
+| `exposes-compartment-element` | `c8.2.3.26` | — | partial |
+| `expression-text` | `c8.2.3.27` | — | unsupported |
+| `extended-def` | `c8.2.3.6` | `extended-def.svg` | supported |
+| `extended-def-name-compartment` | `c8.2.3.6` | — | partial |
+| `extended-usage` | `c8.2.3.6` | `extended-usage.svg` | supported |
+| `extended-usage-name-compartment` | `c8.2.3.6` | — | partial |
+| `features-compartment` | `c8.2.3.6` | `features-compartment.svg` | partial |
+| `features-compartment-contents` | `c8.2.3.6` | — | partial |
+| `features-compartment-element` | `c8.2.3.6` | — | partial |
+| `filters-compartment` | `c8.2.3.26` | `filters-compartment.svg` | partial |
+| `filters-compartment-contents` | `c8.2.3.26` | — | partial |
+| `filters-compartment-element` | `c8.2.3.26` | — | partial |
+| `flow` | `c8.2.3.16` | `flow.svg` | supported |
+| `flow-def` | `c8.2.3.16` | `flow-def.svg` | unsupported |
+| `flow-def-name-compartment` | `c8.2.3.16` | — | partial |
+| `flow-end-node` | `c8.2.3.16` | — | unsupported |
+| `flow-label` | `c8.2.3.16` | — | unsupported |
+| `flow-name-compartment` | `c8.2.3.16` | — | partial |
+| `flow-node` | `c8.2.3.16` | `flow-node.svg` | unsupported |
+| `flow-node-l` | `c8.2.3.16` | `flow-node-l.svg` | unsupported |
+| `flow-node-r` | `c8.2.3.16` | `flow-node-r.svg` | unsupported |
+| `flow-on-connection` | `c8.2.3.16` | `flow-on-connection.svg` | unsupported |
+| `flows-compartment` | `c8.2.3.16` | `flows-compartment.svg` | partial |
+| `flows-compartment-contents` | `c8.2.3.16` | — | partial |
+| `flows-compartment-element` | `c8.2.3.16` | — | partial |
+| `for-loop-action-name-compartment` | `c8.2.3.17` | — | partial |
+| `for-loop-action-node` | `c8.2.3.17` | `for-loop-action-node.svg` | unsupported |
+| `fork-node` | `c8.2.3.17` | `fork-node.svg` | unsupported |
+| `frame-concern-name-compartment` | `c8.2.3.21` | — | partial |
+| `frame-concern-node` | `c8.2.3.21` | `frame-concern-node.svg` | unsupported |
+| `frame-edge` | `c8.2.3.21` | `frame-edge.svg` | unsupported |
+| `frame-relationship` | `c8.2.3.21` | `frame-relationship.svg` | unsupported |
+| `framed-view` | `c8.2.3.26` | `framed-view.svg` | unsupported |
+| `frameless-view` | `c8.2.3.26` | — | unsupported |
+| `framer` | `c8.2.3.21` | — | unsupported |
+| `frames-compartment` | `c8.2.3.21` | `frames-compartment.svg` | partial |
+| `frames-compartment-contents` | `c8.2.3.21` | — | partial |
+| `frames-compartment-element` | `c8.2.3.21` | — | partial |
+| `general-compartment` | `c8.2.3.2` | `general-compartment.svg` | partial |
+| `general-element` | `c8.2.3.2` | — | unsupported |
+| `general-view` | `c8.2.3.2` | — | supported |
+| `guard-expression` | `c8.2.3.17` | — | unsupported |
+| `if-condition` | `c8.2.3.17` | `if-condition.svg` | unsupported |
+| `if-else-action-node` | `c8.2.3.17` | `if-else-action-node.svg` | unsupported |
+| `ifelse-action-name-compartment` | `c8.2.3.17` | — | partial |
+| `import` | `c8.2.3.5` | `import.svg` | unsupported |
+| `imported-package-with-name-in-tab` | `c8.2.3.5` | `imported-package-with-name-in-tab.svg` | unsupported |
+| `imported-package-with-name-inside` | `c8.2.3.5` | `imported-package-with-name-inside.svg` | unsupported |
+| `include-use-case-name-compartment` | `c8.2.3.25` | — | partial |
+| `include-use-case-relationship` | `c8.2.3.25` | `include-use-case-relationship.svg` | unsupported |
+| `include-use-case-usage` | `c8.2.3.25` | `include-use-case-usage.svg` | unsupported |
+| `include-use-cases-compartment` | `c8.2.3.25` | `include-use-cases-compartment.svg` | partial |
+| `include-use-cases-compartment-contents` | `c8.2.3.25` | — | partial |
+| `include-use-cases-compartment-element` | `c8.2.3.25` | — | partial |
+| `includes-compartment` | `c8.2.3.25` | `includes-compartment.svg` | partial |
+| `includes-compartment-contents` | `c8.2.3.25` | — | partial |
+| `includes-compartment-element` | `c8.2.3.25` | — | partial |
+| `individuals-compartment` | `c8.2.3.9` | `individuals-compartment.svg` | partial |
+| `individuals-compartment-contents` | `c8.2.3.9` | — | partial |
+| `individuals-compartment-element` | `c8.2.3.9` | — | partial |
+| `interconnection-compartment` | `c8.2.3.11` | `interconnection-compartment.svg` | partial |
+| `interface` | `c8.2.3.14` | `interface.svg` | supported |
+| `interface-connection` | `c8.2.3.14` | `interface-connection.svg` | supported |
+| `interface-def` | `c8.2.3.14` | `interface-def.svg` | unsupported |
+| `interface-def-name-compartment` | `c8.2.3.14` | — | partial |
+| `interface-label` | `c8.2.3.14` | — | unsupported |
+| `interface-name-compartment` | `c8.2.3.14` | — | partial |
+| `interfaces-compartment` | `c8.2.3.14` | `interfaces-compartment.svg` | partial |
+| `interfaces-compartment-contents` | `c8.2.3.14` | — | partial |
+| `interfaces-compartment-element` | `c8.2.3.14` | — | partial |
+| `item` | `c8.2.3.10` | `item.svg` | supported |
+| `item-def` | `c8.2.3.10` | `item-def.svg` | supported |
+| `item-def-name-compartment` | `c8.2.3.10` | — | partial |
+| `item-name-compartment` | `c8.2.3.10` | — | partial |
+| `item-ref` | `c8.2.3.10` | `item-ref.svg` | supported |
+| `items-compartment` | `c8.2.3.10` | `items-compartment.svg` | partial |
+| `items-compartment-contents` | `c8.2.3.10` | — | partial |
+| `items-compartment-element` | `c8.2.3.10` | — | partial |
+| `iteration` | `c8.2.3.17` | `iteration.svg` | unsupported |
+| `iteration-expression` | `c8.2.3.17` | — | unsupported |
+| `join-node` | `c8.2.3.17` | `join-node.svg` | unsupported |
+| `language-string` | `c8.2.3.4` | — | unsupported |
+| `lifeline` | `c8.2.3.9` | `lifeline.svg` | unsupported |
+| `loop-body` | `c8.2.3.17` | `loop-body.svg` | unsupported |
+| `members-compartment` | `c8.2.3.5` | `members-compartment.svg` | partial |
+| `members-compartment-contents` | `c8.2.3.5` | — | partial |
+| `members-compartment-element` | `c8.2.3.5` | — | partial |
+| `merge-node` | `c8.2.3.17` | `merge-node.svg` | unsupported |
+| `message` | `c8.2.3.16` | `message.svg` | unsupported |
+| `message-label` | `c8.2.3.16` | — | unsupported |
+| `message-node-l` | `c8.2.3.16` | `message-node-l.svg` | unsupported |
+| `message-node-r` | `c8.2.3.16` | `message-node-r.svg` | unsupported |
+| `metadata-def` | `c8.2.3.27` | `metadata-def.svg` | unsupported |
+| `metadata-def-name-compartment` | `c8.2.3.27` | — | partial |
+| `metadata-feature-annotation-node` | `c8.2.3.27` | `metadata-feature-annotation-node.svg` | unsupported |
+| `metadata-feature-decl` | `c8.2.3.27` | — | unsupported |
+| `metadata-feature-name` | `c8.2.3.27` | — | unsupported |
+| `metadata-feature-name-value-list` | `c8.2.3.27` | — | unsupported |
+| `msg-end-node` | `c8.2.3.16` | — | unsupported |
+| `multiplicity` | `c8.2.3.13` | — | unsupported |
+| `n-ary-association-dot` | `c8.2.3.3` | `n-ary-association-dot.svg` | unsupported |
+| `n-ary-connection` | `c8.2.3.13` | — | unsupported |
+| `n-ary-connection-def` | `c8.2.3.13` | — | unsupported |
+| `n-ary-connection-dot` | `c8.2.3.13` | `n-ary-connection-dot.svg` | unsupported |
+| `n-ary-def-connection-dot` | `c8.2.3.13` | `n-ary-def-connection-dot.svg` | unsupported |
+| `n-ary-def-segment` | `c8.2.3.13` | `n-ary-def-segment.svg` | unsupported |
+| `n-ary-dependency` | `c8.2.3.3` | — | unsupported |
+| `n-ary-dependency-client-link` | `c8.2.3.3` | `n-ary-dependency-client-link.svg` | unsupported |
+| `n-ary-dependency-client-or-supplier-link` | `c8.2.3.3` | — | unsupported |
+| `n-ary-dependency-supplier-link` | `c8.2.3.3` | `n-ary-dependency-supplier-link.svg` | unsupported |
+| `n-ary-segment` | `c8.2.3.13` | `n-ary-segment.svg` | unsupported |
+| `noncomposite-feature-membership` | `c8.2.3.6` | `noncomposite-feature-membership.svg` | unsupported |
+| `objective-compartment` | `c8.2.3.22` | `objective-compartment.svg` | partial |
+| `objective-compartment-contents` | `c8.2.3.22` | — | partial |
+| `objective-compartment-element` | `c8.2.3.22` | — | partial |
+| `occurrence` | `c8.2.3.9` | `occurrence.svg` | supported |
+| `occurrence-def` | `c8.2.3.9` | `occurrence-def.svg` | supported |
+| `occurrence-def-name-compartment` | `c8.2.3.9` | — | partial |
+| `occurrence-name-compartment` | `c8.2.3.9` | — | partial |
+| `occurrence-ref` | `c8.2.3.9` | `occurrence-ref.svg` | unsupported |
+| `occurrences-compartment` | `c8.2.3.9` | `occurrences-compartment.svg` | partial |
+| `occurrences-compartment-contents` | `c8.2.3.9` | — | partial |
+| `occurrences-compartment-element` | `c8.2.3.9` | — | partial |
+| `owned-membership` | `c8.2.3.5` | `owned-membership.svg` | unsupported |
+| `package-compartment` | `c8.2.3.5` | — | partial |
+| `package-node` | `c8.2.3.5` | — | unsupported |
+| `package-with-name-in-tab` | `c8.2.3.5` | `package-with-name-in-tab.svg` | unsupported |
+| `package-with-name-inside` | `c8.2.3.5` | `package-with-name-inside.svg` | supported |
+| `packages-compartment` | `c8.2.3.5` | `packages-compartment.svg` | partial |
+| `packages-compartment-contents` | `c8.2.3.5` | — | partial |
+| `packages-compartment-element` | `c8.2.3.5` | — | partial |
+| `param-b` | `c8.2.3.17` | `param-b-1.svg`, `param-b-2.svg` | unsupported |
+| `param-l` | `c8.2.3.17` | `param-l-1.svg`, `param-l-2.svg` | unsupported |
+| `param-label` | `c8.2.3.17` | — | unsupported |
+| `param-r` | `c8.2.3.17` | `param-r-1.svg`, `param-r-2.svg` | unsupported |
+| `param-t` | `c8.2.3.17` | `param-t-1.svg`, `param-t-2.svg` | unsupported |
+| `parameter` | `c8.2.3.17` | — | unsupported |
+| `parameters-compartment` | `c8.2.3.17` | `parameters-compartment.svg` | partial |
+| `parameters-compartment-contents` | `c8.2.3.17` | — | partial |
+| `parameters-compartment-element` | `c8.2.3.17` | — | partial |
+| `part` | `c8.2.3.11` | `part.svg` | supported |
+| `part-def` | `c8.2.3.11` | `part-def.svg` | supported |
+| `part-def-name-compartment` | `c8.2.3.11` | — | partial |
+| `part-name-compartment` | `c8.2.3.11` | — | partial |
+| `part-ref` | `c8.2.3.11` | `part-ref.svg` | supported |
+| `parts-compartment` | `c8.2.3.11` | `parts-compartment.svg` | partial |
+| `parts-compartment-contents` | `c8.2.3.11` | — | partial |
+| `parts-compartment-element` | `c8.2.3.11` | — | partial |
+| `pdh` | `c8.2.3.12` | `pdh-1.svg`, `pdh-2.svg`, `pdh-3.svg` | unsupported |
+| `pdv` | `c8.2.3.12` | `pdv-1.svg`, `pdv-2.svg`, `pdv-3.svg` | unsupported |
+| `perform-action-name-compartment` | `c8.2.3.17` | — | partial |
+| `perform-action-usage` | `c8.2.3.17` | `perform-action-usage.svg` | unsupported |
+| `perform-actions-compartment` | `c8.2.3.17` | `perform-actions-compartment.svg` | partial |
+| `perform-actions-compartment-contents` | `c8.2.3.17` | — | partial |
+| `perform-actions-compartment-element` | `c8.2.3.17` | — | partial |
+| `perform-actions-swimlanes` | `c8.2.3.17` | — | unsupported |
+| `perform-edge` | `c8.2.3.17` | `perform-edge.svg` | unsupported |
+| `performed-by-compartment` | `c8.2.3.17` | `performed-by-compartment.svg` | partial |
+| `performed-by-compartment-contents` | `c8.2.3.17` | — | partial |
+| `performer-node` | `c8.2.3.17` | — | unsupported |
+| `port-b` | `c8.2.3.12` | `port-b-1.svg`, `port-b-2.svg`, `port-b-3.svg` | unsupported |
+| `port-def` | `c8.2.3.12` | `port-def.svg` | supported |
+| `port-def-name-compartment` | `c8.2.3.12` | — | partial |
+| `port-l` | `c8.2.3.12` | `port-l-1.svg`, `port-l-2.svg`, `port-l-3.svg` | unsupported |
+| `port-label` | `c8.2.3.12` | — | unsupported |
+| `port-name-compartment` | `c8.2.3.12` | — | partial |
+| `port-r` | `c8.2.3.12` | `port-r-1.svg`, `port-r-2.svg`, `port-r-3.svg` | unsupported |
+| `port-t` | `c8.2.3.12` | `port-t-1.svg`, `port-t-2.svg`, `port-t-3.svg` | unsupported |
+| `port-usage` | `c8.2.3.12` | `port-usage.svg` | supported |
+| `portion-relationship` | `c8.2.3.9` | `portion-relationship.svg` | unsupported |
+| `ports-compartment` | `c8.2.3.12` | `ports-compartment.svg` | partial |
+| `ports-compartment-contents` | `c8.2.3.12` | — | partial |
+| `ports-compartment-element` | `c8.2.3.12` | — | partial |
+| `proxy-h` | `c8.2.3.12` | `proxy-h-1.svg`, `proxy-h-2.svg` | unsupported |
+| `proxy-label` | `c8.2.3.9` | — | unsupported |
+| `proxy-v` | `c8.2.3.12` | `proxy-v-1.svg`, `proxy-v-2.svg` | unsupported |
+| `recursive-expose-r` | `c8.2.3.26` | `recursive-expose-r.svg` | unsupported |
+| `recursive-import` | `c8.2.3.5` | `recursive-import.svg` | unsupported |
+| `redefinition` | `c8.2.3.6` | `redefinition.svg` | supported |
+| `reference-subsetting` | `c8.2.3.6` | `reference-subsetting.svg` | unsupported |
+| `rel-name` | `c8.2.3.2` | — | unsupported |
+| `relationship-name` | `c8.2.3.5` | — | unsupported |
+| `relationships-compartment` | `c8.2.3.5` | `relationships-compartment.svg` | partial |
+| `relationships-compartment-contents` | `c8.2.3.5` | — | partial |
+| `relationships-compartment-element` | `c8.2.3.5` | — | partial |
+| `rendering-compartment` | `c8.2.3.26` | `rendering-compartment.svg` | partial |
+| `rendering-compartment-contents` | `c8.2.3.26` | — | partial |
+| `require-constraint-element` | `c8.2.3.21` | — | unsupported |
+| `require-constraint-name-compartment` | `c8.2.3.21` | — | partial |
+| `require-constraint-node` | `c8.2.3.21` | `require-constraint-node.svg` | unsupported |
+| `require-constraints-compartment` | `c8.2.3.21` | `require-constraints-compartment.svg` | partial |
+| `require-constraints-compartment-contents` | `c8.2.3.21` | — | partial |
+| `require-edge` | `c8.2.3.21` | `require-edge.svg` | unsupported |
+| `requirement` | `c8.2.3.21` | `requirement.svg` | supported |
+| `requirement-def` | `c8.2.3.21` | `requirement-def.svg` | supported |
+| `requirement-def-name-compartment` | `c8.2.3.21` | — | partial |
+| `requirement-name-compartment` | `c8.2.3.21` | — | partial |
+| `requirement-ref` | `c8.2.3.21` | `requirement-ref.svg` | unsupported |
+| `requirements-compartment` | `c8.2.3.21` | `requirements-compartment.svg` | partial |
+| `requirements-compartment-contents` | `c8.2.3.21` | — | partial |
+| `requirements-compartment-element` | `c8.2.3.21` | — | partial |
+| `requirer` | `c8.2.3.21` | — | unsupported |
+| `result-compartment` | `c8.2.3.19` | `result-compartment.svg` | partial |
+| `result-compartment-contents` | `c8.2.3.19` | — | partial |
+| `rolename` | `c8.2.3.13` | — | unsupported |
+| `root-view` | `c8.2.3.26` | — | unsupported |
+| `satisfier` | `c8.2.3.21` | — | unsupported |
+| `satisfies-compartment` | `c8.2.3.21` | `satisfies-compartment.svg` | partial |
+| `satisfies-compartment-contents` | `c8.2.3.21` | — | partial |
+| `satisfy-edge` | `c8.2.3.21` | `satisfy-edge.svg` | unsupported |
+| `satisfy-requirement-name-compartment` | `c8.2.3.21` | — | partial |
+| `satisfy-requirement-usage` | `c8.2.3.21` | `satisfy-requirement-usage.svg` | unsupported |
+| `satisfy-requirements-compartment` | `c8.2.3.21` | `satisfy-requirements-compartment.svg` | partial |
+| `satisfy-requirements-compartment-contents` | `c8.2.3.21` | — | partial |
+| `send-action-expression` | `c8.2.3.17` | — | unsupported |
+| `send-action-name-compartment` | `c8.2.3.17` | — | partial |
+| `send-action-node` | `c8.2.3.17` | `send-action-node.svg` | unsupported |
+| `sequence-compartment` | `c8.2.3.9` | `sequence-compartment.svg` | partial |
+| `sequence-view` | `c8.2.3.9` | — | partial |
+| `sflow-node-l` | `c8.2.3.16` | `sflow-node-l.svg` | unsupported |
+| `sflow-node-r` | `c8.2.3.16` | `sflow-node-r.svg` | unsupported |
+| `snapshot` | `c8.2.3.9` | `snapshot.svg` | unsupported |
+| `snapshots-compartment` | `c8.2.3.9` | `snapshots-compartment.svg` | partial |
+| `snapshots-compartment-contents` | `c8.2.3.9` | — | partial |
+| `snapshots-compartment-element` | `c8.2.3.9` | — | partial |
+| `snapshots-name-compartment` | `c8.2.3.9` | — | partial |
+| `sq-graphical-element` | `c8.2.3.9` | — | partial |
+| `sq-graphical-node` | `c8.2.3.9` | — | partial |
+| `sq-graphical-relationship` | `c8.2.3.9` | — | partial |
+| `sq-head-node` | `c8.2.3.9` | — | partial |
+| `sq-l-node` | `c8.2.3.9` | — | partial |
+| `sq-part` | `c8.2.3.9` | `sq-part.svg` | partial |
+| `sq-port` | `c8.2.3.9` | `sq-port.svg` | partial |
+| `sq-port-label` | `c8.2.3.9` | — | partial |
+| `sq-proxy` | `c8.2.3.9` | `sq-proxy-1.svg`, `sq-proxy-2.svg` | partial |
+| `sq-succession` | `c8.2.3.9` | `sq-succession.svg` | partial |
+| `st-succession` | `c8.2.3.18` | `st-succession-1.svg`, `st-succession-2.svg` | partial |
+| `stakeholder` | `c8.2.3.21` | `stakeholder.svg` | unsupported |
+| `stakeholder-name` | `c8.2.3.21` | — | unsupported |
+| `stakeholders-compartment` | `c8.2.3.21` | `stakeholders-compartment.svg` | partial |
+| `stakeholders-compartment-contents` | `c8.2.3.21` | — | partial |
+| `stakeholders-compartment-element` | `c8.2.3.21` | — | partial |
+| `start-node` | `c8.2.3.17` | `start-node.svg` | unsupported |
+| `state` | `c8.2.3.18` | `state.svg` | supported |
+| `state-actions-compartment` | `c8.2.3.18` | `state-actions-compartment.svg` | partial |
+| `state-actions-compartment-contents` | `c8.2.3.18` | — | partial |
+| `state-actions-compartment-element` | `c8.2.3.18` | — | partial |
+| `state-def` | `c8.2.3.18` | `state-def.svg` | supported |
+| `state-def-name-compartment` | `c8.2.3.18` | — | partial |
+| `state-do-action` | `c8.2.3.18` | `state-do-action.svg` | unsupported |
+| `state-entry-action` | `c8.2.3.18` | `state-entry-action.svg` | unsupported |
+| `state-exit-action` | `c8.2.3.18` | `state-exit-action.svg` | unsupported |
+| `state-name-compartment` | `c8.2.3.18` | — | partial |
+| `state-ref` | `c8.2.3.18` | `state-ref.svg` | unsupported |
+| `state-source` | `c8.2.3.18` | — | unsupported |
+| `state-subaction-body` | `c8.2.3.18` | — | unsupported |
+| `state-subaction-body-textual` | `c8.2.3.18` | — | unsupported |
+| `state-subaction-declaration` | `c8.2.3.18` | — | unsupported |
+| `state-transition-compartment` | `c8.2.3.18` | `state-transition-compartment.svg` | partial |
+| `state-transition-element` | `c8.2.3.18` | — | unsupported |
+| `state-transition-node` | `c8.2.3.18` | — | unsupported |
+| `state-transition-view` | `c8.2.3.18` | — | unsupported |
+| `states-compartment` | `c8.2.3.18` | `states-compartment.svg` | partial |
+| `states-compartment-contents` | `c8.2.3.18` | — | partial |
+| `states-compartment-element` | `c8.2.3.18` | — | partial |
+| `subclassification` | `c8.2.3.6` | `subclassification.svg` | unsupported |
+| `subject` | `c8.2.3.21` | `subject.svg` | unsupported |
+| `subject-compartment` | `c8.2.3.21` | `subject-compartment.svg` | partial |
+| `subject-compartment-contents` | `c8.2.3.21` | — | partial |
+| `subject-compartment-element` | `c8.2.3.21` | — | partial |
+| `subject-name` | `c8.2.3.21` | — | unsupported |
+| `subsetting` | `c8.2.3.6` | `subsetting.svg` | unsupported |
+| `succession-flow` | `c8.2.3.16` | `succession-flow.svg` | partial |
+| `succession-flow-label` | `c8.2.3.16` | — | partial |
+| `succession-label` | `c8.2.3.9` | — | partial |
+| `successions-compartment` | `c8.2.3.18` | `successions-compartment.svg` | partial |
+| `successions-compartment-contents` | `c8.2.3.18` | — | partial |
+| `swimlane` | `c8.2.3.17` | `swimlane.svg` | unsupported |
+| `terminate-node` | `c8.2.3.17` | `terminate-node.svg` | unsupported |
+| `text-block` | `c8.2.3.4` | — | unsupported |
+| `textual-representation-node` | `c8.2.3.4` | `textual-representation-node.svg` | unsupported |
+| `then-body` | `c8.2.3.17` | `then-body.svg` | unsupported |
+| `timeslice` | `c8.2.3.9` | `timeslice.svg` | unsupported |
+| `timeslice-name-compartment` | `c8.2.3.9` | — | partial |
+| `timeslice-or-snapshot-node` | `c8.2.3.9` | — | unsupported |
+| `timeslices-compartment` | `c8.2.3.9` | `timeslices-compartment.svg` | partial |
+| `timeslices-compartment-contents` | `c8.2.3.9` | — | partial |
+| `timeslices-compartment-element` | `c8.2.3.9` | — | partial |
+| `top-level-import` | `c8.2.3.5` | `top-level-import.svg` | unsupported |
+| `toplevel-expose-r` | `c8.2.3.26` | `toplevel-expose-r.svg` | unsupported |
+| `transition` | `c8.2.3.18` | `transition-1.svg`, `transition-2.svg` | unsupported |
+| `transition-label` | `c8.2.3.18` | — | unsupported |
+| `trigger-expression` | `c8.2.3.18` | — | unsupported |
+| `type-node` | `c8.2.3.6` | — | unsupported |
+| `type-relationship` | `c8.2.3.6` | — | unsupported |
+| `unowned-membership` | `c8.2.3.5` | `unowned-membership.svg` | unsupported |
+| `until-condition` | `c8.2.3.17` | `until-condition.svg` | unsupported |
+| `usage-cp` | `c8.2.3.6` | — | unsupported |
+| `usage-name-with-alias` | `c8.2.3.6` | — | unsupported |
+| `usage-node` | `c8.2.3.20` | — | unsupported |
+| `use-case` | `c8.2.3.25` | `use-case.svg` | unsupported |
+| `use-case-def` | `c8.2.3.25` | `use-case-def.svg` | unsupported |
+| `use-case-def-name-compartment` | `c8.2.3.25` | — | partial |
+| `use-case-name-compartment` | `c8.2.3.25` | — | partial |
+| `use-cases-compartment` | `c8.2.3.25` | `use-cases-compartment.svg` | partial |
+| `use-cases-compartment-contents` | `c8.2.3.25` | — | partial |
+| `use-cases-compartment-element` | `c8.2.3.25` | — | partial |
+| `variant-elementusages-compartment` | `c8.2.3.6` | `variant-elementusages-compartment.svg` | partial |
+| `variants-compartment` | `c8.2.3.6` | `variants-compartment.svg` | partial |
+| `variants-compartment-contents` | `c8.2.3.6` | — | partial |
+| `verification` | `c8.2.3.24` | `verification.svg` | unsupported |
+| `verification-def` | `c8.2.3.24` | `verification-def.svg` | unsupported |
+| `verification-def-name-compartment` | `c8.2.3.24` | — | partial |
+| `verification-methods-compartment` | `c8.2.3.24` | `verification-methods-compartment.svg` | partial |
+| `verification-methods-compartment-contents` | `c8.2.3.24` | — | partial |
+| `verification-methods-compartment-element` | `c8.2.3.24` | — | partial |
+| `verification-name-compartment` | `c8.2.3.24` | — | partial |
+| `verifications-compartment` | `c8.2.3.24` | `verifications-compartment.svg` | partial |
+| `verifications-compartment-contents` | `c8.2.3.24` | — | partial |
+| `verifications-compartment-element` | `c8.2.3.24` | — | partial |
+| `verifies-compartment` | `c8.2.3.24` | `verifies-compartment.svg` | partial |
+| `verifies-compartment-contents` | `c8.2.3.24` | — | partial |
+| `verifies-compartment-element` | `c8.2.3.24` | — | partial |
+| `verify-relationship` | `c8.2.3.24` | `verify-relationship.svg` | unsupported |
+| `verify-requirement-name-compartment` | `c8.2.3.24` | — | partial |
+| `verify-requirement-node` | `c8.2.3.24` | `verify-requirement-node.svg` | unsupported |
+| `view` | `c8.2.3.26` | `view.svg` | unsupported |
+| `view-def` | `c8.2.3.26` | `view-def.svg` | unsupported |
+| `view-def-name-compartment` | `c8.2.3.26` | — | partial |
+| `view-frame-info-compartment-bl` | `c8.2.3.26` | `view-frame-info-compartment-bl.svg` | partial |
+| `view-frame-info-compartment-br` | `c8.2.3.26` | `view-frame-info-compartment-br.svg` | partial |
+| `view-frame-info-compartment-tr` | `c8.2.3.26` | `view-frame-info-compartment-tr.svg` | partial |
+| `view-frame-info-contents` | `c8.2.3.26` | — | unsupported |
+| `view-frame-name-compartment` | `c8.2.3.26` | — | partial |
+| `view-name-compartment` | `c8.2.3.26` | — | partial |
+| `viewpoint` | `c8.2.3.26` | `viewpoint.svg` | unsupported |
+| `viewpoint-def` | `c8.2.3.26` | `viewpoint-def.svg` | unsupported |
+| `viewpoint-def-name-compartment` | `c8.2.3.26` | — | partial |
+| `viewpoint-name-compartment` | `c8.2.3.26` | — | partial |
+| `viewpoints-compartment` | `c8.2.3.26` | `viewpoints-compartment.svg` | partial |
+| `viewpoints-compartment-contents` | `c8.2.3.26` | — | partial |
+| `viewpoints-compartment-element` | `c8.2.3.26` | — | partial |
+| `views-compartment` | `c8.2.3.26` | `views-compartment.svg` | partial |
+| `views-compartment-contents` | `c8.2.3.26` | — | partial |
+| `views-compartment-element` | `c8.2.3.26` | — | partial |
+| `while-condition` | `c8.2.3.17` | `while-condition.svg` | unsupported |
+| `while-loop-action-name-compartment` | `c8.2.3.17` | — | partial |
+| `while-loop-action-node` | `c8.2.3.17` | `while-loop-action-node.svg` | unsupported |
 
-| SVG | Inferred views | Status | Code pointer |
-|-----|----------------|--------|--------------|
-| accept-action-node.svg | — | WONTFIX (not in shipped UI) | — |
-| action-binding-connection.svg | — | WONTFIX (not in shipped UI) | — |
-| action-def.svg | general-view | shared | `node-notation.ts` / `sysml-node-builder.ts` |
-| action-flow-compartment.svg | general-view, interconnection-view (compartment text) | shared (action-flow-view) | `renderer.ts` (IBD) |
-| action-ref.svg | — | WONTFIX (not in shipped UI) | — |
-| action.svg | general-view, action-flow-view | shared | `views/action-flow.ts` |
-| actions-compartment.svg | general-view, interconnection-view (compartment text) | shared (compartment text only) | `renderer.ts` (IBD) |
-| actor-1.svg | — | WONTFIX (not in shipped UI) | — |
-| actor-2.svg | — | WONTFIX (not in shipped UI) | — |
-| actor-connector.svg | — | WONTFIX (not in shipped UI) | — |
-| actor.svg | — | WONTFIX (not in shipped UI) | — |
-| actors-compartment.svg | general-view, interconnection-view (compartment text) | shared (compartment text only) | `renderer.ts` (IBD) |
-| aflow-succession.svg | — | shared (action-flow-view) | `node-notation.ts` / `sysml-node-builder.ts` |
-| allocate-relationship.svg | — | WONTFIX (not in shipped UI) | — |
-| allocation-def.svg | — | WONTFIX (not in shipped UI) | — |
-| allocation.svg | — | WONTFIX (not in shipped UI) | — |
-| allocations-compartment.svg | general-view, interconnection-view (compartment text) | shared (compartment text only) | `renderer.ts` (IBD) |
-| analyses-compartment.svg | general-view, interconnection-view (compartment text) | shared (compartment text only) | `renderer.ts` (IBD) |
-| analysis-def.svg | — | WONTFIX (not in shipped UI) | — |
-| analysis.svg | — | WONTFIX (not in shipped UI) | — |
-| annotation-link.svg | — | WONTFIX (not in shipped UI) | — |
-| assert-constraint-node.svg | — | WONTFIX (not in shipped UI) | — |
-| assert-constraints-compartment.svg | general-view, interconnection-view (compartment text) | shared (compartment text only) | `renderer.ts` (IBD) |
-| assert-edge.svg | — | WONTFIX (not in shipped UI) | — |
-| assign-action-node.svg | — | WONTFIX (not in shipped UI) | — |
-| assume-constraint-node.svg | — | WONTFIX (not in shipped UI) | — |
-| assume-constraints-compartment.svg | general-view, interconnection-view (compartment text) | shared (compartment text only) | `renderer.ts` (IBD) |
-| assume-edge.svg | — | WONTFIX (not in shipped UI) | — |
-| attribute-def.svg | — | WONTFIX (not in shipped UI) | — |
-| attribute-ref.svg | — | WONTFIX (not in shipped UI) | — |
-| attribute.svg | — | WONTFIX (not in shipped UI) | — |
-| attributes-compartment.svg | general-view, interconnection-view (compartment text) | shared (compartment text only) | `renderer.ts` (IBD) |
-| binary-dependency.svg | general-view | shared | `renderer.ts` `applyEdgeMarker` dependency |
-| binding-connection.svg | interconnection-view | shared | `renderer.ts` `applyEdgeMarker` bind branch |
-| calc-def.svg | — | WONTFIX (not in shipped UI) | — |
-| calc.svg | — | WONTFIX (not in shipped UI) | — |
-| calcs-compartment.svg | general-view, interconnection-view (compartment text) | shared (compartment text only) | `renderer.ts` (IBD) |
-| comment-with-keyword.svg | — | WONTFIX (not in shipped UI) | — |
-| comment-without-keyword.svg | — | WONTFIX (not in shipped UI) | — |
-| composite-feature-membership.svg | — | WONTFIX (not in shipped UI) | — |
-| concern-def.svg | — | WONTFIX (not in shipped UI) | — |
-| concern-stakeholder-link.svg | — | WONTFIX (not in shipped UI) | — |
-| concern.svg | — | WONTFIX (not in shipped UI) | — |
-| concerns-compartment.svg | general-view, interconnection-view (compartment text) | shared (compartment text only) | `renderer.ts` (IBD) |
-| connection-def-graphical-1.svg | — | WONTFIX (not in shipped UI) | — |
-| connection-def-graphical-2.svg | — | WONTFIX (not in shipped UI) | — |
-| connection-def.svg | — | WONTFIX (not in shipped UI) | — |
-| connection-definition-elaboration.svg | — | WONTFIX (not in shipped UI) | — |
-| connection-graphical-1.svg | — | WONTFIX (not in shipped UI) | — |
-| connection-graphical-2.svg | — | WONTFIX (not in shipped UI) | — |
-| connection-usage-elaboration.svg | — | WONTFIX (not in shipped UI) | — |
-| connection.svg | interconnection-view | shared | `renderer.ts` `applyEdgeMarker` (IBD) |
-| connections-compartment.svg | general-view, interconnection-view (compartment text) | shared (compartment text only) | `renderer.ts` (IBD) |
-| constraint-def.svg | — | WONTFIX (not in shipped UI) | — |
-| constraint-ref.svg | — | WONTFIX (not in shipped UI) | — |
-| constraint.svg | — | WONTFIX (not in shipped UI) | — |
-| constraints-compartment.svg | general-view, interconnection-view (compartment text) | shared (compartment text only) | `renderer.ts` (IBD) |
-| decision-node.svg | — | WONTFIX (not in shipped UI) | — |
-| definition.svg | general-view | shared | `node-notation.ts` definition chrome |
-| directed-features-compartment.svg | general-view, interconnection-view (compartment text) | shared (compartment text only) | `renderer.ts` (IBD) |
-| distinguished-parameter-link.svg | — | WONTFIX (not in shipped UI) | — |
-| do-action.svg | — | WONTFIX (not in shipped UI) | — |
-| documentation-compartment.svg | general-view, interconnection-view (compartment text) | shared (compartment text only) | `renderer.ts` (IBD) |
-| documentation-node.svg | — | WONTFIX (not in shipped UI) | — |
-| done-node.svg | — | WONTFIX (not in shipped UI) | — |
-| element-inside-textual-compartment.svg | general-view, interconnection-view (compartment text) | shared (compartment text only) | `renderer.ts` (IBD) |
-| else-body.svg | — | WONTFIX (not in shipped UI) | — |
-| else-branch.svg | — | WONTFIX (not in shipped UI) | — |
-| ends-compartment.svg | general-view, interconnection-view (compartment text) | shared (compartment text only) | `renderer.ts` (IBD) |
-| entry-action-1.svg | — | WONTFIX (not in shipped UI) | — |
-| entry-action-2.svg | — | WONTFIX (not in shipped UI) | — |
-| enumeration-def.svg | — | WONTFIX (not in shipped UI) | — |
-| enumeration.svg | — | WONTFIX (not in shipped UI) | — |
-| enums-compartment.svg | general-view, interconnection-view (compartment text) | shared (compartment text only) | `renderer.ts` (IBD) |
-| event-edge.svg | — | WONTFIX (not in shipped UI) | — |
-| event-occurrence-def.svg | — | WONTFIX (not in shipped UI) | — |
-| event-occurrence.svg | — | WONTFIX (not in shipped UI) | — |
-| exhibit-edge.svg | — | WONTFIX (not in shipped UI) | — |
-| exhibit-state-usage.svg | — | WONTFIX (not in shipped UI) | — |
-| exhibit-states-compartment.svg | general-view, interconnection-view (compartment text) | shared (compartment text only) | `renderer.ts` (IBD) |
-| exit-action.svg | — | WONTFIX (not in shipped UI) | — |
-| expose-r.svg | — | WONTFIX (not in shipped UI) | — |
-| expose-relationship.svg | — | WONTFIX (not in shipped UI) | — |
-| exposes-compartment.svg | general-view, interconnection-view (compartment text) | shared (compartment text only) | `renderer.ts` (IBD) |
-| extended-def.svg | — | WONTFIX (not in shipped UI) | — |
-| extended-usage.svg | general-view | shared | `node-notation.ts` usage chrome |
-| features-compartment.svg | general-view, interconnection-view (compartment text) | shared (compartment text only) | `renderer.ts` (IBD) |
-| filters-compartment.svg | general-view, interconnection-view (compartment text) | shared (compartment text only) | `renderer.ts` (IBD) |
-| flow-def.svg | — | WONTFIX (not in shipped UI) | — |
-| flow-node-l.svg | — | WONTFIX (not in shipped UI) | — |
-| flow-node-r.svg | — | WONTFIX (not in shipped UI) | — |
-| flow-node.svg | — | WONTFIX (not in shipped UI) | — |
-| flow-on-connection.svg | interconnection-view | shared | `renderer.ts` `applyEdgeMarker` (IBD) |
-| flow.svg | interconnection-view | shared | `renderer.ts` `applyEdgeMarker` flow branch |
-| flows-compartment.svg | general-view, interconnection-view (compartment text) | shared (compartment text only) | `renderer.ts` (IBD) |
-| for-loop-action-node.svg | — | WONTFIX (not in shipped UI) | — |
-| fork-node.svg | — | WONTFIX (not in shipped UI) | — |
-| frame-concern-node.svg | — | WONTFIX (not in shipped UI) | — |
-| frame-edge.svg | — | WONTFIX (not in shipped UI) | — |
-| frame-relationship.svg | — | WONTFIX (not in shipped UI) | — |
-| framed-view.svg | — | WONTFIX (not in shipped UI) | — |
-| frames-compartment.svg | general-view, interconnection-view (compartment text) | shared (compartment text only) | `renderer.ts` (IBD) |
-| general-compartment.svg | general-view, interconnection-view (compartment text) | shared (compartment text only) | `renderer.ts` (IBD) |
-| if-condition.svg | — | WONTFIX (not in shipped UI) | — |
-| if-else-action-node.svg | — | WONTFIX (not in shipped UI) | — |
-| import.svg | — | WONTFIX (not in shipped UI) | — |
-| imported-package-with-name-in-tab.svg | — | WONTFIX (not in shipped UI) | — |
-| imported-package-with-name-inside.svg | — | WONTFIX (not in shipped UI) | — |
-| include-use-case-relationship.svg | — | WONTFIX (not in shipped UI) | — |
-| include-use-case-usage.svg | — | WONTFIX (not in shipped UI) | — |
-| include-use-cases-compartment.svg | general-view, interconnection-view (compartment text) | shared (compartment text only) | `renderer.ts` (IBD) |
-| includes-compartment.svg | general-view, interconnection-view (compartment text) | shared (compartment text only) | `renderer.ts` (IBD) |
-| individuals-compartment.svg | general-view, interconnection-view (compartment text) | shared (compartment text only) | `renderer.ts` (IBD) |
-| interconnection-compartment.svg | interconnection-view | shared (compartment text only) | `renderer.ts` (IBD) |
-| interface-connection.svg | interconnection-view | shared | `renderer.ts` `applyEdgeMarker` interface branch |
-| interface-def.svg | — | WONTFIX (not in shipped UI) | — |
-| interface.svg | interconnection-view | shared | `renderer.ts` `applyEdgeMarker` interface branch |
-| interfaces-compartment.svg | general-view, interconnection-view (compartment text) | shared (compartment text only) | `renderer.ts` (IBD) |
-| item-def.svg | — | WONTFIX (not in shipped UI) | — |
-| item-ref.svg | — | WONTFIX (not in shipped UI) | — |
-| item.svg | — | WONTFIX (not in shipped UI) | — |
-| items-compartment.svg | general-view, interconnection-view (compartment text) | shared (compartment text only) | `renderer.ts` (IBD) |
-| iteration.svg | — | WONTFIX (not in shipped UI) | — |
-| join-node.svg | — | WONTFIX (not in shipped UI) | — |
-| lifeline.svg | — | WONTFIX (not in shipped UI) | — |
-| loop-body.svg | — | WONTFIX (not in shipped UI) | — |
-| members-compartment.svg | general-view, interconnection-view (compartment text) | shared (compartment text only) | `renderer.ts` (IBD) |
-| merge-node.svg | — | WONTFIX (not in shipped UI) | — |
-| message-node-l.svg | — | WONTFIX (not in shipped UI) | — |
-| message-node-r.svg | — | WONTFIX (not in shipped UI) | — |
-| message.svg | — | WONTFIX (not in shipped UI) | — |
-| metadata-compartment.svg | general-view, interconnection-view (compartment text) | shared (compartment text only) | `renderer.ts` (IBD) |
-| metadata-def.svg | — | WONTFIX (not in shipped UI) | — |
-| metadata-feature-annotation-node.svg | — | WONTFIX (not in shipped UI) | — |
-| n-ary-association-dot.svg | — | WONTFIX (not in shipped UI) | — |
-| n-ary-connection-dot.svg | — | WONTFIX (hub-and-spoke binary edges) | WONTFIX (hub-and-spoke binary edges) |
-| n-ary-def-connection-dot.svg | — | WONTFIX (not in shipped UI) | — |
-| n-ary-def-segment.svg | — | WONTFIX (not in shipped UI) | — |
-| n-ary-dependency-client-link.svg | general-view | WONTFIX (hub-and-spoke binary edges) | WONTFIX (hub-and-spoke binary edges) |
-| n-ary-dependency-supplier-link.svg | general-view | WONTFIX (hub-and-spoke binary edges) | WONTFIX (hub-and-spoke binary edges) |
-| n-ary-segment.svg | — | WONTFIX (not in shipped UI) | — |
-| noncomposite-feature-membership.svg | — | WONTFIX (not in shipped UI) | — |
-| objective-compartment.svg | general-view, interconnection-view (compartment text) | shared (compartment text only) | `renderer.ts` (IBD) |
-| occurrence-def.svg | — | WONTFIX (not in shipped UI) | — |
-| occurrence-ref.svg | — | WONTFIX (not in shipped UI) | — |
-| occurrence.svg | — | WONTFIX (not in shipped UI) | — |
-| occurrences-compartment.svg | general-view, interconnection-view (compartment text) | shared (compartment text only) | `renderer.ts` (IBD) |
-| owned-membership.svg | — | WONTFIX (not in shipped UI) | — |
-| package-with-name-in-tab.svg | — | WONTFIX (tab variant; inside-name only) | WONTFIX (tab variant; inside-name only) |
-| package-with-name-inside.svg | general-view | shared | `renderer.ts` `drawGeneralPackageContainers` |
-| packages-compartment.svg | general-view, interconnection-view (compartment text) | shared (compartment text only) | `renderer.ts` (IBD) |
-| param-b-1.svg | — | WONTFIX (not in shipped UI) | — |
-| param-b-2.svg | — | WONTFIX (not in shipped UI) | — |
-| param-l-1.svg | — | WONTFIX (not in shipped UI) | — |
-| param-l-2.svg | — | WONTFIX (not in shipped UI) | — |
-| param-r-1.svg | — | WONTFIX (not in shipped UI) | — |
-| param-r-2.svg | — | WONTFIX (not in shipped UI) | — |
-| param-t-1.svg | — | WONTFIX (not in shipped UI) | — |
-| param-t-2.svg | — | WONTFIX (not in shipped UI) | — |
-| parameters-compartment.svg | general-view, interconnection-view (compartment text) | shared (compartment text only) | `renderer.ts` (IBD) |
-| part-def.svg | general-view | shared | `node-notation.ts` `resolveNodeChrome` |
-| part-ref.svg | general-view, interconnection-view | shared | `node-notation.ts` `isReferenceKind` |
-| part.svg | general-view, interconnection-view | shared | `node-notation.ts`, `sysml-node-builder.ts` (general); `renderer.ts` `renderIbdNode` (IBD) |
-| parts-compartment.svg | general-view, interconnection-view (compartment text) | shared (compartment text only) | `renderer.ts` (IBD) |
-| pdh-1.svg | — | WONTFIX (not in shipped UI) | — |
-| pdh-2.svg | — | WONTFIX (not in shipped UI) | — |
-| pdh-3.svg | — | WONTFIX (not in shipped UI) | — |
-| pdv-1.svg | — | WONTFIX (not in shipped UI) | — |
-| pdv-2.svg | — | WONTFIX (not in shipped UI) | — |
-| pdv-3.svg | — | WONTFIX (not in shipped UI) | — |
-| perform-action-usage.svg | — | WONTFIX (not in shipped UI) | — |
-| perform-actions-compartment.svg | general-view, interconnection-view (compartment text) | shared (compartment text only) | `renderer.ts` (IBD) |
-| perform-edge.svg | — | WONTFIX (not in shipped UI) | — |
-| performed-by-compartment.svg | general-view, interconnection-view (compartment text) | shared (compartment text only) | `renderer.ts` (IBD) |
-| port-b-1.svg | interconnection-view | shared | `renderer.ts` (IBD) |
-| port-b-2.svg | interconnection-view | shared | `renderer.ts` (IBD) |
-| port-b-3.svg | interconnection-view | shared | `renderer.ts` (IBD) |
-| port-def.svg | general-view | shared | `sysml-node-builder.ts` compartments (general) |
-| port-l-1.svg | interconnection-view | shared | `renderer.ts` (IBD) |
-| port-l-2.svg | interconnection-view | shared | `renderer.ts` (IBD) |
-| port-l-3.svg | interconnection-view | shared | `renderer.ts` (IBD) |
-| port-r-1.svg | interconnection-view | shared | `renderer.ts` (IBD) |
-| port-r-2.svg | interconnection-view | shared | `renderer.ts` (IBD) |
-| port-r-3.svg | interconnection-view | shared | `renderer.ts` (IBD) |
-| port-t-1.svg | interconnection-view | shared | `renderer.ts` (IBD) |
-| port-t-2.svg | interconnection-view | shared | `renderer.ts` (IBD) |
-| port-t-3.svg | interconnection-view | shared | `renderer.ts` (IBD) |
-| port-usage.svg | interconnection-view | shared | `renderer.ts` `drawIbdPorts` |
-| portion-relationship.svg | general-view | shared | `renderer.ts` `applyEdgeMarker` (general) |
-| ports-compartment.svg | general-view, interconnection-view (compartment text) | shared (compartment text only) | `renderer.ts` (IBD) |
-| proxy-h-1.svg | — | WONTFIX (not in shipped UI) | — |
-| proxy-h-2.svg | — | WONTFIX (not in shipped UI) | — |
-| proxy-v-1.svg | — | WONTFIX (not in shipped UI) | — |
-| proxy-v-2.svg | — | WONTFIX (not in shipped UI) | — |
-| recursive-expose-r.svg | — | WONTFIX (not in shipped UI) | — |
-| recursive-import.svg | — | WONTFIX (not in shipped UI) | — |
-| redefinition.svg | general-view | shared | `renderer.ts` `applyEdgeMarker` (general) |
-| reference-diamond-black.svg | — | WONTFIX (not in shipped UI) | — |
-| reference-diamond-white.svg | — | WONTFIX (not in shipped UI) | — |
-| reference-subsetting.svg | — | WONTFIX (not in shipped UI) | — |
-| relationships-compartment.svg | general-view, interconnection-view (compartment text) | shared (compartment text only) | `renderer.ts` (IBD) |
-| rendering-compartment.svg | general-view, interconnection-view (compartment text) | shared (compartment text only) | `renderer.ts` (IBD) |
-| require-constraint-node.svg | — | WONTFIX (not in shipped UI) | — |
-| require-constraints-compartment.svg | general-view, interconnection-view (compartment text) | shared (compartment text only) | `renderer.ts` (IBD) |
-| require-edge.svg | — | WONTFIX (not in shipped UI) | — |
-| requirement-def.svg | general-view | shared | `node-notation.ts` / `sysml-node-builder.ts` |
-| requirement-ref.svg | — | WONTFIX (not in shipped UI) | — |
-| requirement.svg | general-view | shared | `node-notation.ts` / `sysml-node-builder.ts` |
-| requirements-compartment.svg | general-view, interconnection-view (compartment text) | shared (compartment text only) | `renderer.ts` (IBD) |
-| result-compartment.svg | general-view, interconnection-view (compartment text) | shared (compartment text only) | `renderer.ts` (IBD) |
-| satisfies-compartment.svg | general-view, interconnection-view (compartment text) | shared (compartment text only) | `renderer.ts` (IBD) |
-| satisfy-edge.svg | — | WONTFIX (not in shipped UI) | — |
-| satisfy-requirement-usage.svg | — | WONTFIX (not in shipped UI) | — |
-| satisfy-requirements-compartment.svg | general-view, interconnection-view (compartment text) | shared (compartment text only) | `renderer.ts` (IBD) |
-| send-action-node.svg | — | WONTFIX (not in shipped UI) | — |
-| sequence-compartment.svg | general-view, interconnection-view (compartment text) | legacy|shared (sequence-view) | `renderer.ts` (IBD) |
-| sflow-node-l.svg | — | WONTFIX (not in shipped UI) | — |
-| sflow-node-r.svg | — | WONTFIX (not in shipped UI) | — |
-| snapshot.svg | — | WONTFIX (not in shipped UI) | — |
-| snapshots-compartment.svg | general-view, interconnection-view (compartment text) | shared (compartment text only) | `renderer.ts` (IBD) |
-| sq-ev-occurrence-label.svg | — | legacy|shared (sequence-view) | `node-notation.ts` / `sysml-node-builder.ts` |
-| sq-message.svg | — | legacy|shared (sequence-view) | `node-notation.ts` / `sysml-node-builder.ts` |
-| sq-part.svg | — | legacy|shared (sequence-view) | `node-notation.ts` / `sysml-node-builder.ts` |
-| sq-port.svg | — | legacy|shared (sequence-view) | `node-notation.ts` / `sysml-node-builder.ts` |
-| sq-proxy-1.svg | — | legacy|shared (sequence-view) | `node-notation.ts` / `sysml-node-builder.ts` |
-| sq-proxy-2.svg | — | legacy|shared (sequence-view) | `node-notation.ts` / `sysml-node-builder.ts` |
-| sq-succession.svg | — | legacy|shared (sequence-view) | `node-notation.ts` / `sysml-node-builder.ts` |
-| st-succession-1.svg | — | WONTFIX (not in shipped UI) | — |
-| st-succession-2.svg | — | WONTFIX (not in shipped UI) | — |
-| stakeholder.svg | — | WONTFIX (not in shipped UI) | — |
-| stakeholders-compartment.svg | general-view, interconnection-view (compartment text) | shared (compartment text only) | `renderer.ts` (IBD) |
-| start-node.svg | — | WONTFIX (not in shipped UI) | — |
-| state-actions-compartment.svg | general-view, interconnection-view (compartment text) | shared (compartment text only) | `renderer.ts` (IBD) |
-| state-def.svg | general-view | shared | `node-notation.ts` / `sysml-node-builder.ts` |
-| state-do-action.svg | — | WONTFIX (not in shipped UI) | — |
-| state-entry-action.svg | — | WONTFIX (not in shipped UI) | — |
-| state-exit-action.svg | — | WONTFIX (not in shipped UI) | — |
-| state-ref.svg | — | WONTFIX (not in shipped UI) | — |
-| state-transition-compartment.svg | general-view, interconnection-view (compartment text) | shared (state-transition-view) | `renderer.ts` (IBD) |
-| state.svg | general-view, state-transition-view | shared | `views/state-transition.ts` |
-| states-compartment.svg | general-view, interconnection-view (compartment text) | shared (compartment text only) | `renderer.ts` (IBD) |
-| subclassification.svg | — | WONTFIX (not in shipped UI) | — |
-| subject-compartment.svg | general-view, interconnection-view (compartment text) | shared (compartment text only) | `renderer.ts` (IBD) |
-| subject-connector.svg | — | WONTFIX (not in shipped UI) | — |
-| subject-node.svg | — | WONTFIX (not in shipped UI) | — |
-| subject.svg | — | WONTFIX (not in shipped UI) | — |
-| subsetting.svg | — | WONTFIX (not in shipped UI) | — |
-| succession-flow.svg | — | WONTFIX (not in shipped UI) | — |
-| successions-compartment.svg | general-view, interconnection-view (compartment text) | shared (compartment text only) | `renderer.ts` (IBD) |
-| swimlane.svg | — | WONTFIX (not in shipped UI) | — |
-| terminate-node.svg | — | WONTFIX (not in shipped UI) | — |
-| textual-representation-node.svg | — | WONTFIX (not in shipped UI) | — |
-| then-body.svg | — | WONTFIX (not in shipped UI) | — |
-| timeslice.svg | — | WONTFIX (not in shipped UI) | — |
-| timeslices-compartment.svg | general-view, interconnection-view (compartment text) | shared (compartment text only) | `renderer.ts` (IBD) |
-| top-level-import.svg | — | WONTFIX (not in shipped UI) | — |
-| toplevel-expose-r.svg | — | WONTFIX (not in shipped UI) | — |
-| transition-1.svg | — | WONTFIX (not in shipped UI) | — |
-| transition-2.svg | — | WONTFIX (not in shipped UI) | — |
-| unowned-membership.svg | — | WONTFIX (not in shipped UI) | — |
-| until-condition.svg | — | WONTFIX (not in shipped UI) | — |
-| use-case-def.svg | — | WONTFIX (not in shipped UI) | — |
-| use-case.svg | — | WONTFIX (not in shipped UI) | — |
-| use-cases-compartment.svg | general-view, interconnection-view (compartment text) | shared (compartment text only) | `renderer.ts` (IBD) |
-| variant-elementusages-compartment.svg | general-view, interconnection-view (compartment text) | shared (compartment text only) | `renderer.ts` (IBD) |
-| variants-compartment.svg | general-view, interconnection-view (compartment text) | shared (compartment text only) | `renderer.ts` (IBD) |
-| verification-def.svg | — | WONTFIX (not in shipped UI) | — |
-| verification-methods-compartment.svg | general-view, interconnection-view (compartment text) | shared (compartment text only) | `renderer.ts` (IBD) |
-| verification.svg | — | WONTFIX (not in shipped UI) | — |
-| verifications-compartment.svg | general-view, interconnection-view (compartment text) | shared (compartment text only) | `renderer.ts` (IBD) |
-| verifies-compartment.svg | general-view, interconnection-view (compartment text) | shared (compartment text only) | `renderer.ts` (IBD) |
-| verify-relationship.svg | — | WONTFIX (not in shipped UI) | — |
-| verify-requirement-node.svg | — | WONTFIX (not in shipped UI) | — |
-| view-def.svg | — | WONTFIX (not in shipped UI) | — |
-| view-frame-info-compartment-bl.svg | general-view, interconnection-view (compartment text) | shared (compartment text only) | `renderer.ts` (IBD) |
-| view-frame-info-compartment-br.svg | general-view, interconnection-view (compartment text) | shared (compartment text only) | `renderer.ts` (IBD) |
-| view-frame-info-compartment-tr.svg | general-view, interconnection-view (compartment text) | shared (compartment text only) | `renderer.ts` (IBD) |
-| view.svg | — | WONTFIX (not in shipped UI) | — |
-| viewpoint-def.svg | — | WONTFIX (not in shipped UI) | — |
-| viewpoint.svg | — | WONTFIX (not in shipped UI) | — |
-| viewpoints-compartment.svg | general-view, interconnection-view (compartment text) | shared (compartment text only) | `renderer.ts` (IBD) |
-| views-compartment.svg | general-view, interconnection-view (compartment text) | shared (compartment text only) | `renderer.ts` (IBD) |
-| while-condition.svg | — | WONTFIX (not in shipped UI) | — |
-| while-loop-action-node.svg | — | WONTFIX (not in shipped UI) | — |
+Regenerate with an explicit checkout of the configured release:
 
-Regenerate:
-
-```powershell
-$env:SYSML_V2_RELEASE_DIR = 'C:\path\to\SysML-v2-Release'
-node scripts/generate-notation-inventory.mjs
+```sh
+SYSML_V2_RELEASE_DIR=/path/to/SysML-v2-Release node scripts/generate-notation-inventory.mjs
 ```

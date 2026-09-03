@@ -1,8 +1,8 @@
 use language_service::find_references;
 
 use super::support::{
-    any_on_line, any_on_line_at, count_on_line, multi_doc, paths, position_at,
-    position_for_within, single_doc,
+    any_on_line, any_on_line_at, count_on_line, multi_doc, paths, position_at, position_for_within,
+    single_doc,
 };
 
 #[test]
@@ -32,11 +32,7 @@ fn find_references_excludes_declaration_when_requested() {
         result_with.locations
     );
     assert!(
-        !any_on_line_at(
-            &result_without.locations,
-            def_pos.line,
-            def_pos.character
-        ),
+        !any_on_line_at(&result_without.locations, def_pos.line, def_pos.character),
         "exclude declaration should omit the definition site: {:?}",
         result_without.locations
     );
@@ -56,7 +52,7 @@ fn find_references_excludes_declaration_when_requested() {
 #[test]
 fn find_references_cross_file_includes_definition_and_use() {
     let content_def = "package P { part def Widget; }";
-    let content_use = "package Q { part w : Widget; }";
+    let content_use = "package Q { import P::*; part w : Widget; }";
     let ws = multi_doc(&[("def.sysml", content_def), ("use.sysml", content_use)]);
     let pos = super::support::position_for(content_use, "Widget");
     let result = find_references(&ws, "use.sysml", pos, true);

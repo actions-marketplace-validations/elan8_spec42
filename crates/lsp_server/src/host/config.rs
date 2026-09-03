@@ -3,34 +3,9 @@
 use std::path::PathBuf;
 use std::sync::Arc;
 use std::time::Instant;
-use tower_lsp::lsp_types::{Diagnostic, ServerCapabilities, Url};
-
-use crate::semantic::SemanticGraph;
-use crate::validation::{ValidationReport, ValidationRequest};
+use tower_lsp::lsp_types::ServerCapabilities;
 
 pub const KERNEL_INTERFACE_VERSION: u32 = 1;
-
-pub type CheckProvider = Arc<dyn SemanticCheckProvider>;
-pub type PipelineHook = Arc<dyn ValidationPipelineHook>;
-
-/// Host context passed to semantic check providers.
-#[derive(Debug, Clone, Copy, Default)]
-pub struct DiagnosticsHostContext;
-
-/// Provider of semantic/quality diagnostics. Implement this to add custom checks (e.g. naming rules, complexity).
-pub trait SemanticCheckProvider: Send + Sync {
-    /// Returns LSP diagnostics for the given document using the semantic graph.
-    fn compute_diagnostics(&self, graph: &SemanticGraph, uri: &Url) -> Vec<Diagnostic> {
-        self.compute_diagnostics_with_context(graph, uri, DiagnosticsHostContext)
-    }
-
-    fn compute_diagnostics_with_context(
-        &self,
-        graph: &SemanticGraph,
-        uri: &Url,
-        _ctx: DiagnosticsHostContext,
-    ) -> Vec<Diagnostic>;
-}
 
 /// Optional host hook for capability augmentation.
 ///
@@ -110,53 +85,52 @@ impl CapabilityMetadata {
 
 pub trait CapabilityProvider: Send + Sync {
     fn metadata(&self) -> CapabilityMetadata;
-    fn check_providers(&self) -> Vec<CheckProvider> {
-        Vec::new()
-    }
-    fn pipeline_hooks(&self) -> Vec<PipelineHook> {
-        Vec::new()
-    }
-}
-
-pub trait ValidationPipelineHook: Send + Sync {
-    fn before_validate(&self, _request: &ValidationRequest) -> Result<(), String> {
-        Ok(())
-    }
-    fn after_validate(&self, _report: &mut ValidationReport) -> Result<(), String> {
-        Ok(())
-    }
 }
 
 /// Server configuration built by the binary and passed to the core server.
 #[derive(Default, Clone)]
 pub struct Spec42Config {
+    /// The one set of services this host publishes through, shared with the engine that embeds
+    /// it so the two never hold separate memos or library strata.
+    pub services: sysml_query::Services,
+    /// The resolved library catalog used to enforce `.project.json` dependency admission for
+    /// each independently published editor project.
+    pub project_library_catalog: Option<Arc<library_catalog::LibraryCatalog>>,
     /// Optional library roots supplied by the host (e.g. materialized standard library), merged
     /// before client `libraryPaths` during LSP initialize / configuration.
     pub default_library_paths: Vec<PathBuf>,
-    /// Semantic/quality check providers run when publishing diagnostics after a successful parse.
-    pub check_providers: Vec<Arc<dyn SemanticCheckProvider>>,
+    /// Canonical standard-library roots, kept distinct from generic host/client libraries.
+    pub standard_library_paths: Vec<PathBuf>,
+    /// Host-owned status of the standard-library baseline, distinct from the roots themselves.
+    pub standard_library_availability: sysml_query::StandardLibraryAvailability,
     /// Optional capability augmenters for additive host composition.
     pub capability_augmenters: Vec<Arc<dyn CapabilityAugmenter>>,
     /// Optional custom-method declaration providers for additive host composition.
     pub custom_method_providers: Vec<Arc<dyn CustomMethodProvider>>,
     /// Optional custom JSON-RPC method handlers for plugin composition.
     pub custom_rpc_providers: Vec<Arc<dyn CustomRpcProvider>>,
-    /// Optional validation pipeline hooks for host-side behavior.
-    pub pipeline_hooks: Vec<PipelineHook>,
 }
 
 impl std::fmt::Debug for Spec42Config {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         f.debug_struct("Spec42Config")
+            .field("services", &"shared")
+            .field(
+                "project_library_catalog",
+                &self.project_library_catalog.is_some(),
+            )
             .field("default_library_paths", &self.default_library_paths)
-            .field("check_providers", &self.check_providers.len())
+            .field("standard_library_paths", &self.standard_library_paths)
+            .field(
+                "standard_library_availability",
+                &self.standard_library_availability,
+            )
             .field("capability_augmenters", &self.capability_augmenters.len())
             .field(
                 "custom_method_providers",
                 &self.custom_method_providers.len(),
             )
             .field("custom_rpc_providers", &self.custom_rpc_providers.len())
-            .field("pipeline_hooks", &self.pipeline_hooks.len())
             .finish()
     }
 }
@@ -166,9 +140,17 @@ impl Spec42Config {
         Self::default()
     }
 
-    /// Add a semantic check provider.
-    pub fn with_check_provider(mut self, p: Arc<dyn SemanticCheckProvider>) -> Self {
-        self.check_providers.push(p);
+    pub fn with_services(mut self, services: sysml_query::Services) -> Self {
+        self.services = services;
+        self
+    }
+
+    pub fn with_project_library_catalog(
+        mut self,
+        catalog: library_catalog::LibraryCatalog,
+    ) -> Self {
+        self.standard_library_availability = catalog.stdlib.availability;
+        self.project_library_catalog = Some(Arc::new(catalog));
         self
     }
 
@@ -190,15 +172,26 @@ impl Spec42Config {
         self
     }
 
-    /// Add a validation pipeline hook.
-    pub fn with_pipeline_hook(mut self, hook: PipelineHook) -> Self {
-        self.pipeline_hooks.push(hook);
-        self
-    }
-
     /// Host-provided library roots (prepended when merging with client `libraryPaths`).
     pub fn with_default_library_paths(mut self, paths: Vec<PathBuf>) -> Self {
         self.default_library_paths = paths;
+        self
+    }
+
+    pub fn with_standard_library_paths(mut self, paths: Vec<PathBuf>) -> Self {
+        if !paths.is_empty() {
+            self.standard_library_availability =
+                sysml_query::StandardLibraryAvailability::Available;
+        }
+        self.standard_library_paths = paths;
+        self
+    }
+
+    pub fn with_standard_library_availability(
+        mut self,
+        availability: sysml_query::StandardLibraryAvailability,
+    ) -> Self {
+        self.standard_library_availability = availability;
         self
     }
 

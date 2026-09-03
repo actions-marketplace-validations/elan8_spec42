@@ -1,19 +1,34 @@
 ﻿[workspace]
 resolver = "2"
 members = [
-  "crates/diagram",
+  "crates/generator_api",
+  "crates/generator_conformance",
+  "crates/generator_host",
+  "crates/generator_protocol",
+  "crates/generator_sdk",
   "crates/language_service",
+  "crates/library_catalog",
   "crates/lsp_server",
   "crates/kpar",
   "crates/server",
-  "crates/sysml_model",
+  "crates/source_identity",
+  "crates/sysml_contract",
+  "crates/sysml_source",
+  "crates/sysml_diagnostics",
+  "crates/sysml_query",
+  "crates/sysml_resolution",
   "crates/workspace",
   "crates/sysml_tokens",
-  "crates/workspace_session",
+  "crates/session_actor",
+  "tools/snapshot_tool",
+  "tools/constraint_manifest",
+  "tools/query_bench",
+  "tools/resolution_benchmark",
+  "tools/semantic_benchmark",
 ]
 
 [workspace.package]
-version = "0.35.0"
+version = "0.50.0"
 edition = "2021"
 authors = ["Elan8"]
 license = "MIT"
@@ -25,10 +40,21 @@ debug = true
 [workspace.dependencies]
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
+postcard = { version = "1", features = ["alloc"] }
+postcard-schema = { version = "0.2", default-features = false, features = ["derive", "alloc"] }
 thiserror = "2"
 clap = { version = "4", features = ["derive"] }
-rmcp = { version = "0.9", features = ["server"] }
-schemars = { version = "1.1", features = ["derive"] }
 petgraph = { version = "0.8", features = ["serde-1"] }
-sysml-v2-parser = { version = "0.32.0", features = ["serde"] }
+sha2 = "0.10"
+blake3 = "1"
+sysml-v2-parser = { git = "https://github.com/elan8/sysml-v2-parser.git", rev = "f04d51ee79e63989684fca64e7769d700ae8f5c4", features = ["serde"] }
 ts-rs = { version = "11", features = ["serde-compat", "serde-json-impl"] }
+zstd = "0.13"
+
+# The resolver and the parser do real work in every integration test; unoptimised they make
+# a cold standard-library build 3-5x slower. opt-level 1 costs ~3s on an incremental rebuild.
+[profile.dev.package.sysml_resolution]
+opt-level = 1
+
+[profile.dev.package.sysml-v2-parser]
+opt-level = 1
