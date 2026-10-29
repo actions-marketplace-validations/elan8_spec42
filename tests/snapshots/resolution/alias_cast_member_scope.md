@@ -17,10 +17,10 @@ package Demo {
     }
     alias FrameAlias for Frame;
     attribute def Holder {
-        attribute frame : FrameAlias;
+        attribute 'frame' : FrameAlias;
     }
     attribute def Derived :> Holder {
-        attribute :>> frame {
+        attribute :>> 'frame' {
             attribute :>> mRefs;
         }
     }
@@ -54,7 +54,7 @@ package Demo {
 # SMG
 ~~~sexpr
 (semantic-model
-  (publication (phase resolved) (completeness complete) (has-evaluation true) (source-digest "blake3:a80e7ca05c57e722f03a0cb9ae70f7d42e8020e91224b9ca8d8b2af282dec4f5"))
+  (publication (phase resolved) (completeness complete) (has-evaluation true) (source-digest "blake3:080f794d37efed254f0d50cd509fa149c8e90f5d58a58e83755d28eed5eae198"))
   (declarations
     (declaration (id (node (document "memory://snapshot/alias_cast_member_scope.md") (qualified-name "Demo"))) (kind package) (membership (kind owning) (visibility default)))
     (declaration (id (node (document "memory://snapshot/alias_cast_member_scope.md") (qualified-name "Demo::Derived"))) (kind attribute-def) (membership (kind owning) (visibility default)) (authored (membership (kind owning) (visibility default)) (relationships (specialization (reference "Holder")))))
@@ -65,7 +65,9 @@ package Demo {
     (declaration (id (node (document "memory://snapshot/alias_cast_member_scope.md") (qualified-name "Demo::FrameAlias"))) (kind alias) (membership (kind alias) (visibility default)) (authored (membership (kind alias) (visibility default)) (relationships (aliasBinding (reference "Frame")))))
     (declaration (id (node (document "memory://snapshot/alias_cast_member_scope.md") (qualified-name "Demo::Holder"))) (kind attribute-def) (membership (kind owning) (visibility default)))
     (declaration (id (node (document "memory://snapshot/alias_cast_member_scope.md") (qualified-name "Demo::Holder::frame"))) (kind attribute) (membership (kind feature) (visibility default)) (authored (membership (kind feature) (visibility default)) (relationships (featureTyping (reference "FrameAlias")))))
-    (declaration (id (node (document "memory://snapshot/alias_cast_member_scope.md") (qualified-name "Demo::castScope"))) (kind assert-constraint) (membership (kind feature) (visibility default)) (authored (membership (kind feature) (visibility default)) (relationships (expressionOperand (reference "raw")) (memberAccessOperand (reference "raw::mRefs")) (typeCheckTarget (reference "FrameAlias")))))
+    (declaration (id (node (document "memory://snapshot/alias_cast_member_scope.md") (qualified-name "Demo::castScope"))) (kind assert-constraint) (membership (kind feature) (visibility default)))
+    (declaration (id (node (document "memory://snapshot/alias_cast_member_scope.md") (path (named (kind package) (name "Demo")) (named (kind assert-constraint) (name "castScope")) (anonymous (kind kerml-expression) (ordinal 0))))) (kind kerml-expression) (membership (kind feature) (visibility default) (role result-expression)) (facts (expression-result (node (document "memory://snapshot/alias_cast_member_scope.md") (path (named (kind package) (name "Demo")) (named (kind assert-constraint) (name "castScope")) (anonymous (kind kerml-expression) (ordinal 0)) (anonymous (kind kerml-feature) (ordinal 0)))))) (authored (membership (kind feature) (visibility default) (role result-expression)) (relationships (expressionOperand (reference "raw")) (memberAccessOperand (reference "raw::mRefs")) (typeCheckTarget (reference "FrameAlias")))))
+    (declaration (id (node (document "memory://snapshot/alias_cast_member_scope.md") (path (named (kind package) (name "Demo")) (named (kind assert-constraint) (name "castScope")) (anonymous (kind kerml-expression) (ordinal 0)) (anonymous (kind kerml-feature) (ordinal 0))))) (kind kerml-feature) (membership (kind feature) (visibility default)) (facts (direction out)))
     (declaration (id (node (document "memory://snapshot/alias_cast_member_scope.md") (qualified-name "Demo::raw"))) (kind attribute) (membership (kind feature) (visibility default)))
   )
   (references
@@ -83,35 +85,37 @@ package Demo {
       (outcome (status resolved) (target (node (document "memory://snapshot/alias_cast_member_scope.md") (qualified-name "Demo::Frame")))))
     (reference (id (source (node (document "memory://snapshot/alias_cast_member_scope.md") (qualified-name "Demo::Holder::frame"))) (kind featureTyping) (ordinal 0))
       (authored-target "FrameAlias")
-      (outcome (status resolved) (target (node (document "memory://snapshot/alias_cast_member_scope.md") (qualified-name "Demo::FrameAlias")))))
-    (reference (id (source (node (document "memory://snapshot/alias_cast_member_scope.md") (qualified-name "Demo::castScope"))) (kind expressionOperand) (ordinal 0))
+      (outcome (status resolved) (target (node (document "memory://snapshot/alias_cast_member_scope.md") (qualified-name "Demo::Frame")))))
+    (reference (id (source (node (document "memory://snapshot/alias_cast_member_scope.md") (path (named (kind package) (name "Demo")) (named (kind assert-constraint) (name "castScope")) (anonymous (kind kerml-expression) (ordinal 0))))) (kind expressionOperand) (ordinal 0))
       (authored-target "raw")
       (outcome (status resolved) (target (node (document "memory://snapshot/alias_cast_member_scope.md") (qualified-name "Demo::raw")))))
-    (reference (id (source (node (document "memory://snapshot/alias_cast_member_scope.md") (qualified-name "Demo::castScope"))) (kind memberAccessOperand) (ordinal 0))
+    (reference (id (source (node (document "memory://snapshot/alias_cast_member_scope.md") (path (named (kind package) (name "Demo")) (named (kind assert-constraint) (name "castScope")) (anonymous (kind kerml-expression) (ordinal 0))))) (kind memberAccessOperand) (ordinal 0))
       (authored-target "raw::mRefs")
       (outcome (status resolved) (target (node (document "memory://snapshot/alias_cast_member_scope.md") (qualified-name "Demo::Frame::mRefs")))))
-    (reference (id (source (node (document "memory://snapshot/alias_cast_member_scope.md") (qualified-name "Demo::castScope"))) (kind typeCheckTarget) (ordinal 0))
+    (reference (id (source (node (document "memory://snapshot/alias_cast_member_scope.md") (path (named (kind package) (name "Demo")) (named (kind assert-constraint) (name "castScope")) (anonymous (kind kerml-expression) (ordinal 0))))) (kind typeCheckTarget) (ordinal 0))
       (authored-target "FrameAlias")
-      (outcome (status resolved) (target (node (document "memory://snapshot/alias_cast_member_scope.md") (qualified-name "Demo::FrameAlias")))))
+      (outcome (status resolved) (target (node (document "memory://snapshot/alias_cast_member_scope.md") (qualified-name "Demo::Frame")))))
   )
   (relationships
     (relationship (kind specialization) (source (node (document "memory://snapshot/alias_cast_member_scope.md") (qualified-name "Demo::Derived"))) (target (node (document "memory://snapshot/alias_cast_member_scope.md") (qualified-name "Demo::Holder"))) (provenance authored) (authored-reference (source (node (document "memory://snapshot/alias_cast_member_scope.md") (qualified-name "Demo::Derived"))) (kind specialization) (ordinal 0)))
     (relationship (kind redefinition) (source (node (document "memory://snapshot/alias_cast_member_scope.md") (path (named (kind package) (name "Demo")) (named (kind attribute-def) (name "Derived")) (anonymous (kind attribute) (ordinal 0))))) (target (node (document "memory://snapshot/alias_cast_member_scope.md") (qualified-name "Demo::Holder::frame"))) (provenance authored) (authored-reference (source (node (document "memory://snapshot/alias_cast_member_scope.md") (path (named (kind package) (name "Demo")) (named (kind attribute-def) (name "Derived")) (anonymous (kind attribute) (ordinal 0))))) (kind redefinition) (ordinal 0)))
     (relationship (kind redefinition) (source (node (document "memory://snapshot/alias_cast_member_scope.md") (path (named (kind package) (name "Demo")) (named (kind attribute-def) (name "Derived")) (anonymous (kind attribute) (ordinal 0)) (anonymous (kind attribute) (ordinal 0))))) (target (node (document "memory://snapshot/alias_cast_member_scope.md") (qualified-name "Demo::Frame::mRefs"))) (provenance authored) (authored-reference (source (node (document "memory://snapshot/alias_cast_member_scope.md") (path (named (kind package) (name "Demo")) (named (kind attribute-def) (name "Derived")) (anonymous (kind attribute) (ordinal 0)) (anonymous (kind attribute) (ordinal 0))))) (kind redefinition) (ordinal 0)))
     (relationship (kind aliasBinding) (source (node (document "memory://snapshot/alias_cast_member_scope.md") (qualified-name "Demo::FrameAlias"))) (target (node (document "memory://snapshot/alias_cast_member_scope.md") (qualified-name "Demo::Frame"))) (provenance authored) (authored-reference (source (node (document "memory://snapshot/alias_cast_member_scope.md") (qualified-name "Demo::FrameAlias"))) (kind aliasBinding) (ordinal 0)))
-    (relationship (kind typing) (source (node (document "memory://snapshot/alias_cast_member_scope.md") (qualified-name "Demo::Holder::frame"))) (target (node (document "memory://snapshot/alias_cast_member_scope.md") (qualified-name "Demo::FrameAlias"))) (provenance authored) (authored-reference (source (node (document "memory://snapshot/alias_cast_member_scope.md") (qualified-name "Demo::Holder::frame"))) (kind featureTyping) (ordinal 0)))
-    (relationship (kind expressionOperand) (source (node (document "memory://snapshot/alias_cast_member_scope.md") (qualified-name "Demo::castScope"))) (target (node (document "memory://snapshot/alias_cast_member_scope.md") (qualified-name "Demo::raw"))) (provenance authored) (authored-reference (source (node (document "memory://snapshot/alias_cast_member_scope.md") (qualified-name "Demo::castScope"))) (kind expressionOperand) (ordinal 0)))
-    (relationship (kind memberAccessOperand) (source (node (document "memory://snapshot/alias_cast_member_scope.md") (qualified-name "Demo::castScope"))) (target (node (document "memory://snapshot/alias_cast_member_scope.md") (qualified-name "Demo::Frame::mRefs"))) (provenance authored) (authored-reference (source (node (document "memory://snapshot/alias_cast_member_scope.md") (qualified-name "Demo::castScope"))) (kind memberAccessOperand) (ordinal 0)))
-    (relationship (kind typeCheckTarget) (source (node (document "memory://snapshot/alias_cast_member_scope.md") (qualified-name "Demo::castScope"))) (target (node (document "memory://snapshot/alias_cast_member_scope.md") (qualified-name "Demo::FrameAlias"))) (provenance authored) (authored-reference (source (node (document "memory://snapshot/alias_cast_member_scope.md") (qualified-name "Demo::castScope"))) (kind typeCheckTarget) (ordinal 0)))
+    (relationship (kind typing) (source (node (document "memory://snapshot/alias_cast_member_scope.md") (qualified-name "Demo::Holder::frame"))) (target (node (document "memory://snapshot/alias_cast_member_scope.md") (qualified-name "Demo::Frame"))) (provenance authored) (authored-reference (source (node (document "memory://snapshot/alias_cast_member_scope.md") (qualified-name "Demo::Holder::frame"))) (kind featureTyping) (ordinal 0)))
+    (relationship (kind expressionOperand) (source (node (document "memory://snapshot/alias_cast_member_scope.md") (path (named (kind package) (name "Demo")) (named (kind assert-constraint) (name "castScope")) (anonymous (kind kerml-expression) (ordinal 0))))) (target (node (document "memory://snapshot/alias_cast_member_scope.md") (qualified-name "Demo::raw"))) (provenance authored) (authored-reference (source (node (document "memory://snapshot/alias_cast_member_scope.md") (path (named (kind package) (name "Demo")) (named (kind assert-constraint) (name "castScope")) (anonymous (kind kerml-expression) (ordinal 0))))) (kind expressionOperand) (ordinal 0)))
+    (relationship (kind memberAccessOperand) (source (node (document "memory://snapshot/alias_cast_member_scope.md") (path (named (kind package) (name "Demo")) (named (kind assert-constraint) (name "castScope")) (anonymous (kind kerml-expression) (ordinal 0))))) (target (node (document "memory://snapshot/alias_cast_member_scope.md") (qualified-name "Demo::Frame::mRefs"))) (provenance authored) (authored-reference (source (node (document "memory://snapshot/alias_cast_member_scope.md") (path (named (kind package) (name "Demo")) (named (kind assert-constraint) (name "castScope")) (anonymous (kind kerml-expression) (ordinal 0))))) (kind memberAccessOperand) (ordinal 0)))
+    (relationship (kind typeCheckTarget) (source (node (document "memory://snapshot/alias_cast_member_scope.md") (path (named (kind package) (name "Demo")) (named (kind assert-constraint) (name "castScope")) (anonymous (kind kerml-expression) (ordinal 0))))) (target (node (document "memory://snapshot/alias_cast_member_scope.md") (qualified-name "Demo::Frame"))) (provenance authored) (authored-reference (source (node (document "memory://snapshot/alias_cast_member_scope.md") (path (named (kind package) (name "Demo")) (named (kind assert-constraint) (name "castScope")) (anonymous (kind kerml-expression) (ordinal 0))))) (kind typeCheckTarget) (ordinal 0)))
     (relationship (kind typeFeaturing) (source (node (document "memory://snapshot/alias_cast_member_scope.md") (path (named (kind package) (name "Demo")) (named (kind attribute-def) (name "Derived")) (anonymous (kind attribute) (ordinal 0))))) (target (node (document "memory://snapshot/alias_cast_member_scope.md") (qualified-name "Demo::Derived"))) (provenance implied))
     (relationship (kind typeFeaturing) (source (node (document "memory://snapshot/alias_cast_member_scope.md") (path (named (kind package) (name "Demo")) (named (kind attribute-def) (name "Derived")) (anonymous (kind attribute) (ordinal 0)) (anonymous (kind attribute) (ordinal 0))))) (target (node (document "memory://snapshot/alias_cast_member_scope.md") (path (named (kind package) (name "Demo")) (named (kind attribute-def) (name "Derived")) (anonymous (kind attribute) (ordinal 0))))) (provenance implied))
     (relationship (kind typeFeaturing) (source (node (document "memory://snapshot/alias_cast_member_scope.md") (qualified-name "Demo::Frame::mRefs"))) (target (node (document "memory://snapshot/alias_cast_member_scope.md") (qualified-name "Demo::Frame"))) (provenance implied))
     (relationship (kind typing) (source (node (document "memory://snapshot/alias_cast_member_scope.md") (qualified-name "Demo::Holder::frame"))) (target (node (document "memory://snapshot/alias_cast_member_scope.md") (qualified-name "Demo::Frame"))) (provenance implied))
     (relationship (kind typeFeaturing) (source (node (document "memory://snapshot/alias_cast_member_scope.md") (qualified-name "Demo::Holder::frame"))) (target (node (document "memory://snapshot/alias_cast_member_scope.md") (qualified-name "Demo::Holder"))) (provenance implied))
-    (relationship (kind typeCheckTarget) (source (node (document "memory://snapshot/alias_cast_member_scope.md") (qualified-name "Demo::castScope"))) (target (node (document "memory://snapshot/alias_cast_member_scope.md") (qualified-name "Demo::Frame"))) (provenance implied))
+    (relationship (kind typeCheckTarget) (source (node (document "memory://snapshot/alias_cast_member_scope.md") (path (named (kind package) (name "Demo")) (named (kind assert-constraint) (name "castScope")) (anonymous (kind kerml-expression) (ordinal 0))))) (target (node (document "memory://snapshot/alias_cast_member_scope.md") (qualified-name "Demo::Frame"))) (provenance implied))
+    (relationship (kind typeFeaturing) (source (node (document "memory://snapshot/alias_cast_member_scope.md") (path (named (kind package) (name "Demo")) (named (kind assert-constraint) (name "castScope")) (anonymous (kind kerml-expression) (ordinal 0))))) (target (node (document "memory://snapshot/alias_cast_member_scope.md") (qualified-name "Demo::castScope"))) (provenance implied))
+    (relationship (kind typeFeaturing) (source (node (document "memory://snapshot/alias_cast_member_scope.md") (path (named (kind package) (name "Demo")) (named (kind assert-constraint) (name "castScope")) (anonymous (kind kerml-expression) (ordinal 0)) (anonymous (kind kerml-feature) (ordinal 0))))) (target (node (document "memory://snapshot/alias_cast_member_scope.md") (path (named (kind package) (name "Demo")) (named (kind assert-constraint) (name "castScope")) (anonymous (kind kerml-expression) (ordinal 0))))) (provenance implied))
   )
   (evaluation
-    (evaluated (declaration (node (document "memory://snapshot/alias_cast_member_scope.md") (qualified-name "Demo::castScope"))) (state unsupported))
+    (evaluated (declaration (node (document "memory://snapshot/alias_cast_member_scope.md") (path (named (kind package) (name "Demo")) (named (kind assert-constraint) (name "castScope")) (anonymous (kind kerml-expression) (ordinal 0))))) (state non-constant))
   )
 )
 ~~~
@@ -124,9 +128,7 @@ package Demo {
     (declaration (id (node (document "memory://snapshot/alias_cast_member_scope.md") (path (named (kind package) (name "Demo")) (named (kind attribute-def) (name "Derived")) (anonymous (kind attribute) (ordinal 0)))))
       (featured-by (node (document "memory://snapshot/alias_cast_member_scope.md") (qualified-name "Demo::Derived")))
       (effective-type (node (document "memory://snapshot/alias_cast_member_scope.md") (qualified-name "Demo::Frame")) (source inherited) (from (node (document "memory://snapshot/alias_cast_member_scope.md") (qualified-name "Demo::Holder::frame"))))
-      (effective-type (node (document "memory://snapshot/alias_cast_member_scope.md") (qualified-name "Demo::FrameAlias")) (source inherited) (from (node (document "memory://snapshot/alias_cast_member_scope.md") (qualified-name "Demo::Holder::frame"))))
       (supertype (node (document "memory://snapshot/alias_cast_member_scope.md") (qualified-name "Demo::Frame")) (scopes any))
-      (supertype (node (document "memory://snapshot/alias_cast_member_scope.md") (qualified-name "Demo::FrameAlias")) (scopes any))
       (supertype (node (document "memory://snapshot/alias_cast_member_scope.md") (qualified-name "Demo::Holder::frame")) (scopes any feature))
     )
     (declaration (id (node (document "memory://snapshot/alias_cast_member_scope.md") (path (named (kind package) (name "Demo")) (named (kind attribute-def) (name "Derived")) (anonymous (kind attribute) (ordinal 0)) (anonymous (kind attribute) (ordinal 0)))))
@@ -140,22 +142,29 @@ package Demo {
       (featured-by (node (document "memory://snapshot/alias_cast_member_scope.md") (qualified-name "Demo::Frame")))
       (subtype (node (document "memory://snapshot/alias_cast_member_scope.md") (path (named (kind package) (name "Demo")) (named (kind attribute-def) (name "Derived")) (anonymous (kind attribute) (ordinal 0)) (anonymous (kind attribute) (ordinal 0)))) (scopes any feature))
     )
-    (declaration (id (node (document "memory://snapshot/alias_cast_member_scope.md") (qualified-name "Demo::FrameAlias")))
-      (subtype (node (document "memory://snapshot/alias_cast_member_scope.md") (qualified-name "Demo::Holder::frame")) (scopes any))
-    )
     (declaration (id (node (document "memory://snapshot/alias_cast_member_scope.md") (qualified-name "Demo::Holder")))
       (subtype (node (document "memory://snapshot/alias_cast_member_scope.md") (qualified-name "Demo::Derived")) (scopes any subclassification))
     )
     (declaration (id (node (document "memory://snapshot/alias_cast_member_scope.md") (qualified-name "Demo::Holder::frame")))
       (featured-by (node (document "memory://snapshot/alias_cast_member_scope.md") (qualified-name "Demo::Holder")))
+      (type (node (document "memory://snapshot/alias_cast_member_scope.md") (qualified-name "Demo::Frame")) (provenance authored))
       (type (node (document "memory://snapshot/alias_cast_member_scope.md") (qualified-name "Demo::Frame")) (provenance implied))
-      (type (node (document "memory://snapshot/alias_cast_member_scope.md") (qualified-name "Demo::FrameAlias")) (provenance authored))
       (effective-type (node (document "memory://snapshot/alias_cast_member_scope.md") (qualified-name "Demo::Frame")) (source direct))
-      (effective-type (node (document "memory://snapshot/alias_cast_member_scope.md") (qualified-name "Demo::FrameAlias")) (source direct))
       (supertype (node (document "memory://snapshot/alias_cast_member_scope.md") (qualified-name "Demo::Frame")) (scopes any))
-      (supertype (node (document "memory://snapshot/alias_cast_member_scope.md") (qualified-name "Demo::FrameAlias")) (scopes any))
       (subtype (node (document "memory://snapshot/alias_cast_member_scope.md") (path (named (kind package) (name "Demo")) (named (kind attribute-def) (name "Derived")) (anonymous (kind attribute) (ordinal 0)))) (scopes any feature))
     )
+    (declaration (id (node (document "memory://snapshot/alias_cast_member_scope.md") (path (named (kind package) (name "Demo")) (named (kind assert-constraint) (name "castScope")) (anonymous (kind kerml-expression) (ordinal 0)))))
+      (featured-by (node (document "memory://snapshot/alias_cast_member_scope.md") (qualified-name "Demo::castScope")))
+    )
+    (declaration (id (node (document "memory://snapshot/alias_cast_member_scope.md") (path (named (kind package) (name "Demo")) (named (kind assert-constraint) (name "castScope")) (anonymous (kind kerml-expression) (ordinal 0)) (anonymous (kind kerml-feature) (ordinal 0)))))
+      (featured-by (node (document "memory://snapshot/alias_cast_member_scope.md") (path (named (kind package) (name "Demo")) (named (kind assert-constraint) (name "castScope")) (anonymous (kind kerml-expression) (ordinal 0)))))
+    )
+)
+~~~
+# EXPRESSIONS
+~~~sexpr
+(expressions
+  (declaration (id (node (document "memory://snapshot/alias_cast_member_scope.md") (path (named (kind package) (name "Demo")) (named (kind assert-constraint) (name "castScope")) (anonymous (kind kerml-expression) (ordinal 0))))) (outcome resolved) (operator "==" (feature-reference "raw::mRefs" (target (node (document "memory://snapshot/alias_cast_member_scope.md") (qualified-name "Demo::Frame::mRefs")))) (feature-reference "raw" (target (node (document "memory://snapshot/alias_cast_member_scope.md") (qualified-name "Demo::raw"))))))
 )
 ~~~
 # NAVIGATION
@@ -166,7 +175,7 @@ package Demo {
       (outcome (status resolved) (target (node (document "memory://snapshot/alias_cast_member_scope.md") (qualified-name "Demo::Holder")))))
     )
   )
-  (query (document "memory://snapshot/alias_cast_member_scope.md") (range (start 9 22) (end 9 27)) (probe (position 9 22))
+  (query (document "memory://snapshot/alias_cast_member_scope.md") (range (start 9 22) (end 9 29)) (probe (position 9 22))
     (reference (id (source (node (document "memory://snapshot/alias_cast_member_scope.md") (path (named (kind package) (name "Demo")) (named (kind attribute-def) (name "Derived")) (anonymous (kind attribute) (ordinal 0))))) (kind redefinition) (ordinal 0) (authored-target "frame")
       (outcome (status resolved) (target (node (document "memory://snapshot/alias_cast_member_scope.md") (qualified-name "Demo::Holder::frame")))))
     )
@@ -181,24 +190,24 @@ package Demo {
       (outcome (status resolved) (target (node (document "memory://snapshot/alias_cast_member_scope.md") (qualified-name "Demo::Frame")))))
     )
   )
-  (query (document "memory://snapshot/alias_cast_member_scope.md") (range (start 6 26) (end 6 36)) (probe (position 6 26))
+  (query (document "memory://snapshot/alias_cast_member_scope.md") (range (start 6 28) (end 6 38)) (probe (position 6 28))
     (reference (id (source (node (document "memory://snapshot/alias_cast_member_scope.md") (qualified-name "Demo::Holder::frame"))) (kind featureTyping) (ordinal 0) (authored-target "FrameAlias")
-      (outcome (status resolved) (target (node (document "memory://snapshot/alias_cast_member_scope.md") (qualified-name "Demo::FrameAlias")))))
+      (outcome (status resolved) (target (node (document "memory://snapshot/alias_cast_member_scope.md") (qualified-name "Demo::Frame")))))
     )
   )
   (query (document "memory://snapshot/alias_cast_member_scope.md") (range (start 14 63) (end 14 66)) (probe (position 14 63))
-    (reference (id (source (node (document "memory://snapshot/alias_cast_member_scope.md") (qualified-name "Demo::castScope"))) (kind expressionOperand) (ordinal 0) (authored-target "raw")
+    (reference (id (source (node (document "memory://snapshot/alias_cast_member_scope.md") (path (named (kind package) (name "Demo")) (named (kind assert-constraint) (name "castScope")) (anonymous (kind kerml-expression) (ordinal 0))))) (kind expressionOperand) (ordinal 0) (authored-target "raw")
       (outcome (status resolved) (target (node (document "memory://snapshot/alias_cast_member_scope.md") (qualified-name "Demo::raw")))))
     )
   )
   (query (document "memory://snapshot/alias_cast_member_scope.md") (range (start 14 34) (end 14 59)) (probe (position 14 34))
-    (reference (id (source (node (document "memory://snapshot/alias_cast_member_scope.md") (qualified-name "Demo::castScope"))) (kind memberAccessOperand) (ordinal 0) (authored-target "raw::mRefs")
+    (reference (id (source (node (document "memory://snapshot/alias_cast_member_scope.md") (path (named (kind package) (name "Demo")) (named (kind assert-constraint) (name "castScope")) (anonymous (kind kerml-expression) (ordinal 0))))) (kind memberAccessOperand) (ordinal 0) (authored-target "raw::mRefs")
       (outcome (status resolved) (target (node (document "memory://snapshot/alias_cast_member_scope.md") (qualified-name "Demo::Frame::mRefs")))))
     )
   )
   (query (document "memory://snapshot/alias_cast_member_scope.md") (range (start 14 42) (end 14 52)) (probe (position 14 42))
-    (reference (id (source (node (document "memory://snapshot/alias_cast_member_scope.md") (qualified-name "Demo::castScope"))) (kind typeCheckTarget) (ordinal 0) (authored-target "FrameAlias")
-      (outcome (status resolved) (target (node (document "memory://snapshot/alias_cast_member_scope.md") (qualified-name "Demo::FrameAlias")))))
+    (reference (id (source (node (document "memory://snapshot/alias_cast_member_scope.md") (path (named (kind package) (name "Demo")) (named (kind assert-constraint) (name "castScope")) (anonymous (kind kerml-expression) (ordinal 0))))) (kind typeCheckTarget) (ordinal 0) (authored-target "FrameAlias")
+      (outcome (status resolved) (target (node (document "memory://snapshot/alias_cast_member_scope.md") (qualified-name "Demo::Frame")))))
     )
   )
 )

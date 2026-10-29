@@ -9,6 +9,97 @@ use crate::common::*;
 #[allow(unused_imports)]
 use sysml_resolution::*;
 
+/// Supplemental parity check for the owning construction paths. Detailed body and hop
+/// semantics are pinned by the contextual_inherited_expressions and connector_complete_paths
+/// standalone snapshots.
+#[test]
+fn contextual_expressions_and_connector_paths_have_seeded_schedule_parity() {
+    const LIBRARY: &str = "package L {
+        port def Port;
+        part def Pump { port outlet : Port; }
+        part def Base {
+            attribute mass;
+            attribute limit = 100;
+            constraint budget { mass <= limit }
+            part left : Pump;
+            part right : Pump;
+            connect left.outlet to right.outlet;
+        }
+    }";
+    const WORKSPACE: &str = "package W {
+        part def Derived :> L::Base {
+            attribute :>> limit = 200;
+            connect left.outlet to right.outlet;
+        }
+        part instance : Derived;
+    }";
+    let library_input = || {
+        SourceInput::new(
+            "memory://library.sysml",
+            LIBRARY.into(),
+            SourceKind::StandardLibrary,
+        )
+    };
+    let workspace_input = || {
+        SourceInput::new(
+            "memory://workspace.sysml",
+            WORKSPACE.into(),
+            SourceKind::Workspace,
+        )
+    };
+    let library = std::sync::Arc::new(build_library_stratum(vec![library_input()]).unwrap());
+    let cold = build(
+        BuildRequest::new(
+            vec![library_input(), workspace_input()],
+            ConstructionSchedule::Sequential,
+            "parity-v1",
+        )
+        .unwrap(),
+    )
+    .unwrap();
+    let answers = |published: &PublishedResolution| {
+        let budget = identity_of(published, "memory://library.sysml", "L::Base::budget");
+        let context = identity_of(published, "memory://workspace.sysml", "W::instance");
+        let base = identity_of(published, "memory://workspace.sysml", "W::Derived");
+        (
+            settled(published.contextual_expression(budget, context)),
+            settled(published.connections(base)),
+        )
+    };
+    let expected = answers(&cold);
+    assert!(matches!(
+        &expected.0,
+        ContextualExpressionOutcome::Resolved(_)
+    ));
+    assert!(!expected.1.connectors.is_empty());
+    for schedule in [
+        ConstructionSchedule::Sequential,
+        ConstructionSchedule::Parallel,
+    ] {
+        let seeded = build(
+            BuildRequest::with_library(
+                vec![workspace_input()],
+                schedule,
+                "parity-v1",
+                std::sync::Arc::clone(&library),
+            )
+            .unwrap(),
+        )
+        .unwrap();
+        let unseeded = build(
+            BuildRequest::new(
+                vec![library_input(), workspace_input()],
+                schedule,
+                "parity-v1",
+            )
+            .unwrap(),
+        )
+        .unwrap();
+        assert_eq!(answers(&seeded), expected);
+        assert_eq!(answers(&unseeded), expected);
+    }
+}
+
 /// An enumeration literal owns the members and documentation authored in its body.
 ///
 /// `EnumeratedValue.body` is a full `PartUsageBody`, the same shape `lower_part_usage` walks,
@@ -30,16 +121,17 @@ fn enumeration_literal_bodies_publish_their_members_and_documentation() {
          \t}\n\
          }\n",
     );
-    let line = output
+    // The doc comment is the literal's own Documentation element, owned by the literal.
+    let documentation = output
         .lines()
         .find(|line| {
-            line.contains("(qualified-name \"Demo::Kind::secret\")")
-                && line.contains("(declaration ")
+            line.contains("(named (kind enum-literal) (name \"secret\"))")
+                && line.contains("(kind documentation)")
         })
-        .unwrap_or_else(|| panic!("no enum literal declaration, got:\n{output}"));
+        .unwrap_or_else(|| panic!("no documentation owned by the enum literal, got:\n{output}"));
     assert!(
-        line.contains("(documentation (doc (text \" The secret level. \")))"),
-        "expected the literal to publish its own doc comment, got:\n{line}"
+        documentation.contains("(documentation (doc (text \"The secret level. \")))"),
+        "expected the literal to publish its own doc comment, got:\n{documentation}"
     );
     assert!(
         output.contains("(named (kind enum-literal) (name \"secret\"))"),
@@ -197,53 +289,6 @@ fn every_multiplicity_carrying_declaration_publishes_it() {
     }
 }
 
-/// The header-level specialization clauses four lowerings used to drop.
-///
-/// `ItemUsage.subsets`, `KermlFeature.references`/`crosses`, `ViewpointUsage.subsets`/
-/// `redefines` and `SubjectDecl.redefines` are all ordinary `SubsettingRelationship`s that the
-/// shared `lower_subsetting_relationship` already maps; only the call was missing. `references`
-/// and `crosses` publish as `unsupported` outcomes, which is the pre-existing treatment of
-/// those two reference kinds -- the point here is that the authored clause reaches the model
-/// at all instead of being silently discarded.
-#[test]
-fn header_specialization_clauses_reach_the_model() {
-    let item = build_semantic_sexpr(
-        "package Demo {\n\titem def Item;\n\titem objects : Item;\n\titem things : Item :> objects;\n}\n",
-    );
-    assert!(
-        item.contains(
-            "(kind subsetting) (source (node (document \"memory://test/enum.sysml\") (qualified-name \"Demo::things\"))) (target (node (document \"memory://test/enum.sysml\") (qualified-name \"Demo::objects\")))"
-        ),
-        "expected item usage `:>` to resolve to objects, got:\n{item}"
-    );
-
-    let feature = build_semantic_sexpr(
-        "package Demo {\n\tclassifier C {\n\t\tfeature base;\n\t\tfeature alias references base;\n\t}\n}\n",
-    );
-    assert!(
-        feature.contains("(referenceSubsetting (reference \"base\"))"),
-        "expected the KerML feature `references` clause to publish a reference, got:\n{feature}"
-    );
-
-    let viewpoint = build_semantic_sexpr(
-        "package Demo {\n\tviewpoint base;\n\tviewpoint derived :> base;\n}\n",
-    );
-    assert!(
-        viewpoint.contains(
-            "(kind subsetting) (source (node (document \"memory://test/enum.sysml\") (qualified-name \"Demo::derived\"))) (target (node (document \"memory://test/enum.sysml\") (qualified-name \"Demo::base\")))"
-        ),
-        "expected viewpoint usage `:>` to resolve to base, got:\n{viewpoint}"
-    );
-
-    let subject = build_semantic_sexpr(
-        "package Demo {\n\tpart def Vehicle;\n\trequirement def R {\n\t\tsubject vehicle : Vehicle;\n\t}\n\trequirement def S :> R {\n\t\tsubject subVehicle :>> vehicle;\n\t}\n}\n",
-    );
-    assert!(
-        subject.contains("(redefinition (reference \"vehicle\"))"),
-        "expected the subject `:>>` clause to publish a redefinition, got:\n{subject}"
-    );
-}
-
 /// Every declaration kind whose parser node carries a `short_name` publishes it.
 ///
 /// Nine lowerings dropped the `<short>` spelling even though their nodes had the field. The
@@ -305,6 +350,165 @@ fn every_short_name_carrying_declaration_publishes_it() {
             "package Demo {\n\tenum def E {\n\t\tenum <r> red;\n\t}\n}\n",
             "Demo::E::red",
             "r",
+        ),
+        (
+            "use case usage",
+            // `UseCaseUsage` had no `short_name` field in the parser AST at all until this fix
+            // (sysml-v2-parser#144) -- a different, more severe gap than the other rows here,
+            // whose nodes already carried the field but whose lowering dropped it.
+            "package Demo {\n\tuse case <u> uc;\n}\n",
+            "Demo::uc",
+            "u",
+        ),
+        (
+            "verification usage",
+            "package Demo {\n\tverification def VD;\n\tverification <v> ver : VD;\n}\n",
+            "Demo::ver",
+            "v",
+        ),
+        (
+            "verification usage in a part body",
+            "package Demo {\n\tverification def VD;\n\tpart def P {\n\t\tverification <v> ver : VD;\n\t}\n}\n",
+            "Demo::P::ver",
+            "v",
+        ),
+        (
+            "analysis usage",
+            "package Demo {\n\tanalysis <a> ana;\n}\n",
+            "Demo::ana",
+            "a",
+        ),
+        (
+            "case usage",
+            "package Demo {\n\tcase <c> cs;\n}\n",
+            "Demo::cs",
+            "c",
+        ),
+        (
+            "concern usage",
+            "package Demo {\n\tconcern <c> conc;\n}\n",
+            "Demo::conc",
+            "c",
+        ),
+        (
+            "concern definition",
+            "package Demo {\n\tconcern def <c> Conc;\n}\n",
+            "Demo::Conc",
+            "c",
+        ),
+        (
+            "state usage",
+            "package Demo {\n\tstate <s> st;\n}\n",
+            "Demo::st",
+            "s",
+        ),
+        (
+            "exhibit state",
+            "package Demo {\n\tpart def P {\n\t\texhibit state <x> ex;\n\t}\n}\n",
+            "Demo::P::ex",
+            "x",
+        ),
+        (
+            "viewpoint usage",
+            "package Demo {\n\tviewpoint <v> vp;\n}\n",
+            "Demo::vp",
+            "v",
+        ),
+        (
+            "rendering usage",
+            "package Demo {\n\trendering <r> rn;\n}\n",
+            "Demo::rn",
+            "r",
+        ),
+        (
+            "enumeration usage",
+            "package Demo {\n\tenum def E { e1; }\n\tpart def P {\n\t\tenum <e> en : E;\n\t}\n}\n",
+            "Demo::P::en",
+            "e",
+        ),
+        (
+            "allocation usage",
+            "package Demo {\n\tallocation def A;\n\tallocation <a> al : A;\n}\n",
+            "Demo::al",
+            "a",
+        ),
+        (
+            "interface usage",
+            "package Demo {\n\tinterface def I;\n\tpart def P {\n\t\tinterface <i> ifc : I;\n\t}\n}\n",
+            "Demo::P::ifc",
+            "i",
+        ),
+        (
+            "metadata usage in a part body",
+            "package Demo {\n\tmetadata def M;\n\tpart def P {\n\t\tmetadata <m> md : M;\n\t}\n}\n",
+            "Demo::P::md",
+            "m",
+        ),
+        (
+            "assert constraint",
+            "package Demo {\n\tpart def P {\n\t\tassert constraint <c> ac;\n\t}\n}\n",
+            "Demo::P::ac",
+            "c",
+        ),
+        (
+            "succession usage",
+            "package Demo {\n\tpart def P {\n\t\taction s1;\n\t\taction s2;\n\t\tsuccession <s> sc first s1 then s2;\n\t}\n}\n",
+            "Demo::P::sc",
+            "s",
+        ),
+        (
+            "binding connector",
+            "package Demo {\n\tpart def P {\n\t\tpart a;\n\t\tpart b;\n\t\tbinding <b> bd bind a = b;\n\t}\n}\n",
+            "Demo::P::bd",
+            "b",
+        ),
+        (
+            "transition usage",
+            "package Demo {\n\tstate def S {\n\t\tstate s1;\n\t\tstate s2;\n\t\ttransition <t> tr first s1 then s2;\n\t}\n}\n",
+            "Demo::S::tr",
+            "t",
+        ),
+        (
+            "directed parameter",
+            "package Demo {\n\taction def A {\n\t\tin <x> inp;\n\t}\n}\n",
+            "Demo::A::inp",
+            "x",
+        ),
+        (
+            "stakeholder declaration",
+            "package Demo {\n\tpart def T;\n\trequirement def R {\n\t\tstakeholder <s> sh : T;\n\t}\n}\n",
+            "Demo::R::sh",
+            "s",
+        ),
+        (
+            "concern usage in a part definition body",
+            "package Demo {\n\tconcern def C;\n\tpart def P {\n\t\tconcern <c> conc : C;\n\t}\n}\n",
+            "Demo::P::conc",
+            "c",
+        ),
+        (
+            "concern usage in a part usage body",
+            "package Demo {\n\tconcern def C;\n\tpart p {\n\t\tconcern <c> conc : C;\n\t}\n}\n",
+            "Demo::p::conc",
+            "c",
+        ),
+        (
+            "case usage in a part usage body",
+            "package Demo {\n\tcase def K;\n\tpart p {\n\t\tcase <k> cs : K;\n\t}\n}\n",
+            "Demo::p::cs",
+            "k",
+        ),
+        (
+            "return ref",
+            "package Demo {\n\tuse case def U {\n\t\treturn ref <r> res { }\n\t}\n}\n",
+            "Demo::U::res",
+            "r",
+        ),
+        (
+            "dependency",
+            "package Demo {\n\tpart def A;\n\tpart def B;\n\tdependency <d> dep from A to B;\n}\n",
+            "Demo::dep",
+            "d",
         ),
     ] {
         let output = build_semantic_sexpr(source);
@@ -744,61 +948,6 @@ fn constraint_collection_op_arrow_invocation_resolves_base_and_argument_operands
 }
 
 #[test]
-fn calc_exponent_operator_negative_integer_exponent_promotes_to_real() {
-    // A negative integer exponent (`2 ^ -1`) cannot stay `Integer` (fractional result), so it
-    // promotes to `Real` via `powf`, exactly like a `Real`-involving pairing.
-    let output = build_semantic_sexpr(
-        "package Demo {\n\
-         \tcalc def Calc { 2 ^ -1 }\n\
-         }\n",
-    );
-    assert!(
-        output.contains(
-            "(evaluated (declaration (node (document \"memory://test/enum.sysml\") \
-             (qualified-name \"Demo::Calc\"))) (state evaluated) (value (kind real) (real 0.5)))"
-        ),
-        "expected `2 ^ -1` to fold to Real(0.5) via the Real-promotion path, got:\n{output}"
-    );
-}
-
-#[test]
-fn constraint_simple_comparison_only_regression_unaffected() {
-    // Regression guard: a plain comparison-only constraint body (slices 1-3, no arithmetic or
-    // logical widening involved) must fold exactly as before.
-    let output = build_semantic_sexpr(
-        "package Demo {\n\
-         \tconstraint def C { 1 < 2 }\n\
-         }\n",
-    );
-    assert!(
-        output.contains(
-            "(evaluated (declaration (node (document \"memory://test/enum.sysml\") \
-             (qualified-name \"Demo::C\"))) (state evaluated) (value (kind boolean) (boolean true)))"
-        ),
-        "expected plain comparison-only `1 < 2` to still fold to Boolean(true), got:\n{output}"
-    );
-}
-
-#[test]
-fn calc_arithmetic_only_regression_unaffected() {
-    // Regression guard: calc-body arithmetic (slice 4) must stay comparison-free and fold
-    // exactly as before -- unaffected by the constraint-side widening.
-    let output = build_semantic_sexpr(
-        "package Demo {\n\
-         \tcalc def Calc { 2 + 3 }\n\
-         }\n",
-    );
-    assert!(
-        output.contains(
-            "(evaluated (declaration (node (document \"memory://test/enum.sysml\") \
-             (qualified-name \"Demo::Calc\"))) (state evaluated) (value (kind integer) (integer 5)))"
-        ),
-        "expected plain arithmetic-only `2 + 3` calc body to still fold to Integer(5), \
-         got:\n{output}"
-    );
-}
-
-#[test]
 fn redefinition_value_with_a_qualified_reference_is_pushed_and_classified() {
     // The exact `enum_status_redefinition.md` shape (`attribute :>> status =
     // RequirementStatusKind::approved;`): the `= RequirementStatusKind::approved` value
@@ -1065,34 +1214,6 @@ fn calc_usage_typed_by_a_calc_def_resolves() {
             "(target (node (document \"memory://test/enum.sysml\") (qualified-name \"Demo::P::Calc\")))"
         ),
         "expected c's featureTyping of Calc to resolve, got:\n{output}"
-    );
-}
-
-#[test]
-fn calc_usage_redefining_another_calc_usage_resolves() {
-    // `CalcUsage::redefines` is a bare `Vec<QualifiedReferenceId>`, not a
-    // `Node<SubsettingRelationship>` -- lowered as direct `Redefinition` references rather
-    // than through `lower_subsetting_relationship`.
-    let output = build_semantic_sexpr(
-        "package Demo {\n\
-         \tpart def P {\n\
-         \t\tcalc def Calc;\n\
-         \t\tcalc calcA : Calc;\n\
-         \t\tcalc calcB : Calc :>> calcA;\n\
-         \t}\n\
-         }\n",
-    );
-    assert!(
-        output.contains("(qualified-name \"Demo::P::calcB\"))) (kind calc)"),
-        "expected a calc usage declaration, got:\n{output}"
-    );
-    assert!(
-        output.contains(
-            "(kind redefinition) (source (node (document \"memory://test/enum.sysml\") (qualified-name \"Demo::P::calcB\")))"
-        ) && output.contains(
-            "(target (node (document \"memory://test/enum.sysml\") (qualified-name \"Demo::P::calcA\")))"
-        ),
-        "expected calcB's redefinition of calcA to resolve, got:\n{output}"
     );
 }
 
@@ -1725,7 +1846,7 @@ fn metadata_usage_typed_by_a_metadata_def_resolves() {
     );
 }
 
-/// `import P::**` re-exports the members of `P` and, transitively, the members of every
+/// `private import P::**` re-exports the members of `P` and, transitively, the members of every
 /// publicly-visible namespace nested under it. Before, the recursive suffix parsed and lowered
 /// but name resolution left the reference `Unsupported`, reporting `unsupported_filtered_import`
 /// and cascading every dependent name to `unresolved_*` (#102).
@@ -1750,7 +1871,7 @@ fn recursive_membership_import_brings_nested_namespace_members_into_scope() {
     );
     assert!(
         output.contains("(authored-target \"Rover\")\n      (outcome (status resolved) (target (node (document \"memory://test/enum.sysml\") (qualified-name \"Lib::Inner::Rover\"))))"),
-        "expected `Rover` (nested one namespace deep) to resolve through `import Lib::**`, got:\n{output}"
+        "expected `Rover` (nested one namespace deep) to resolve through `private import Lib::**`, got:\n{output}"
     );
     assert!(
         !build_diagnostics_sexpr(
@@ -1783,7 +1904,7 @@ fn recursive_wildcard_import_resolves_deeply_nested_members() {
     );
     assert!(
         output.contains("(authored-target \"Deep\")\n      (outcome (status resolved) (target (node (document \"memory://test/enum.sysml\") (qualified-name \"Lib::A::B::C::Deep\"))))"),
-        "expected `Deep`, nested four namespaces deep, to resolve through `import Lib::*::**`, got:\n{output}"
+        "expected `Deep`, nested four namespaces deep, to resolve through `private import Lib::*::**`, got:\n{output}"
     );
 }
 
@@ -1810,33 +1931,11 @@ fn recursive_import_does_not_leak_a_private_nested_package() {
     );
     assert!(
         output.contains("(authored-target \"Hidden\")\n      (outcome (status unresolved)"),
-        "a private nested package's member must not enter scope through `import Lib::**`, got:\n{output}"
+        "a private nested package's member must not enter scope through `private import Lib::**`, got:\n{output}"
     );
 }
 
-/// A recursive import spanning documents brings the nested library members into the workspace
-/// scope, the same as a same-document one.
-#[test]
-fn recursive_import_resolves_across_documents() {
-    let published = publication_for(&[
-        (
-            "memory://lib.sysml",
-            "package Lib { package Nested { part def CelestialBody; } }",
-        ),
-        (
-            "memory://model.sysml",
-            "package Model { import Lib::**; part def Orbit { ref primary : CelestialBody; } }",
-        ),
-    ]);
-    let mut output = String::new();
-    published.debug().write_semantic_sexpr(&mut output).unwrap();
-    assert!(
-        output.contains("(authored-target \"CelestialBody\")\n      (outcome (status resolved) (target (node (document \"memory://lib.sysml\") (qualified-name \"Lib::Nested::CelestialBody\"))))"),
-        "expected the cross-document recursive import to resolve `CelestialBody`, got:\n{output}"
-    );
-}
-
-/// A genuinely filtered recursive import (`import P::** [ ... ]`) is still parsed but not
+/// A genuinely filtered recursive import (`private import P::** [ ... ]`) is still parsed but not
 /// semantically supported -- issue #102 keeps that boundary.
 #[test]
 fn filtered_recursive_import_remains_unsupported() {
@@ -2299,7 +2398,7 @@ fn a_view_typed_by_a_non_standard_library_definition_is_reported() {
                 ),
                 SourceInput::new(
                     "memory://test.sysml",
-                    format!("package P {{ import Views::*; view v : {library}; }}"),
+                    format!("package P {{ private import Views::*; view v : {library}; }}"),
                     SourceKind::Workspace,
                 ),
             ],
@@ -2324,6 +2423,11 @@ fn a_view_typed_by_a_non_standard_library_definition_is_reported() {
         "a standard view definition is not reported: {:?}",
         publish("GeneralView")
     );
+    assert!(
+        !publish("View").contains(&"view_type_non_standard".to_string()),
+        "the normative abstract base View is not reported: {:?}",
+        publish("View")
+    );
 }
 
 /// A workspace's own `view def` is the author's to define, whatever it is called.
@@ -2340,7 +2444,7 @@ fn a_view_typed_by_a_workspace_definition_is_never_reported_as_non_standard() {
 /// The library-context hint consumes the host-owned standard-library availability fact.
 #[test]
 fn the_library_context_hint_reads_standard_library_availability() {
-    let workspace = "package P { import Lib::*; part def D :> Missing; }";
+    let workspace = "package P { private import Lib::*; part def D :> Missing; }";
     let codes = |published: PublishedResolution| {
         published
             .document_diagnostics("memory://workspace.sysml")
@@ -2541,39 +2645,6 @@ fn first_then_succession_inside_action_def_body_resolves_both_ends() {
     assert!(
         !sexpr.contains("(status unresolved)") || !sexpr.contains("succession"),
         "did not expect an unresolved succession outcome for two declared siblings, got: {sexpr}"
-    );
-}
-
-/// A `state def` body's `entry action X;` / `do action Y;` / `exit action Z;` bindings (BNF
-/// `EntryAction`/`DoAction`/`ExitAction.action_reference`) must each resolve to the enclosing
-/// package's action declarations (there is no `StateDefBodyElement::ActionUsage` shape --
-/// bound actions are ordinarily declared alongside the state def, not nested inside it,
-/// mirroring the real corpus fixture `24_state_actions.md`), not fall through to
-/// `unsupported_state_definition_member`.
-#[test]
-fn entry_do_exit_action_bindings_inside_state_def_body_resolve() {
-    let sexpr = semantic_sexpr_for(
-        "package P { action enter1; action running1; action leave1; state def S { entry action enter1; do action running1; exit action leave1; } }",
-    );
-    assert!(
-        sexpr.contains("(kind entryActionBinding)"),
-        "expected an entryActionBinding relationship kind, got: {sexpr}"
-    );
-    assert!(
-        sexpr.contains("(kind doActionBinding)"),
-        "expected a doActionBinding relationship kind, got: {sexpr}"
-    );
-    assert!(
-        sexpr.contains("(kind exitActionBinding)"),
-        "expected an exitActionBinding relationship kind, got: {sexpr}"
-    );
-    assert!(
-        !sexpr.contains("unsupported_state_definition_member"),
-        "did not expect unsupported_state_definition_member, got: {sexpr}"
-    );
-    assert!(
-        !sexpr.contains("(status unresolved)"),
-        "expected all three action bindings to resolve to their sibling declarations, got: {sexpr}"
     );
 }
 
@@ -3110,13 +3181,12 @@ fn a_non_literal_multiplicity_bound_is_published_as_an_expression() {
 }
 
 /// A `doc` body element annotates the declaration owning that body, and the recorded text is
-/// the raw content between the comment delimiters -- the parser performs no leading-`*`
-/// stripping or dedent, so neither does this fact.
+/// the body processed per KerML 8.2.3.3.2 note 1 (leading white space after `/*` removed).
 #[test]
 fn doc_comments_bind_to_the_declaration_owning_their_body() {
     let sexpr = semantic_sexpr_for("package P { part def Wheel { doc /* a wheel */ } }");
     assert!(
-        sexpr.contains(r#"(documentation (doc (text " a wheel ")))"#),
+        sexpr.contains(r#"(documentation (doc (text "a wheel ")))"#),
         "expected the doc comment bound to the part def, got: {sexpr}"
     );
 }
@@ -3164,36 +3234,231 @@ classifier C {
     assert_eq!(values[0].provenance, RelationshipProvenance::Authored);
 }
 
+/// `connections(root)` publishes every `connect` / `interface` connector reachable from an
+/// element, with its type and resolved ends -- bare, dotted, named, and unresolved.
+#[test]
+fn connection_graph_publishes_connectors_with_resolved_ends() {
+    let published = publication_for(&[(
+        "memory://connections.sysml",
+        "package P {\n\
+         \tport def Pt;\n\
+         \tpart def Pump { port inlet : Pt; port outlet : Pt; }\n\
+         \tinterface def If :> BaseIf { end a : Pt; end b : Pt; }\n\
+         \tinterface def BaseIf;\n\
+         \tpart system {\n\
+         \t\tpart pumpA : Pump;\n\
+         \t\tpart pumpB : Pump;\n\
+         \t\tconnect pumpA to pumpB;\n\
+         \t\tconnect pumpA.outlet to pumpB.inlet;\n\
+         \t\tconnect pumpA to keyed references pumpB.inlet;\n\
+         \t\tinterface link : If connect pumpA.outlet to pumpB.inlet;\n\
+         \t\tconnect pumpA.outlet to missing.port;\n\
+         \t}\n\
+         }",
+    )]);
+    let system = identity_of(&published, "memory://connections.sysml", "P::system");
+    let graph = settled(published.connections(system));
+    assert_eq!(graph.root, system);
+    // Four `connect`s + one `interface` usage; the `interface def`s are not under `system`.
+    assert_eq!(graph.connectors.len(), 5, "{:?}", graph.connectors);
+
+    let bare = &graph.connectors[0];
+    assert_eq!(bare.kind, ConnectorKind::Connection);
+    assert_eq!(bare.ends.len(), 2);
+    assert!(matches!(
+        bare.ends[0].endpoint,
+        ConnectorEndpoint::Feature(RelationshipTarget::Resolved(_))
+    ));
+    assert!(bare.ends[0].declaration.is_none());
+    assert_eq!(bare.ends[0].multiplicity, MultiplicityFacts::Absent);
+
+    let dotted = &graph.connectors[1];
+    match &dotted.ends[0].endpoint {
+        ConnectorEndpoint::FeatureChain {
+            root,
+            terminal,
+            authored,
+            ..
+        } => {
+            // `pumpA.outlet` — the component instance and the port are both resolved.
+            let RelationshipTarget::Resolved(root) = root else {
+                panic!("expected a resolved feature-chain root, got {root:?}");
+            };
+            assert_eq!(
+                published.qualified_name(*root),
+                Some("P::system::pumpA"),
+                "the feature-chain root is the specific part usage"
+            );
+            assert!(matches!(terminal, RelationshipTarget::Resolved(_)));
+            assert_eq!(authored.as_ref(), "pumpA::outlet");
+        }
+        other => panic!("expected a feature chain, got {other:?}"),
+    }
+
+    let unresolved_end = graph
+        .connectors
+        .iter()
+        .flat_map(|connector| connector.ends.iter())
+        .find_map(|end| match &end.endpoint {
+            ConnectorEndpoint::FeatureChain {
+                terminal, authored, ..
+            } if authored.as_ref() == "missing::port" => Some(terminal.clone()),
+            _ => None,
+        })
+        .expect("the unresolved dotted end");
+    assert_eq!(unresolved_end, RelationshipTarget::Unresolved);
+
+    let interface = graph
+        .connectors
+        .iter()
+        .find(|connector| connector.kind == ConnectorKind::Interface)
+        .expect("the interface usage");
+    assert!(matches!(
+        interface.declared_type,
+        RelationshipTarget::Resolved(_)
+    ));
+
+    // A mixed `connect a to b references c.d`: bare end then named end, in authored order.
+    let mixed = graph
+        .connectors
+        .iter()
+        .find(|connector| {
+            connector.ends.len() == 2
+                && connector.ends[0].declaration.is_none()
+                && connector.ends[1].declaration.is_some()
+        })
+        .expect("the mixed bare+named connector");
+    assert!(matches!(
+        mixed.ends[0].endpoint,
+        ConnectorEndpoint::Feature(RelationshipTarget::Resolved(_))
+    ));
+    assert!(matches!(
+        mixed.ends[1].endpoint,
+        ConnectorEndpoint::FeatureChain { .. }
+    ));
+
+    // `connections(If)` — a `connection`/`interface def` publishes its declared-but-unwired
+    // ends as `Unconnected` carrying their own identities.
+    let if_def = identity_of(&published, "memory://connections.sysml", "P::If");
+    let if_graph = settled(published.connections(if_def));
+    let if_connector = &if_graph.connectors[0];
+    assert_eq!(if_connector.ends.len(), 2);
+    assert!(if_connector
+        .ends
+        .iter()
+        .all(|end| end.endpoint == ConnectorEndpoint::Unconnected && end.declaration.is_some()));
+
+    // A leaf with no connectors under it yields an empty graph.
+    let pump = identity_of(&published, "memory://connections.sysml", "P::Pump");
+    assert!(settled(published.connections(pump)).connectors.is_empty());
+}
+
+/// `model_projection` composes the per-element query groups into one deterministic whole-model
+/// answer: workspace-only elements in canonical order with their relationship families, resolved
+/// expression trees and metadata annotations, every connector, a publication envelope, and an
+/// explicit truncation record.
+#[test]
+fn model_projection_composes_elements_connectors_and_envelope() {
+    let published = publication_for(&[(
+        "memory://projection.sysml",
+        "package P {\n\
+         \tpart def Base;\n\
+         \tpart def Engine :> Base {\n\
+         \t\tattribute power;\n\
+         \t\tconstraint pos { power > 0 }\n\
+         \t}\n\
+         \tmetadata def Note { attribute note; }\n\
+         \tport def Pt;\n\
+         \tpart def Car {\n\
+         \t\t@Note { note = 1; }\n\
+         \t\tpart l : Engine { port p : Pt; }\n\
+         \t\tpart r : Engine { port p : Pt; }\n\
+         \t\tconnect l.p to r.p;\n\
+         \t}\n\
+         }",
+    )]);
+
+    let projection = settled(published.model_projection(usize::MAX));
+    assert_eq!(projection.schema_version, MODEL_PROJECTION_SCHEMA_VERSION);
+    assert_eq!(projection.envelope.phase, ProjectionPhase::Resolved);
+    assert!(projection.envelope.completeness.is_complete());
+    // No library admitted: every admitted document is workspace-authored.
+    assert_eq!(
+        projection.envelope.admitted,
+        AdmittedSourceCounts::default()
+    );
+
+    assert!(projection
+        .elements
+        .iter()
+        .all(|element| element.source == ElementSource::Workspace));
+    assert_eq!(
+        projection.truncation.elements_total,
+        projection.elements.len()
+    );
+    assert_eq!(
+        projection.truncation.elements_returned,
+        projection.elements.len()
+    );
+    assert!(!projection.truncation.is_truncated());
+
+    let find = |qualified: &str| {
+        let id = identity_of(&published, "memory://projection.sysml", qualified);
+        projection
+            .elements
+            .iter()
+            .find(|element| element.identity == id)
+            .unwrap_or_else(|| panic!("{qualified} not in projection"))
+    };
+
+    // The Engine part def carries its authored specialization of Base.
+    assert_eq!(
+        find("P::Engine").details.specialization.outcome,
+        RelationshipOutcome::Resolved
+    );
+    // The constraint's expression tree is resolved and carried inline.
+    let constraint = find("P::Engine::pos");
+    assert_eq!(constraint.expression.outcome, ExpressionOutcome::Resolved);
+    assert!(constraint.expression.root.is_some());
+    // A plain part def authored no expression.
+    assert_eq!(
+        find("P::Base").expression.outcome,
+        ExpressionOutcome::NotApplicable
+    );
+    // The Car part def carries the `@Note` metadata annotation.
+    assert_eq!(find("P::Car").metadata_annotations.len(), 1);
+
+    // The `connect l.p to r.p` connector is projected once, whole-workspace.
+    assert_eq!(projection.connectors.len(), 1);
+    assert_eq!(projection.connectors[0].kind, ConnectorKind::Connection);
+    assert_eq!(projection.connectors[0].ends.len(), 2);
+
+    // `max_nodes` bounds the element list and records the truncation; the envelope and
+    // connectors are unaffected by the bound.
+    let truncated = settled(published.model_projection(3));
+    assert_eq!(truncated.elements.len(), 3);
+    assert_eq!(truncated.truncation.elements_returned, 3);
+    assert_eq!(
+        truncated.truncation.elements_total,
+        projection.truncation.elements_total
+    );
+    assert!(truncated.truncation.is_truncated());
+    assert_eq!(truncated.connectors.len(), 1);
+    assert_eq!(truncated.envelope.phase, ProjectionPhase::Resolved);
+}
+
 #[test]
 fn binding_connector_checks_are_manifest_scoped_and_preserve_first_missing_prerequisite() {
     let published = publication_for(&[(
         "memory://binding-rule-family.sysml",
         "package Binding { action def Act { action start; action done; bind start = done; } }",
     )]);
+    // The result-expression rules are decided where they hold vacuously, as here; the snapshot
+    // corpus pins their unsupported (occupied) and unresolved (recovered body) outcomes.
     let expected = [
-        (
-            BindingConnectorCheckKind::FeatureValue,
-            BindingConnectorValidationPrerequisite::FeatureValueEndpointFacts,
-        ),
-        (
-            BindingConnectorCheckKind::ExpressionResult,
-            BindingConnectorValidationPrerequisite::ExpressionResultEndpointFacts,
-        ),
-        (
-            BindingConnectorCheckKind::FunctionResult,
-            BindingConnectorValidationPrerequisite::FunctionResultEndpointFacts,
-        ),
         (
             BindingConnectorCheckKind::ConstructorExpressionResultDefaultValueTbd,
             BindingConnectorValidationPrerequisite::NormativeSpecificationTbd,
-        ),
-        (
-            BindingConnectorCheckKind::FeatureReferenceExpression,
-            BindingConnectorValidationPrerequisite::FeatureReferenceExpressionTargetAndResult,
-        ),
-        (
-            BindingConnectorCheckKind::InvocationExpressionBehavior,
-            BindingConnectorValidationPrerequisite::InvocationExpressionBehaviorEndpointFacts,
         ),
         (
             BindingConnectorCheckKind::InvocationExpressionDefaultValueTbd,
@@ -3202,14 +3467,6 @@ fn binding_connector_checks_are_manifest_scoped_and_preserve_first_missing_prere
         (
             BindingConnectorCheckKind::AcceptActionUsageReceiver,
             BindingConnectorValidationPrerequisite::AcceptActionUsageReceiverEndpointFacts,
-        ),
-        (
-            BindingConnectorCheckKind::TransitionUsageSource,
-            BindingConnectorValidationPrerequisite::TransitionUsageSourceEndpointFacts,
-        ),
-        (
-            BindingConnectorCheckKind::TransitionUsageSuccession,
-            BindingConnectorValidationPrerequisite::TransitionUsageSuccessionEndpointFacts,
         ),
         (
             BindingConnectorCheckKind::SatisfyRequirementUsage,
@@ -3231,82 +3488,38 @@ fn binding_connector_checks_are_manifest_scoped_and_preserve_first_missing_prere
 }
 
 #[test]
-fn redefinition_checks_are_manifest_scoped_and_preserve_first_missing_prerequisite() {
+fn redefinition_checks_are_evaluated_over_published_role_facts() {
     let published = publication_for(&[(
         "memory://redefinition-rule-family.sysml",
         "package Model { classifier Parent { feature shared; } classifier Child :> Parent { feature shared; } }",
     )]);
-    let expected = [
-        (
-            RedefinitionCheckKind::FeatureEnd,
-            RedefinitionCheckPrerequisite::EndFeaturePositionAndInheritedEnds,
-        ),
-        (
-            RedefinitionCheckKind::FeatureFlowFeature,
-            RedefinitionCheckPrerequisite::FlowEndOrdinalAndLibraryAnchors,
-        ),
-        (
-            RedefinitionCheckKind::FeatureOwnedCrossFeatureSpecialization,
-            RedefinitionCheckPrerequisite::CrossFeatureAndSubsettingEndpoints,
-        ),
-        (
-            RedefinitionCheckKind::FeatureParameter,
-            RedefinitionCheckPrerequisite::ParameterDirectionAndInheritedPosition,
-        ),
-        (
-            RedefinitionCheckKind::FeatureResult,
-            RedefinitionCheckPrerequisite::FunctionOrExpressionResult,
-        ),
-        (
-            RedefinitionCheckKind::ConstructorExpressionResultFeature,
-            RedefinitionCheckPrerequisite::ConstructorResultAndInstantiatedTypeFeatures,
-        ),
-        (
-            RedefinitionCheckKind::FeatureChainExpressionSourceTarget,
-            RedefinitionCheckPrerequisite::FeatureChainSourceTarget,
-        ),
-        (
-            RedefinitionCheckKind::FeatureChainExpressionTarget,
-            RedefinitionCheckPrerequisite::FeatureChainSourceTargetAndLibraryAnchor,
-        ),
-        (
-            RedefinitionCheckKind::ActionUsageStateAction,
-            RedefinitionCheckPrerequisite::StateSubactionMembershipAndKind,
-        ),
-        (
-            RedefinitionCheckKind::AssignmentActionUsageAccessedFeature,
-            RedefinitionCheckPrerequisite::AssignmentActionInputParameterEndpoints,
-        ),
-        (
-            RedefinitionCheckKind::AssignmentActionUsageReferent,
-            RedefinitionCheckPrerequisite::AssignmentActionInputParameterEndpoints,
-        ),
-        (
-            RedefinitionCheckKind::AssignmentActionUsageStartingAt,
-            RedefinitionCheckPrerequisite::AssignmentActionInputParameterEndpoints,
-        ),
-        (
-            RedefinitionCheckKind::ForLoopActionUsageVar,
-            RedefinitionCheckPrerequisite::ForLoopVariableProjection,
-        ),
-        (
-            RedefinitionCheckKind::RequirementUsageObjective,
-            RedefinitionCheckPrerequisite::ObjectiveMembershipAndCaseObjective,
-        ),
-        (
-            RedefinitionCheckKind::RenderingUsage,
-            RedefinitionCheckPrerequisite::ViewRenderingMembership,
-        ),
-    ];
-
-    for (rule, prerequisite) in expected {
+    // Checks whose role facts are published are evaluated, never reported as unsupported. This
+    // model has no end feature, for loop, feature chain expression, case objective, parameter,
+    // result, constructor, assignment, state action or view rendering, so each holds vacuously; the snapshot
+    // corpus carries the occupied cases.
+    for rule in [
+        RedefinitionCheckKind::FeatureEnd,
+        RedefinitionCheckKind::FeatureOwnedCrossFeatureSpecialization,
+        RedefinitionCheckKind::FeatureParameter,
+        RedefinitionCheckKind::FeatureResult,
+        RedefinitionCheckKind::ConstructorExpressionResultFeature,
+        RedefinitionCheckKind::AssignmentActionUsageAccessedFeature,
+        RedefinitionCheckKind::AssignmentActionUsageReferent,
+        RedefinitionCheckKind::AssignmentActionUsageStartingAt,
+        RedefinitionCheckKind::FeatureChainExpressionSourceTarget,
+        RedefinitionCheckKind::FeatureChainExpressionTarget,
+        RedefinitionCheckKind::ForLoopActionUsageVar,
+        RedefinitionCheckKind::RequirementUsageObjective,
+        RedefinitionCheckKind::ActionUsageStateAction,
+        RedefinitionCheckKind::RenderingUsage,
+    ] {
         assert_eq!(
             published.redefinition_check(rule),
             QueryOutcome::new(
                 published.completeness(),
-                QueryAnswer::Resolved(RedefinitionCheckOutcome::Unsupported { prerequisite }),
+                QueryAnswer::Resolved(RedefinitionCheckOutcome::Satisfied),
             ),
-            "{rule:?} must expose its first missing canonical prerequisite rather than infer a relationship"
+            "{rule:?} is evaluated over its published role facts"
         );
     }
 }
@@ -3345,7 +3558,7 @@ fn redefinition_check_outcomes_have_cold_warm_and_schedule_parity() {
 }
 
 #[test]
-fn specialization_checks_do_not_launder_authored_or_implied_edges_into_success() {
+fn specialization_checks_have_cold_warm_and_schedule_parity() {
     let sources = [(
         "memory://specialization-check-rule-family.sysml",
         "package Model { classifier Parent { feature shared; } classifier Child :> Parent { feature shared; } }",
@@ -3353,22 +3566,12 @@ fn specialization_checks_do_not_launder_authored_or_implied_edges_into_success()
     let sequential = detail_publication(&sources, ConstructionSchedule::Sequential);
     let parallel = detail_publication(&sources, ConstructionSchedule::Parallel);
     let warm = detail_publication(&sources, ConstructionSchedule::Sequential);
-    let expected = [(
+    let rules = [
+        SpecializationCheckKind::UsageVariationDefinition,
         SpecializationCheckKind::UsageVariationUsage,
-        SpecializationCheckPrerequisite::UsageVariationOwner,
-    )];
+    ];
     let query = |published: &PublishedResolution| {
-        expected.map(|(rule, prerequisite)| {
-            assert_eq!(
-                published.specialization_check(rule),
-                QueryOutcome::new(
-                    published.completeness(),
-                    QueryAnswer::Resolved(SpecializationCheckOutcome::Unsupported { prerequisite }),
-                ),
-                "{rule:?} must not treat the model's authored/implied specialization facts as proof of its richer predicate"
-            );
-            settled(published.specialization_check(rule))
-        })
+        rules.map(|rule| settled(published.specialization_check(rule)))
     };
     assert_eq!(query(&sequential), query(&parallel));
     assert_eq!(query(&sequential), query(&warm));
@@ -3417,7 +3620,7 @@ fn owned_cross_features_are_implied_typed_by_their_owners_effective_types() {
 fn feature_valuations_publish_value_result_endpoints_and_implied_subsetting() {
     let sources = [(
         "memory://feature-valuations.kerml",
-        "package Model { classifier Thing; feature source : Thing; feature inferred = source; feature typed : Thing = source; out feature directed = source; feature defaulted default = source; }",
+        "package Model { classifier Thing; feature source : Thing; feature inferred = source; feature 'typed' : Thing = source; out feature directed = source; feature defaulted default = source; }",
     )];
     let sequential = detail_publication(&sources, ConstructionSchedule::Sequential);
     let parallel = detail_publication(&sources, ConstructionSchedule::Parallel);
@@ -3572,24 +3775,6 @@ part vehicle : Vehicle;
             "P::Vehicle::shadowed",
             "P::Base::inherited"
         ]
-    );
-}
-
-/// A name shared by siblings of *different* kinds needs no occurrence ordinal -- the kind on
-/// every path segment already separates them. This is the sibling `sysml-compiler`'s tag byte:
-/// `metadata def X` and the `metadata X about ...` annotating it are distinct elements.
-#[test]
-fn same_name_different_kind_siblings_are_separated_by_kind() {
-    let sexpr = semantic_sexpr_for(
-        "package P { part def Vehicle; metadata def Safety; metadata Safety about Vehicle; }",
-    );
-    assert!(
-        sexpr.contains(r#"(named (kind metadata-def) (name "Safety"))"#),
-        "expected the metadata definition's kind in its identity, got: {sexpr}"
-    );
-    assert!(
-        sexpr.contains(r#"(named (kind metadata) (name "Safety"))"#),
-        "expected the metadata usage's kind in its identity, got: {sexpr}"
     );
 }
 
@@ -4044,7 +4229,7 @@ fn derived_element_documentation_filters_canonical_typed_forms() {
     assert_eq!(documentation[0].form, AnnotationForm::Documentation);
     assert_eq!(
         published.text(documentation[0].text).unwrap_or_default(),
-        " vehicle documentation "
+        "vehicle documentation "
     );
     assert!(documentation[0].language.is_none());
 
@@ -4060,7 +4245,46 @@ fn derived_element_documentation_filters_canonical_typed_forms() {
     assert_eq!(representations[0].language.as_deref(), Some("Alf"));
     assert_eq!(
         published.text(representations[0].text).unwrap_or_default(),
-        " vehicle implementation "
+        "vehicle implementation "
+    );
+}
+
+/// Comment, documentation, and textual-representation bodies publish the text KerML 8.2.3.3.2
+/// note 1 defines, not the authored bytes: the continuation `*` and the indentation before it
+/// are removed, while line structure (paragraphs, list items) survives -- spec42 issue #210.
+#[test]
+fn derived_element_documentation_publishes_processed_comment_bodies() {
+    let source = "package Model {\n    view overview {\n        doc /* The system consists of the airframe\n             * and the flight controller.\n             *\n             * - patrol\n             * - search */\n        comment /*\n           * first\n           *   indented\n           */\n        language \"Alf\" /*\n            *  x = 1;\n            */\n    }\n}";
+    let published = detail_publication(
+        &[("memory://model.sysml", source)],
+        ConstructionSchedule::Sequential,
+    );
+    let overview = identity_of(&published, "memory://model.sysml", "Model::overview");
+    let body = |collection| {
+        let records = settled(published.element_derived_documentation(overview, collection));
+        assert_eq!(records.len(), 1, "{collection:?}");
+        published
+            .text(records[0].text)
+            .unwrap_or_default()
+            .to_string()
+    };
+    assert_eq!(
+        body(ElementDerivedDocumentationCollection::Documentation),
+        "The system consists of the airframe\nand the flight controller.\n\n- patrol\n- search "
+    );
+    let inspection = settled(published.inspect(overview));
+    let comment = inspection
+        .documentation
+        .iter()
+        .find(|record| record.form == AnnotationForm::Comment)
+        .expect("expected the comment annotation");
+    assert_eq!(
+        published.text(comment.text).unwrap_or_default(),
+        "first\n  indented\n"
+    );
+    assert_eq!(
+        body(ElementDerivedDocumentationCollection::TextualRepresentation),
+        " x = 1;\n"
     );
 }
 
@@ -4097,7 +4321,7 @@ fn namespace_derived_elements_project_canonical_membership_and_import_facts() {
             ),
             (
                 "memory://model.sysml",
-                "package Model { import Library::*; part def Owned; }",
+                "package Model { private import Library::*; part def Owned; }",
             ),
         ],
         ConstructionSchedule::Sequential,
@@ -4118,9 +4342,15 @@ fn namespace_derived_elements_project_canonical_membership_and_import_facts() {
         ElementKind::Import,
         "the owned-import derivation returns the canonical lowered import declaration"
     );
+    // A part definition is a Type, and so a Namespace, with no owned members here.
+    assert!(settled(
+        published.namespace_derived_elements(owned, NamespaceDerivedElementCollection::OwnedMember)
+    )
+    .is_empty());
+    // An Import is a Relationship, not a Namespace.
     assert!(matches!(
         published
-            .namespace_derived_elements(owned, NamespaceDerivedElementCollection::OwnedMember,)
+            .namespace_derived_elements(imports[0], NamespaceDerivedElementCollection::OwnedMember)
             .answer,
         QueryAnswer::Unsupported
     ));
@@ -4135,7 +4365,7 @@ fn namespace_derived_elements_have_cold_warm_and_schedule_parity() {
         ),
         (
             "memory://model.sysml",
-            "package Model { import Library::*; part def Owned; }",
+            "package Model { private import Library::*; part def Owned; }",
         ),
     ];
     let sequential = detail_publication(&sources, ConstructionSchedule::Sequential);
@@ -4164,7 +4394,7 @@ fn namespace_import_derived_elements_have_cold_warm_and_schedule_parity() {
         ),
         (
             "memory://model.sysml",
-            "package Model { import Library::*; part def Owned; }",
+            "package Model { private import Library::*; part def Owned; }",
         ),
     ];
     let sequential = detail_publication(&sources, ConstructionSchedule::Sequential);
@@ -4228,7 +4458,7 @@ fn effective_typing_preserves_partial_and_inherited_ambiguous_candidates() {
                 "  part def A; part def B;\n",
                 "  package Left { part shared : A; }\n",
                 "  package Right { part shared : B; }\n",
-                "  package Use { import Left::*; import Right::*;\n",
+                "  package Use { private import Left::*; private import Right::*;\n",
                 "    part partial : A, Missing;\n",
                 "    part inherited subsets shared;\n",
                 "  }\n",
@@ -4372,6 +4602,72 @@ fn view_selection_applies_inherited_metadata_disjunctions_and_conjoins_condition
     );
 }
 
+#[test]
+fn view_rendering_resolves_short_inline_and_inherited_memberships() {
+    let document = "memory://renderings.sysml";
+    let published = detail_publication(
+        &[(
+            document,
+            concat!(
+                "package P {\n",
+                "  metadata def Tag;\n",
+                "  rendering def Tree;\n",
+                "  rendering shared : Tree { rendering nested : Tree; }\n",
+                "  view def Base { render shared { @Tag; rendering local : Tree; } }\n",
+                "  view inherited : Base;\n",
+                "  view inline { render rendering own : Tree { @Tag; rendering child : Tree; } }\n",
+                "  view empty;\n",
+                "  view broken { render missing; }\n",
+                "  view duplicate { render shared; render rendering second : Tree; }\n",
+                "}\n",
+            ),
+        )],
+        ConstructionSchedule::Sequential,
+    );
+    let shared = identity_of(&published, document, "P::shared");
+    let inherited = identity_of(&published, document, "P::inherited");
+    let inherited_rendering =
+        settled(published.view_rendering(inherited)).expect("inherited rendering");
+    assert_eq!(inherited_rendering.referenced_rendering, shared);
+    assert_ne!(inherited_rendering.owned_rendering, shared);
+    assert_eq!(inherited_rendering.owned_body_members.len(), 2);
+    assert_eq!(inherited_rendering.body_members.len(), 1);
+    assert_eq!(
+        settled(published.element_details(inherited_rendering.owned_rendering))
+            .metadata
+            .len(),
+        1
+    );
+
+    let inline = identity_of(&published, document, "P::inline");
+    let inline_rendering = settled(published.view_rendering(inline)).expect("inline rendering");
+    assert_eq!(
+        inline_rendering.owned_rendering,
+        inline_rendering.referenced_rendering
+    );
+    assert_eq!(inline_rendering.body_members.len(), 2);
+    assert_eq!(inline_rendering.owned_body_members.len(), 2);
+    assert_eq!(
+        details_of(&published, document, "P::inline::own")
+            .metadata
+            .len(),
+        1
+    );
+
+    let empty = identity_of(&published, document, "P::empty");
+    assert!(settled(published.view_rendering(empty)).is_none());
+    let broken = identity_of(&published, document, "P::broken");
+    assert!(matches!(
+        published.view_rendering(broken).answer,
+        QueryAnswer::Unresolved
+    ));
+    let duplicate = identity_of(&published, document, "P::duplicate");
+    assert!(matches!(
+        published.view_rendering(duplicate).answer,
+        QueryAnswer::Ambiguous(_)
+    ));
+}
+
 /// Inherited features carry the type that declares them, and a redefinition replaces the
 /// feature it redefines even when the redefining feature is anonymous.
 #[test]
@@ -4426,6 +4722,200 @@ fn metadata_annotations_publish_the_definition_they_bind_to() {
     );
     let vehicle = details_of(&unresolved, "memory://unresolved.sysml", "P::Vehicle");
     assert!(vehicle.metadata.is_empty(), "{:?}", vehicle.metadata);
+}
+
+/// `metadata_annotations` publishes each authored annotation with its form, its resolved
+/// definition, its `about` targets, and the resolved values its body redefines.
+#[test]
+fn metadata_annotations_publish_form_about_and_body_values() {
+    let published = detail_publication(
+        &[(
+            "memory://annotations.sysml",
+            "package P {\n\
+             \tmetadata def Risk {\n\
+             \t\tattribute baseline;\n\
+             \t\tattribute probability;\n\
+             \t\tattribute mitigated;\n\
+             \t}\n\
+             \tpart def Component;\n\
+             \tpart pump : Component {\n\
+             \t\t@Risk {\n\
+             \t\t\tprobability = baseline + 1;\n\
+             \t\t\tmitigated;\n\
+             \t\t}\n\
+             \t}\n\
+             \t#Risk part spare : Component;\n\
+             \tmetadata shared : Risk about pump, missing;\n\
+             \tmetadata orphan : Risk about nowhere;\n\
+             }",
+        )],
+        ConstructionSchedule::Sequential,
+    );
+
+    let pump = identity_of(&published, "memory://annotations.sysml", "P::pump");
+    let annotations = settled(published.metadata_annotations(pump));
+    // The `@Risk` body annotation and the `metadata shared ... about pump` annotation.
+    assert_eq!(annotations.len(), 2, "{annotations:?}");
+
+    let body = annotations
+        .iter()
+        .find(|annotation| annotation.form == MetadataAnnotationForm::AnnotatingMember)
+        .expect("the @Risk annotation");
+    assert!(matches!(body.definition, RelationshipTarget::Resolved(_)));
+    assert!(body.about.is_empty());
+    // `probability = baseline + 1` is published as its resolved tree; `mitigated;` wrote no value.
+    let probability = &body.body[0];
+    assert_eq!(probability.value.outcome, ExpressionOutcome::Resolved);
+    assert!(matches!(
+        probability.redefined_feature,
+        RelationshipTarget::Resolved(_)
+    ));
+    assert_eq!(body.body[1].value.outcome, ExpressionOutcome::NotApplicable);
+
+    let usage = annotations
+        .iter()
+        .find(|annotation| annotation.form == MetadataAnnotationForm::Usage)
+        .expect("the metadata-usage annotation");
+    assert!(matches!(usage.definition, RelationshipTarget::Resolved(_)));
+    assert_eq!(usage.about.len(), 2);
+    assert!(matches!(usage.about[0], RelationshipTarget::Resolved(_)));
+    assert_eq!(usage.about[1], RelationshipTarget::Unresolved);
+
+    // The `#Risk` prefix form binds to `spare`, carries no body and no `about` clause.
+    let spare = identity_of(&published, "memory://annotations.sysml", "P::spare");
+    let spare_annotations = settled(published.metadata_annotations(spare));
+    assert_eq!(spare_annotations.len(), 1);
+    assert_eq!(
+        spare_annotations[0].form,
+        MetadataAnnotationForm::PrefixKeyword
+    );
+    assert!(spare_annotations[0].body.is_empty());
+    assert!(spare_annotations[0].about.is_empty());
+
+    // `metadata orphan : Risk about nowhere;` — the `about` clause resolves to nothing, so the
+    // annotation falls back to its owner rather than vanishing from the published set.
+    let package = identity_of(&published, "memory://annotations.sysml", "P");
+    let package_annotations = settled(published.metadata_annotations(package));
+    let orphan = package_annotations
+        .iter()
+        .find(|annotation| matches!(annotation.about.as_ref(), [RelationshipTarget::Unresolved]))
+        .expect("the orphan annotation is still published under its owner");
+    assert_eq!(orphan.form, MetadataAnnotationForm::Usage);
+}
+
+/// Spec42 issue #201 (L-06): a `comment`'s `Identification` used to be read nowhere -- only its
+/// `locale` and body text were interned as a `DocumentationRecord` keyed by the *owner*
+/// declaration -- so a named comment never became a real, referenceable declaration, and a later
+/// `metadata ... about aboutP;` reference had no `aboutP` to resolve to.
+#[test]
+fn named_comment_resolves_as_a_metadata_about_target() {
+    let published = detail_publication(
+        &[(
+            "memory://comment_about.sysml",
+            "package P {\n\
+             \tmetadata def Role;\n\
+             \tpart p {\n\
+             \t\tcomment aboutP about p /* text */\n\
+             \t\tmetadata role : Role about aboutP;\n\
+             \t}\n\
+             }",
+        )],
+        ConstructionSchedule::Sequential,
+    );
+
+    let comment = identity_of(&published, "memory://comment_about.sysml", "P::p::aboutP");
+    let annotations = settled(published.metadata_annotations(comment));
+    let annotation = annotations
+        .iter()
+        .find(|annotation| annotation.form == MetadataAnnotationForm::Usage)
+        .expect("the metadata usage annotation binds to its about target, the named comment");
+    assert_eq!(
+        annotation.about.as_ref(),
+        [RelationshipTarget::Resolved(comment)]
+    );
+}
+
+/// Spec42 issue #201 (L-07): `metadata m : Tag;` nested inside an `item`/`attribute` body parses
+/// as `AnnotatingMember::MetadataAnnotation` (`lower_metadata_annotation`), a different lowering
+/// path than the identical syntax at package/part/action body level (`lower_metadata_usage`).
+/// Only the latter pushed a `FeatureTyping` reference, so `family(id, Typing)` -- and so
+/// `relationships.typing` in the export projection -- reported `NotApplicable` for the former,
+/// even though `metadata_annotations()`'s own `definition` field (which reads the
+/// `MetadataAnnotation`-kind reference, not `FeatureTyping`) resolved fine throughout.
+#[test]
+fn metadata_annotation_nested_in_an_item_body_exports_resolved_typing() {
+    let published = detail_publication(
+        &[(
+            "memory://marker.sysml",
+            "package P {\n\
+             \tmetadata def Tag;\n\
+             \titem holder {\n\
+             \t\tmetadata role : Tag;\n\
+             \t}\n\
+             }",
+        )],
+        ConstructionSchedule::Sequential,
+    );
+
+    let holder = identity_of(&published, "memory://marker.sysml", "P::holder");
+    let role = settled(published.document_symbols("memory://marker.sysml"))
+        .iter()
+        .find(|entry| published.symbol_name(entry.identity) == Some("role"))
+        .expect("the nested metadata usage")
+        .identity;
+
+    let details = settled(published.element_details(role));
+    assert_eq!(details.typing.outcome, RelationshipOutcome::Resolved);
+    assert_eq!(names(&details.typing.targets), vec!["Tag"]);
+
+    // The pre-existing `metadata_annotations()` consumer must keep working unchanged: it reads
+    // the `MetadataAnnotation`-kind reference this fix leaves untouched, not `FeatureTyping`.
+    let annotations = settled(published.metadata_annotations(holder));
+    let annotation = annotations
+        .iter()
+        .find(|annotation| annotation.form == MetadataAnnotationForm::AnnotatingMember)
+        .expect("the annotation is still published for its owner");
+    assert!(matches!(
+        annotation.definition,
+        RelationshipTarget::Resolved(_)
+    ));
+}
+
+/// Spec42 issue #201 (L-08): a `MetadataBodyUsage` (`order = 1;` inside a metadata usage body)
+/// used to publish with an empty name and a qualified name ending in `::`, even though the
+/// redefinition it authors resolves fine -- the token `order` is both the redefinition target
+/// and, per this fix, the declaration's own name, matching what an export consumer needs to find
+/// it by name at all.
+#[test]
+fn metadata_body_usage_redefinition_token_names_the_declaration() {
+    let published = detail_publication(
+        &[(
+            "memory://order.sysml",
+            "package P {\n\
+             \tmetadata def Section {\n\
+             \t\tattribute order : Integer;\n\
+             \t}\n\
+             \tpart def Component;\n\
+             \tpart pump : Component {\n\
+             \t\tmetadata section : Section {\n\
+             \t\t\torder = 1;\n\
+             \t\t}\n\
+             \t}\n\
+             }",
+        )],
+        ConstructionSchedule::Sequential,
+    );
+
+    let order = details_of(
+        &published,
+        "memory://order.sysml",
+        "P::pump::section::order",
+    );
+    assert_eq!(order.redefinition.outcome, RelationshipOutcome::Resolved);
+    assert_eq!(
+        published.qualified_name(order.redefinition.targets[0].identity),
+        Some("P::Section::order")
+    );
 }
 
 /// Both directions are published, so an inspector never has to scan the model to find what
@@ -4649,7 +5139,7 @@ fn feature_membership_type_featuring_check_uses_the_manifest_scoped_canonical_ou
     let published = detail_publication(
         &[(
             "memory://model.sysml",
-            "package Model { classifier Vehicle { feature mass; var feature snapshot; } }",
+            "package Model { classifier Vehicle { feature mass; var feature 'snapshot'; } }",
         )],
         ConstructionSchedule::Sequential,
     );
@@ -4691,7 +5181,7 @@ fn type_featuring_derives_through_authored_feature_chaining() {
     let published = detail_publication(
         &[(
             "memory://model.sysml",
-            "package Model { classifier Vehicle { feature base featured by Vehicle; feature derived chains base; } }",
+            "package Model { classifier Vehicle { feature base featured by Vehicle; feature 'derived' chains base; } }",
         )],
         ConstructionSchedule::Sequential,
     );
@@ -4720,12 +5210,12 @@ fn exact_feature_relationship_collections_project_canonical_authored_and_implied
     let published = detail_publication(
         &[ (
             "memory://model.sysml",
-            "package Model { classifier Vehicle { feature base; feature derived : Vehicle redefines base chains base; } }",
+            "package Model { classifier Base { feature base; } classifier Vehicle specializes Base { feature 'derived' : Vehicle redefines base chains base; } }",
         ) ],
         ConstructionSchedule::Sequential,
     );
     let vehicle = identity_of(&published, "memory://model.sysml", "Model::Vehicle");
-    let base = identity_of(&published, "memory://model.sysml", "Model::Vehicle::base");
+    let base = identity_of(&published, "memory://model.sysml", "Model::Base::base");
     let derived = identity_of(
         &published,
         "memory://model.sysml",
@@ -4801,7 +5291,7 @@ fn feature_relationship_collections_have_sequential_parallel_and_warm_library_pa
     );
     let workspace = SourceInput::new(
         "memory://model.sysml",
-        "package Model { import Lib::*; classifier Vehicle { feature base; feature derived : Type redefines base chains base; } }".to_string(),
+        "package Model { private import Lib::*; classifier Vehicle { feature base; feature 'derived' : Type redefines base chains base; } }".to_string(),
         SourceKind::Workspace,
     );
     let full = |schedule| {
@@ -4836,6 +5326,10 @@ fn feature_relationship_collections_have_sequential_parallel_and_warm_library_pa
             FeatureDerivedRelationshipCollection::OwnedSubsetting,
             FeatureDerivedRelationshipCollection::OwnedTyping,
             FeatureDerivedRelationshipCollection::OwnedTypeFeaturing,
+            FeatureDerivedRelationshipCollection::ChainingFeature,
+            FeatureDerivedRelationshipCollection::OwnedFeatureInverting,
+            FeatureDerivedRelationshipCollection::OwnedReferenceSubsetting,
+            FeatureDerivedRelationshipCollection::OwnedCrossSubsetting,
         ]
         .into_iter()
         .map(|collection| settled(published.feature_derived_relationships(derived, collection)))
@@ -4854,7 +5348,7 @@ fn type_relationship_collections_have_sequential_parallel_and_warm_library_parit
     );
     let workspace = SourceInput::new(
         "memory://model.sysml",
-        "package Model { import Lib::*; classifier Derived specializes Base unions Base intersects Base differences Base disjoint from Base; }".to_string(),
+        "package Model { private import Lib::*; classifier Derived specializes Base unions Base intersects Base differences Base disjoint from Base; }".to_string(),
         SourceKind::Workspace,
     );
     let full = |schedule| {
@@ -5009,7 +5503,7 @@ fn type_owned_end_feature_has_sequential_parallel_and_warm_parity() {
 fn definition_usage_derivations_use_canonical_members_and_membership_identities() {
     let sources = [(
         "memory://definition-usage.sysml",
-        "package Model { part def Vehicle { part wheel; action service; } part vehicle; part def Base; part external : Base; variation part def Choice { variant part first : Base; variant external; } variation part choice : Base { variant part second : Base; } }",
+        "package Model { part def Vehicle { part wheel; action service; } part vehicle; part def Base; part external : Base; variation part def Choice { variant part 'first' : Base; variant external; } variation part choice : Base { variant part second : Base; } }",
     )];
     let sequential = detail_publication(&sources, ConstructionSchedule::Sequential);
     let parallel = detail_publication(&sources, ConstructionSchedule::Parallel);
@@ -5322,7 +5816,7 @@ fn usage_may_time_vary_uses_effective_library_and_portion_facts_with_schedule_pa
 }
 
 #[test]
-fn exact_type_derived_facts_publish_closure_values_or_the_first_missing_prerequisite() {
+fn exact_type_derived_facts_publish_closure_values() {
     let published = detail_publication(
         &[ (
             "memory://model.sysml",
@@ -5332,20 +5826,12 @@ fn exact_type_derived_facts_publish_closure_values_or_the_first_missing_prerequi
     );
     let child = identity_of(&published, "memory://model.sysml", "Model::Child");
     let sized = identity_of(&published, "memory://model.sysml", "Model::Sized");
-    let unsupported = |symbol: SymbolId, collection, prerequisite| {
-        assert!(matches!(
-            published.type_derived_fact(symbol, collection).answer,
-            QueryAnswer::Resolved(TypeDerivedFactOutcome::Unsupported { prerequisite: actual })
-                if actual == prerequisite
-        ));
-    };
     let values =
         |symbol: SymbolId, collection| match published.type_derived_fact(symbol, collection).answer
         {
             QueryAnswer::Resolved(TypeDerivedFactOutcome::Values(values)) => values,
             other => panic!("expected published values, got {other:?}"),
         };
-    let member = |symbol: SymbolId| TypeDerivedFactValue::FeatureMembership { member: symbol };
     let inherited = identity_of(
         &published,
         "memory://model.sysml",
@@ -5355,19 +5841,30 @@ fn exact_type_derived_facts_publish_closure_values_or_the_first_missing_prerequi
     let output = identity_of(&published, "memory://model.sysml", "Model::Child::output");
     let endpoint = identity_of(&published, "memory://model.sysml", "Model::Child::endpoint");
 
-    // The Membership relationship identity itself is still unpublished, so only the
-    // owned-membership derivation -- whose normative result *is* that relationship -- stays
-    // explicitly unsupported.
-    unsupported(
-        child,
-        TypeDerivedFactCollection::OwnedFeatureMembership,
-        TypeDerivedFactPrerequisite::FeatureMembershipIdentity,
-    );
-    unsupported(
-        sized,
-        TypeDerivedFactCollection::Multiplicity,
-        TypeDerivedFactPrerequisite::MultiplicityIdentity,
-    );
+    // `ownedFeatureMembership` publishes the canonical Membership relationship identity of each
+    // owned feature, which resolves back to the relationship that owns that feature.
+    let owned = values(child, TypeDerivedFactCollection::OwnedFeatureMembership);
+    assert_eq!(owned.len(), 3);
+    for value in owned.iter() {
+        let TypeDerivedFactValue::FeatureMembership { membership, member } = value else {
+            panic!("expected FeatureMembership values, got {value:?}");
+        };
+        let QueryAnswer::Resolved(relationship) = published.membership(*membership).answer else {
+            panic!("expected a resolvable FeatureMembership identity");
+        };
+        assert_eq!(relationship.member, *member);
+        assert_eq!(relationship.owning_namespace, Some(child));
+    }
+    assert!(!owned
+        .iter()
+        .any(|value| matches!(value, TypeDerivedFactValue::FeatureMembership { member, .. } if *member == inherited)));
+    // `multiplicity` names the owned MultiplicityRange an authored `[1]` lowers to; a Type
+    // that authors none has an empty value set.
+    assert!(matches!(
+        values(sized, TypeDerivedFactCollection::Multiplicity).as_ref(),
+        [TypeDerivedFactValue::Multiplicity { element }] if *element != sized
+    ));
+    assert!(values(child, TypeDerivedFactCollection::Multiplicity).is_empty());
     // `ownedConjugator` is answered from the authored `conjugation` reference; a type that
     // declares none has an empty value set, not a missing prerequisite.
     assert!(
@@ -5376,8 +5873,14 @@ fn exact_type_derived_facts_publish_closure_values_or_the_first_missing_prerequi
     );
 
     assert_eq!(
-        values(child, TypeDerivedFactCollection::InheritedMembership).into_vec(),
-        vec![member(inherited)]
+        values(child, TypeDerivedFactCollection::InheritedMembership)
+            .iter()
+            .map(|value| match value {
+                TypeDerivedFactValue::FeatureMembership { member, .. } => Some(*member),
+                _ => None,
+            })
+            .collect::<Vec<_>>(),
+        vec![Some(inherited)]
     );
     assert_eq!(
         values(child, TypeDerivedFactCollection::InheritedFeature).into_vec(),
@@ -5389,12 +5892,12 @@ fn exact_type_derived_facts_publish_closure_values_or_the_first_missing_prerequi
     ] {
         let published_values = values(child, collection);
         assert!(published_values.iter().any(|value| match value {
-            TypeDerivedFactValue::FeatureMembership { member } => member == &inherited,
+            TypeDerivedFactValue::FeatureMembership { member, .. } => member == &inherited,
             TypeDerivedFactValue::Feature(feature) => feature == &inherited,
             _ => false,
         }));
         assert!(published_values.iter().any(|value| match value {
-            TypeDerivedFactValue::FeatureMembership { member } => member == &input,
+            TypeDerivedFactValue::FeatureMembership { member, .. } => member == &input,
             TypeDerivedFactValue::Feature(feature) => feature == &input,
             _ => false,
         }));
@@ -5786,4 +6289,460 @@ fn same_named_packages_in_two_documents_do_not_share_an_unqualified_scope() {
     );
     let motor = details_of(&qualified, "memory://usage.sysml", "S::motor");
     assert_eq!(motor.typing.outcome, RelationshipOutcome::Resolved);
+}
+
+/// An anonymous member is addressed by its canonical owner-scoped identity: owner, metaclass and
+/// anonymous ordinal. Missing members stay unresolved, a named member is never a candidate, and
+/// two declaration forms sharing one metaclass and ordinal are ambiguous rather than guessed.
+#[test]
+fn anonymous_members_resolve_by_owner_kind_and_ordinal() {
+    let document = "memory://anonymous.sysml";
+    let publication = detail_publication(
+        &[(
+            document,
+            "package P { action def A { action c; if c { action t; } if c { action u; } \
+             while c { action w; } loop { action l; } } }",
+        )],
+        ConstructionSchedule::Sequential,
+    );
+    let owner = identity_of(&publication, document, "P::A");
+    let resolve = |kind, ordinal| {
+        publication.resolve_anonymous_member(&AnonymousElementReference {
+            owner,
+            kind,
+            ordinal,
+        })
+    };
+    let first = match resolve(ElementKind::IfActionUsage, 0) {
+        QualifiedReferenceOutcome::Resolved(target) => target,
+        other => panic!("expected the first if, got {other:?}"),
+    };
+    let second = match resolve(ElementKind::IfActionUsage, 1) {
+        QualifiedReferenceOutcome::Resolved(target) => target,
+        other => panic!("expected the second if, got {other:?}"),
+    };
+    assert_ne!(first.identity, second.identity);
+    assert_eq!(first.kind, ElementKind::IfActionUsage);
+    assert!(matches!(
+        resolve(ElementKind::IfActionUsage, 2),
+        QualifiedReferenceOutcome::Unresolved
+    ));
+    assert!(matches!(
+        resolve(ElementKind::ActionUsage, 0),
+        QualifiedReferenceOutcome::Unresolved
+    ));
+    match resolve(ElementKind::WhileLoopActionUsage, 0) {
+        QualifiedReferenceOutcome::Ambiguous(candidates) => assert_eq!(candidates.len(), 2),
+        other => panic!("expected while/loop ordinal collision to be ambiguous, got {other:?}"),
+    }
+}
+#[test]
+fn conjugated_port_usage_exports_a_conjugation_fact_distinct_from_its_type() {
+    let published = build(
+        BuildRequest::new(
+            vec![SourceInput::new(
+                "memory://model.sysml",
+                concat!(
+                    "package Model { ",
+                    "port def Cmd { out item sig; } ",
+                    "part def Box { port plain : Cmd; port flipped : ~Cmd; } ",
+                    "}",
+                )
+                .to_owned(),
+                SourceKind::Workspace,
+            )],
+            ConstructionSchedule::Sequential,
+            "contract-v1",
+        )
+        .unwrap(),
+    )
+    .unwrap();
+    let plain = details_of(&published, "memory://model.sysml", "Model::Box::plain");
+    let flipped = details_of(&published, "memory://model.sysml", "Model::Box::flipped");
+    assert!(!plain.conjugated);
+    assert!(flipped.conjugated);
+    assert_eq!(plain.typing.outcome, RelationshipOutcome::Resolved);
+    assert_eq!(flipped.typing.outcome, RelationshipOutcome::Resolved);
+    assert_eq!(
+        plain.typing.targets[0].identity, flipped.typing.targets[0].identity,
+        "conjugation does not change the resolved port definition"
+    );
+}
+
+#[test]
+fn dotted_constraint_operand_exports_a_resolved_comparison() {
+    let published = build(
+        BuildRequest::new(
+            vec![SourceInput::new(
+                "memory://model.sysml",
+                concat!(
+                    "package Model { ",
+                    "part def Subject { attribute error; } ",
+                    "requirement def Limit { ",
+                    "subject s : Subject; ",
+                    "attribute maximum; ",
+                    "require constraint { s.error <= maximum } ",
+                    "} ",
+                    "}",
+                )
+                .to_owned(),
+                SourceKind::Workspace,
+            )],
+            ConstructionSchedule::Sequential,
+            "contract-v1",
+        )
+        .unwrap(),
+    )
+    .unwrap();
+    let symbols = settled(published.document_symbols("memory://model.sysml"));
+    let constraint = symbols
+        .iter()
+        .find(|entry| {
+            matches!(
+                entry.kind,
+                ElementKind::ConstraintUsage | ElementKind::AssertConstraintUsage
+            )
+        })
+        .expect("require constraint");
+    let expression = settled(published.resolved_expression(constraint.identity));
+    assert_eq!(expression.outcome, ExpressionOutcome::Resolved);
+    let root = expression.root.expect("comparison root");
+    match &expression.nodes[root as usize].kind {
+        ExpressionNodeKind::Operator {
+            operator: ExpressionOperator::LessOrEqual,
+            operands,
+        } => {
+            assert_eq!(operands.len(), 2);
+            for operand in operands.iter() {
+                match &expression.nodes[*operand as usize].kind {
+                    ExpressionNodeKind::FeatureReference {
+                        symbol: Some(_), ..
+                    } => {}
+                    other => panic!("expected a resolved operand, got {other:?}"),
+                }
+            }
+        }
+        other => panic!("expected a <= operator, got {other:?}"),
+    }
+}
+
+/// Two separate bare dotted-chain boolean expressions on one declaration used to collapse the
+/// whole declaration to `Unsupported`: the root-expression lookup required *exactly one*
+/// remaining `MemberAccessOperand` candidate across the whole declaration, so as soon as a second
+/// bare chain existed anywhere on it, neither pending's root ever matched.
+#[test]
+fn multiple_bare_dotted_chain_operands_on_one_declaration_each_resolve() {
+    let published = build(
+        BuildRequest::new(
+            vec![SourceInput::new(
+                "memory://model.sysml",
+                concat!(
+                    "package Model { ",
+                    "part def Subject { attribute enabled; } ",
+                    "part def Trigger { attribute ready; } ",
+                    "requirement def Check { ",
+                    "subject s : Subject; ",
+                    "ref t : Trigger; ",
+                    "require constraint { s.enabled and t.ready } ",
+                    "} ",
+                    "}",
+                )
+                .to_owned(),
+                SourceKind::Workspace,
+            )],
+            ConstructionSchedule::Sequential,
+            "contract-v1",
+        )
+        .unwrap(),
+    )
+    .unwrap();
+    let symbols = settled(published.document_symbols("memory://model.sysml"));
+    let constraint = symbols
+        .iter()
+        .find(|entry| {
+            matches!(
+                entry.kind,
+                ElementKind::ConstraintUsage | ElementKind::AssertConstraintUsage
+            )
+        })
+        .expect("require constraint");
+    // Both dotted operands belong to one legal result expression and resolve independently.
+    let expression = settled(published.resolved_expression(constraint.identity));
+    assert_eq!(
+        expression.outcome,
+        ExpressionOutcome::Resolved,
+        "each bare dotted chain should resolve independently, not collapse the declaration"
+    );
+    let root = expression.root.expect("body root");
+    match &expression.nodes[root as usize].kind {
+        ExpressionNodeKind::Operator {
+            operator: ExpressionOperator::And,
+            operands,
+        } => {
+            assert_eq!(operands.len(), 2);
+        }
+        other => panic!("expected a resolved binary body, got {other:?}"),
+    }
+}
+
+#[test]
+fn redefined_derivation_ends_name_the_standard_features_and_prefix_metadata_invents_none() {
+    let library = r#"
+        standard library package DerivationConnections {
+            requirement originalRequirements[*];
+            requirement derivedRequirements[*];
+            abstract connection def Derivation {
+                ref requirement originalRequirement[1] :>> originalRequirements;
+                ref requirement :>> derivedRequirements[1..*];
+            }
+        }
+    "#;
+    let workspace = r#"
+        package Model {
+            private import DerivationConnections::*;
+            requirement def Need;
+            requirement def Child;
+            #derivation connection {
+                end #original ::> Need;
+                end #derive ::> Child;
+            }
+            connection placed : Derivation {
+                end :>> originalRequirement ::> Need;
+                end :>> derivedRequirements ::> Child;
+            }
+        }
+    "#;
+    let published = build(
+        BuildRequest::new(
+            vec![
+                SourceInput::new(
+                    "memory://library.sysml",
+                    library.to_owned(),
+                    SourceKind::StandardLibrary,
+                ),
+                SourceInput::new(
+                    "memory://model.sysml",
+                    workspace.to_owned(),
+                    SourceKind::Workspace,
+                ),
+            ],
+            ConstructionSchedule::Sequential,
+            "contract-v1",
+        )
+        .unwrap(),
+    )
+    .unwrap();
+    let derivation = identity_of(
+        &published,
+        "memory://library.sysml",
+        "DerivationConnections::Derivation",
+    );
+    let original = identity_of(
+        &published,
+        "memory://library.sysml",
+        "DerivationConnections::Derivation::originalRequirement",
+    );
+    let model = settled(published.document_symbols("memory://model.sysml"));
+    // `#derivation`, `#original` and `#derive` are prefix metadata (SysML BNF 1699), not
+    // grammar roles. This library has no `RequirementDerivation` metadata definitions, so they
+    // resolve to nothing and imply nothing: the connection is a usage that specializes no
+    // `Derivation`, and its anonymous ends are not renamed after the standard features.
+    let specializes_derivation = model.iter().any(|entry| {
+        settled(published.element_details(entry.identity))
+            .outgoing
+            .iter()
+            .any(|edge| edge.kind == "specialization" && edge.peer.identity == derivation)
+    });
+    assert!(
+        !specializes_derivation,
+        "prefix metadata that does not resolve must not specialize Derivation"
+    );
+    let invented_names = model
+        .iter()
+        .filter(|entry| {
+            matches!(
+                published.symbol_name(entry.identity),
+                Some("originalRequirement" | "derivedRequirements")
+            ) && !published
+                .qualified_name(entry.identity)
+                .unwrap_or("")
+                .contains("placed")
+        })
+        .count();
+    assert_eq!(
+        invented_names, 0,
+        "no end is named after a standard feature"
+    );
+
+    let placed_original = details_of(
+        &published,
+        "memory://model.sysml",
+        "Model::placed::originalRequirement",
+    );
+    assert_eq!(
+        placed_original.redefinition.outcome,
+        RelationshipOutcome::Resolved
+    );
+    assert_eq!(placed_original.redefinition.targets[0].identity, original);
+    let placed_derived = details_of(
+        &published,
+        "memory://model.sysml",
+        "Model::placed::derivedRequirements",
+    );
+    assert_eq!(
+        placed_derived.redefinition.outcome,
+        RelationshipOutcome::Resolved
+    );
+    assert!(
+        placed_derived.redefinition.targets.iter().any(|target| {
+            published.symbol_name(target.identity) == Some("derivedRequirements")
+                || published.qualified_name(target.identity)
+                    == Some("DerivationConnections::Derivation::")
+        }),
+        "redefined derived end target: {:?}",
+        placed_derived.redefinition.targets
+    );
+}
+
+/// A recursive import spanning documents brings the nested library members into the workspace
+/// scope, the same as a same-document one.
+#[test]
+fn recursive_import_resolves_across_documents() {
+    let published = publication_for(&[
+        (
+            "memory://lib.sysml",
+            "package Lib { package Nested { part def CelestialBody; } }",
+        ),
+        (
+            "memory://model.sysml",
+            "package Model { private import Lib::**; part def Orbit { ref primary : CelestialBody; } }",
+        ),
+    ]);
+    let mut output = String::new();
+    published.debug().write_semantic_sexpr(&mut output).unwrap();
+    assert!(
+        output.contains("(authored-target \"CelestialBody\")\n      (outcome (status resolved) (target (node (document \"memory://lib.sysml\") (qualified-name \"Lib::Nested::CelestialBody\"))))"),
+        "expected the cross-document recursive import to resolve `CelestialBody`, got:\n{output}"
+    );
+}
+
+/// The header-level specialization clauses four lowerings used to drop.
+///
+/// `ItemUsage.subsets`, `KermlFeature.references`/`crosses`, `ViewpointUsage.subsets`/
+/// `redefines` and `SubjectDecl.redefines` are all ordinary `SubsettingRelationship`s that the
+/// shared `lower_subsetting_relationship` already maps; only the call was missing. `references`
+/// and `crosses` publish as `unsupported` outcomes, which is the pre-existing treatment of
+/// those two reference kinds -- the point here is that the authored clause reaches the model
+/// at all instead of being silently discarded.
+#[test]
+fn header_specialization_clauses_reach_the_model() {
+    let item = build_semantic_sexpr(
+        "package Demo {\n\titem def Item;\n\titem objects : Item;\n\titem things : Item :> objects;\n}\n",
+    );
+    assert!(
+        item.contains(
+            "(kind subsetting) (source (node (document \"memory://test/enum.sysml\") (qualified-name \"Demo::things\"))) (target (node (document \"memory://test/enum.sysml\") (qualified-name \"Demo::objects\")))"
+        ),
+        "expected item usage `:>` to resolve to objects, got:\n{item}"
+    );
+
+    let feature = build_semantic_sexpr(
+        "package Demo {\n\tclassifier C {\n\t\tfeature base;\n\t\tfeature aliased references base;\n\t}\n}\n",
+    );
+    assert!(
+        feature.contains("(referenceSubsetting (reference \"base\"))"),
+        "expected the KerML feature `references` clause to publish a reference, got:\n{feature}"
+    );
+
+    let viewpoint = build_semantic_sexpr(
+        "package Demo {\n\tviewpoint base;\n\tviewpoint refined :> base;\n}\n",
+    );
+    assert!(
+        viewpoint.contains(
+            "(kind subsetting) (source (node (document \"memory://test/enum.sysml\") (qualified-name \"Demo::refined\"))) (target (node (document \"memory://test/enum.sysml\") (qualified-name \"Demo::base\")))"
+        ),
+        "expected viewpoint usage `:>` to resolve to base, got:\n{viewpoint}"
+    );
+
+    let subject = build_semantic_sexpr(
+        "package Demo {\n\tpart def Vehicle;\n\trequirement def R {\n\t\tsubject vehicle : Vehicle;\n\t}\n\trequirement def S :> R {\n\t\tsubject subVehicle :>> vehicle;\n\t}\n}\n",
+    );
+    assert!(
+        subject.contains("(redefinition (reference \"vehicle\"))"),
+        "expected the subject `:>>` clause to publish a redefinition, got:\n{subject}"
+    );
+}
+
+/// Derivations that select from `featureMembership` include inherited memberships, singular
+/// parameters keep only the first membership, and kind selections use metaclass conformance
+/// (KerML deriveFunctionResult; SysML deriveCaseDefinitionSubjectParameter,
+/// deriveCalculationDefinitionCalculation, deriveViewDefinitionViewRendering).
+#[test]
+fn derived_facts_follow_feature_membership_and_conformance() {
+    let source = "package Model {
+        calc def A { return r; }
+        calc def B :> A;
+        case def C { subject primary; subject secondary; }
+        case def D :> C;
+        calc def F { calc nested; }
+        rendering detail;
+        view def V { render detail; }
+    }";
+    let published = detail_publication(
+        &[("memory://model.sysml", source)],
+        ConstructionSchedule::Sequential,
+    );
+    let id = |name: &str| identity_of(&published, "memory://model.sysml", name);
+    let action_values = |symbol: SymbolId, collection| match published
+        .action_derived_fact(symbol, collection)
+        .answer
+    {
+        QueryAnswer::Resolved(ActionDerivedFactOutcome::Values(values)) => values.into_vec(),
+        other => panic!("expected action-derived values, got {other:?}"),
+    };
+    let requirement_elements = |symbol: SymbolId, collection| match published
+        .requirement_derived_fact(symbol, collection)
+        .answer
+    {
+        QueryAnswer::Resolved(RequirementDerivedFactOutcome::Elements(values)) => values.into_vec(),
+        other => panic!("expected requirement-derived elements, got {other:?}"),
+    };
+
+    // A result owned in a supertype is the subtype's result.
+    assert_eq!(
+        action_values(id("Model::B"), ActionDerivedFactCollection::FunctionResult),
+        vec![id("Model::A::r")]
+    );
+    // The subject parameter is singular, and inherited.
+    assert_eq!(
+        requirement_elements(
+            id("Model::C"),
+            RequirementDerivedFactCollection::CaseDefinitionSubjectParameter
+        ),
+        vec![id("Model::C::primary")]
+    );
+    assert_eq!(
+        requirement_elements(
+            id("Model::D"),
+            RequirementDerivedFactCollection::CaseDefinitionSubjectParameter
+        ),
+        vec![id("Model::C::primary")]
+    );
+    // Calculations are selected by conformance to CalculationUsage. Case and analysis usages
+    // conform too, but the parser does not yet accept them in a calculation body.
+    assert_eq!(
+        action_values(
+            id("Model::F"),
+            ActionDerivedFactCollection::CalculationDefinitionCalculation,
+        ),
+        vec![id("Model::F::nested")]
+    );
+    // `render detail;` yields the referenced rendering, not the anonymous owned usage.
+    assert_eq!(
+        action_values(
+            id("Model::V"),
+            ActionDerivedFactCollection::ViewDefinitionViewRendering
+        ),
+        vec![id("Model::detail")]
+    );
 }

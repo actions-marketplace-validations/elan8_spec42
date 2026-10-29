@@ -28,6 +28,8 @@
 use crate::lower::facts::AnnotationForm;
 use crate::lower::facts::AuthoredReference;
 use crate::lower::facts::MultiplicityBound;
+use crate::lower::facts::ParameterDirection;
+use crate::lower::facts::TransitionFeatureRole;
 use crate::model::render as writer;
 use crate::model::resolver::SemanticModel;
 use crate::model::span::document_range;
@@ -49,7 +51,7 @@ use crate::TextRange;
 
 use std::collections::{BTreeMap, BTreeSet};
 
-use crate::check::conformance::{Family, Role};
+use crate::check::conformance::Family;
 use crate::evaluation::{EvaluatedScalar, EvaluationState};
 
 /// The note attached to the earlier member a duplicate name collides with.
@@ -68,6 +70,10 @@ pub(crate) const RELATED_OTHER_END: &str = "Other end declared here.";
 /// `view def` is never in this list and is never reported: the rule is about reaching for a library
 /// view definition the specification does not define.
 pub(crate) const STANDARD_VIEW_DEFINITIONS: &[&str] = &[
+    // The abstract base definition from the normative Systems Library is the type of the
+    // `views` base feature. It is not a graphical notation from Table 34, but typing a view by it
+    // is necessarily valid and must not be reported as a non-standard user view definition.
+    "View",
     "ActionFlowView",
     "BrowserView",
     "GeneralView",
@@ -78,17 +84,6 @@ pub(crate) const STANDARD_VIEW_DEFINITIONS: &[&str] = &[
     "StateTransitionView",
 ];
 
-/// Whether a declaration kind is a package-like namespace.
-///
-/// The narrow sense: what a qualified name addresses as a scope of its own. Used by the
-/// name-collision rule, where a package's definitions share one identity domain.
-pub(crate) fn is_namespace_kind(kind: DeclarationKind) -> bool {
-    matches!(
-        kind,
-        DeclarationKind::Namespace | DeclarationKind::Package | DeclarationKind::LibraryPackage
-    )
-}
-
 /// Whether a declaration kind states a state, either half of the family.
 ///
 /// The two authored halves only. A final pseudo-state is a state a transition may name but not a
@@ -96,7 +91,9 @@ pub(crate) fn is_namespace_kind(kind: DeclarationKind) -> bool {
 pub(crate) fn is_state_kind(kind: DeclarationKind) -> bool {
     matches!(
         kind,
-        DeclarationKind::StateDefinition | DeclarationKind::StateUsage
+        DeclarationKind::StateDefinition
+            | DeclarationKind::StateUsage
+            | DeclarationKind::ExhibitStateUsage
     )
 }
 
@@ -141,6 +138,7 @@ pub(crate) fn is_requirement_kind(kind: DeclarationKind) -> bool {
         DeclarationKind::RequirementDefinition
             | DeclarationKind::RequirementUsage
             | DeclarationKind::VerifyRequirement
+            | DeclarationKind::ObjectiveRequirement
     )
 }
 
@@ -171,6 +169,7 @@ pub(crate) fn supports_subject_role(kind: DeclarationKind) -> bool {
         kind,
         DeclarationKind::RequirementDefinition
             | DeclarationKind::RequirementUsage
+            | DeclarationKind::ObjectiveRequirement
             | DeclarationKind::ConcernDefinition
             | DeclarationKind::ConcernUsage
             | DeclarationKind::CaseDefinition
@@ -240,30 +239,14 @@ pub(crate) fn is_action_body_kind(kind: DeclarationKind) -> bool {
     )
 }
 
-/// Whether two declarations owned by one namespace must be distinguishable by name.
-///
-/// KerML requires member names to be unique within a namespace, but the publication models kinds
-/// the parser keeps apart -- a `doc`, an anonymous transition, a synthesized binding -- that never
-/// competed for a name. Two members of the same kind always collide; two definitions collide inside
-/// a package, where a definition is the thing a qualified name addresses.
-pub(crate) fn names_must_be_distinguishable(
-    owner: DeclarationKind,
-    left: (Family, Role),
-    right: (Family, Role),
-) -> bool {
-    left == right
-        || (is_namespace_kind(owner) && left.1 == Role::Definition && right.1 == Role::Definition)
-}
-
 impl<D> SemanticModel<D> {
-    /// Appends every host-reported conformance diagnostic authored in `document`.
+    /// Appends host-reported checks other than the pass-scoped namespace identity check.
     pub(crate) fn collect_host_conformance(
         &self,
         document: DocumentIdx,
         declared: &[DeclarationId],
         diagnostics: &mut Vec<Diagnostic>,
     ) -> Result<(), ResolutionError> {
-        self.collect_namespace_identity(declared, diagnostics)?;
         self.collect_connection_structure(declared, diagnostics)?;
         self.collect_behavior_structure(document, declared, diagnostics)?;
         self.collect_requirement_case_structure(declared, diagnostics)?;
@@ -285,7 +268,7 @@ impl<D> SemanticModel<D> {
     pub(crate) fn display_name(&self, id: DeclarationId) -> &str {
         self.storage
             .declaration(id)
-            .and_then(|declaration| declaration.name)
+            .and_then(|declaration| declaration.name.resolved())
             .and_then(|name| self.storage.symbol(name))
             .unwrap_or("<anonymous>")
     }
@@ -402,32 +385,44 @@ impl<D> SemanticModel<D> {
     // Namespace identity
     // ------------------------------------------------------------------------------------------
 
-    /// Reports a namespace that declares two members resolution cannot tell apart.
+    /// Reports an owned membership of a Namespace that is indistinguishable from another of its
+    /// memberships, owned or inherited.
     ///
-    /// Reported at the later member, with the first as related information, so the diagnostic
-    /// points at the declaration that introduced the collision. Both the authored name and the
-    /// authored short name are identities resolution addresses a member by, so both collide.
+    /// Canonical effective names and short names identify memberships (`memberName` is the member's
+    /// effective name, so `perform drive;` beside an owned `action drive` collides, as KerML
+    /// `isDistinguishableFrom` specifies), and metaclass conformance decides whether a same-named
+    /// pair is distinguishable. A pair of two inherited memberships is not reported: it is not
+    /// introduced by this Namespace, it repeats on every subtype and usage below the one that
+    /// introduced it, and inside the standard library it would blame user declarations for
+    /// library structure. Each colliding pair is reported once, however many of its names and
+    /// short names coincide, and always on the owned member, where the author can fix it.
     pub(crate) fn collect_namespace_identity(
-        &self,
+        queries: &mut crate::model::query::InheritedFeatureQueries<'_, D>,
         declared: &[DeclarationId],
         diagnostics: &mut Vec<Diagnostic>,
     ) -> Result<(), ResolutionError> {
+        let model = queries.model();
         for owner in declared.iter().copied() {
-            let owner_kind = self.kind_of(owner).ok_or(ResolutionError::InvalidStorage)?;
-            if !matches!(
-                owner_kind,
-                DeclarationKind::Namespace
-                    | DeclarationKind::Package
-                    | DeclarationKind::LibraryPackage
-                    | DeclarationKind::PartDefinition
-                    | DeclarationKind::RequirementDefinition
-                    | DeclarationKind::UseCaseDefinition
-            ) {
+            let owner_kind = model
+                .kind_of(owner)
+                .ok_or(ResolutionError::InvalidStorage)?;
+            if !crate::model::element_kind::element_kind(owner_kind)
+                .conforms_to(sysml_contract::ElementKind::Namespace)
+            {
                 continue;
             }
+            // A usage whose grammar parameters lowering does not mint (a loop's body action, an
+            // `if`'s clauses, ...) lacks the implicit redefinitions that would hide inherited
+            // parameters, so its membership set is not a fact to judge: `perform body;` inside
+            // `while` would collide with the inherited `WhileLoopAction::body` it should replace.
+            if crate::resolve::parameter_positions::has_unlowered_grammar_parameters(owner_kind) {
+                continue;
+            }
+            let owned = model.child_declarations(owner);
+            let inherited = queries.members(owner);
             let mut by_identifier: BTreeMap<&str, Vec<DeclarationId>> = BTreeMap::new();
-            for child in self.child_declarations(owner) {
-                let declaration = self
+            for child in owned.iter().chain(inherited.iter()) {
+                let declaration = model
                     .storage
                     .declaration(*child)
                     .ok_or(ResolutionError::InvalidStorage)?;
@@ -437,16 +432,19 @@ impl<D> SemanticModel<D> {
                 ) {
                     continue;
                 }
-                for name in [
-                    declaration.name,
-                    self.storage
-                        .declaration_facts(*child)
-                        .and_then(|facts| facts.short_name),
-                ]
-                .into_iter()
-                .flatten()
-                .filter_map(|name| self.storage.symbol(name))
-                .filter(|name| !name.trim().is_empty())
+                let Some(identification) = model.resolution.effective_names.get(child.index())
+                else {
+                    continue;
+                };
+                for name in [identification.name, identification.short_name]
+                    .into_iter()
+                    .filter_map(|name| match name {
+                        crate::resolve::results::EffectiveNameOutcome::Resolved(name) => Some(name),
+                        crate::resolve::results::EffectiveNameOutcome::Absent
+                        | crate::resolve::results::EffectiveNameOutcome::Unresolved
+                        | crate::resolve::results::EffectiveNameOutcome::NonConverged => None,
+                    })
+                    .filter_map(|name| model.storage.symbol(name))
                 {
                     let entry = by_identifier.entry(name).or_default();
                     if !entry.contains(child) {
@@ -454,45 +452,113 @@ impl<D> SemanticModel<D> {
                     }
                 }
             }
+            let document = model
+                .storage
+                .declaration(owner)
+                .ok_or(ResolutionError::InvalidStorage)?
+                .document;
+            let owned_set: BTreeSet<DeclarationId> = owned.iter().copied().collect();
+            let mut reported = BTreeSet::new();
+            let mut value_pairs = BTreeSet::new();
             for (name, mut members) in by_identifier {
                 if members.len() < 2 {
                     continue;
                 }
-                members.sort_by_key(|member| self.declaration_range(*member));
-                let Some((first, duplicate)) = self.first_collision(owner_kind, &members) else {
+                // Inherited memberships precede owned ones so an owned collision is reported
+                // on the later owned member, regardless of either source's declaration order.
+                members.sort_by_key(|member| {
+                    (
+                        owned_set.contains(member),
+                        model.storage.declaration(*member).map(|declaration| {
+                            writer::document_identity(model, declaration.document)
+                        }),
+                        model.declaration_range(*member),
+                    )
+                });
+                let Some((first, duplicate)) = model.first_owned_collision(&members, &owned_set)
+                else {
                     continue;
                 };
-                let mut diagnostic = self.declaration_message_diagnostic(
-                    duplicate,
-                    DiagnosticCode::DuplicateNamespaceMember,
-                    DiagnosticSeverity::Warning,
-                    Some(format!(
-                        "'{}' declares '{name}' more than once; member names must be unique \
-                         within a namespace.",
-                        self.display_name(owner)
-                    )),
-                )?;
-                diagnostic.related =
-                    Box::from([self.related_declaration(first, RELATED_FIRST_DECLARATION)?]);
-                diagnostics.push(diagnostic);
+                if reported.insert((first, duplicate)) {
+                    let mut diagnostic = model.declaration_message_diagnostic(
+                        duplicate,
+                        DiagnosticCode::DuplicateNamespaceMember,
+                        DiagnosticSeverity::Warning,
+                        Some(format!(
+                            "'{}' has indistinguishable memberships named '{name}'.",
+                            model.display_name(owner)
+                        )),
+                    )?;
+                    diagnostic.related =
+                        Box::from([model.related_declaration(first, RELATED_FIRST_DECLARATION)?]);
+                    diagnostics.push(diagnostic);
+                }
+                for local in members
+                    .iter()
+                    .copied()
+                    .filter(|member| owned_set.contains(member))
+                {
+                    for ancestor in members
+                        .iter()
+                        .copied()
+                        .filter(|member| !owned_set.contains(member))
+                    {
+                        if model.first_collision(&[ancestor, local]).is_some()
+                            && value_pairs.insert((local, ancestor))
+                        {
+                            model.collect_inherited_value_pair(
+                                local,
+                                ancestor,
+                                document,
+                                diagnostics,
+                            )?;
+                        }
+                    }
+                }
             }
         }
         Ok(())
     }
 
+    /// The first pair, in `members` order, of an owned member and an earlier member it cannot be
+    /// distinguished from.
+    fn first_owned_collision(
+        &self,
+        members: &[DeclarationId],
+        owned: &BTreeSet<DeclarationId>,
+    ) -> Option<(DeclarationId, DeclarationId)> {
+        members
+            .iter()
+            .enumerate()
+            .skip(1)
+            .filter(|(_, member)| owned.contains(member))
+            .find_map(|(index, member)| {
+                members[..index]
+                    .iter()
+                    .find(|earlier| self.first_collision(&[**earlier, *member]).is_some())
+                    .map(|earlier| (*earlier, *member))
+            })
+    }
+
     /// The first pair of same-named members whose kinds must be distinguishable.
     pub(crate) fn first_collision(
         &self,
-        owner: DeclarationKind,
         members: &[DeclarationId],
     ) -> Option<(DeclarationId, DeclarationId)> {
         for (index, member) in members.iter().enumerate().skip(1) {
-            let later = self.declaration_family(*member)?;
             for earlier_id in &members[..index] {
-                let Some(earlier) = self.declaration_family(*earlier_id) else {
+                let (Some(earlier), Some(later)) =
+                    (self.kind_of(*earlier_id), self.kind_of(*member))
+                else {
                     continue;
                 };
-                if names_must_be_distinguishable(owner, earlier, later) {
+                let (earlier, later) = (
+                    crate::model::element_kind::element_kind(earlier),
+                    crate::model::element_kind::element_kind(later),
+                );
+                // KerML Membership::isDistinguishableFrom compares the memberElement
+                // metaclasses, including conformance across SysML families.
+                if earlier.conforms_to(later) || later.conforms_to(earlier) {
                     return Some((*earlier_id, *member));
                 }
             }
@@ -504,13 +570,12 @@ impl<D> SemanticModel<D> {
     // Connection conformance
     // ------------------------------------------------------------------------------------------
 
-    /// Reports connectors whose ends are not connectable, and ports that connect to nothing.
+    /// Reports connectors whose ends are not connectable.
     pub(crate) fn collect_connection_structure(
         &self,
         declared: &[DeclarationId],
         diagnostics: &mut Vec<Diagnostic>,
     ) -> Result<(), ResolutionError> {
-        let mut connected_ends: BTreeSet<DeclarationId> = BTreeSet::new();
         for id in declared.iter().copied() {
             let declaration = self
                 .storage
@@ -526,7 +591,6 @@ impl<D> SemanticModel<D> {
                     continue;
                 };
                 settled.push((target, *reference));
-                connected_ends.insert(target);
             }
             if settled.len() < 2 {
                 // One settled end states no relationship to judge; the other end is already its
@@ -628,67 +692,8 @@ impl<D> SemanticModel<D> {
             }
         }
 
-        self.collect_unconnected_ports(declared, &connected_ends, diagnostics)?;
         self.collect_interface_ends(declared, diagnostics)?;
         self.collect_binding_connectors(declared, diagnostics)?;
-        Ok(())
-    }
-
-    /// Reports ports that no connector, flow or binding names.
-    ///
-    /// A port that redefines or subsets another states a refinement of a connected feature rather
-    /// than a new endpoint, so it is not reported: the feature it specializes carries the
-    /// connection.
-    pub(crate) fn collect_unconnected_ports(
-        &self,
-        declared: &[DeclarationId],
-        connected: &BTreeSet<DeclarationId>,
-        diagnostics: &mut Vec<Diagnostic>,
-    ) -> Result<(), ResolutionError> {
-        for id in declared.iter().copied() {
-            if self.kind_of(id) != Some(DeclarationKind::PortUsage) {
-                continue;
-            }
-            if connected.contains(&id) {
-                continue;
-            }
-            if !self
-                .authored_references(
-                    id,
-                    &[
-                        ReferenceKind::Redefinition,
-                        ReferenceKind::Subsetting,
-                        ReferenceKind::References,
-                    ],
-                )
-                .is_empty()
-            {
-                continue;
-            }
-            // A port named by any endpoint-bearing reference is connected, whatever the spelling.
-            if self.reverse_references.references(id).iter().any(|id| {
-                matches!(
-                    self.storage.references[id.index()].kind,
-                    ReferenceKind::ConnectorEnd
-                        | ReferenceKind::MemberAccessOperand
-                        | ReferenceKind::FlowSource
-                        | ReferenceKind::FlowTarget
-                        | ReferenceKind::BindSource
-                        | ReferenceKind::BindTarget
-                )
-            }) {
-                continue;
-            }
-            diagnostics.push(self.declaration_message_diagnostic(
-                id,
-                DiagnosticCode::UnconnectedPort,
-                DiagnosticSeverity::Information,
-                Some(format!(
-                    "Port '{}' takes part in no connection.",
-                    self.display_name(id)
-                )),
-            )?);
-        }
         Ok(())
     }
 
@@ -846,7 +851,7 @@ impl<D> SemanticModel<D> {
                 let Some(name) = self
                     .storage
                     .declaration(*child)
-                    .and_then(|declaration| declaration.name)
+                    .and_then(|declaration| declaration.name.resolved())
                     .and_then(|name| self.storage.symbol(name))
                 else {
                     continue;
@@ -891,6 +896,40 @@ impl<D> SemanticModel<D> {
         self.authored_references(port, &[ReferenceKind::FeatureTyping])
             .iter()
             .any(|(_, reference)| reference.flags.conjugated)
+    }
+
+    /// The direction the directed features of a port give it as a whole: `in` when they all
+    /// flow in, `out` when they all flow out, `inout` when both occur. The features are those
+    /// the port usage declares itself and those its definitions declare; a conjugated typing
+    /// reverses the directions of the definition's features. `None` when no directed feature
+    /// is found, which says nothing either way: features a definition inherits are not
+    /// followed.
+    pub(crate) fn port_feature_direction(&self, port: DeclarationId) -> Option<ParameterDirection> {
+        let directions = |owner: DeclarationId| {
+            self.child_declarations(owner)
+                .iter()
+                .filter_map(|child| self.storage.declaration_facts(*child)?.direction)
+                .collect::<Vec<_>>()
+        };
+        let conjugated = self.port_is_conjugated(port);
+        let mut found = directions(port);
+        for (definition, _) in self.types.effective_types(port) {
+            found.extend(directions(*definition).into_iter().map(|direction| {
+                match (conjugated, direction) {
+                    (true, ParameterDirection::In) => ParameterDirection::Out,
+                    (true, ParameterDirection::Out) => ParameterDirection::In,
+                    (_, direction) => direction,
+                }
+            }));
+        }
+        let flows_in = found.iter().any(|d| !matches!(d, ParameterDirection::Out));
+        let flows_out = found.iter().any(|d| !matches!(d, ParameterDirection::In));
+        match (flows_in, flows_out) {
+            (true, true) => Some(ParameterDirection::InOut),
+            (true, false) => Some(ParameterDirection::In),
+            (false, true) => Some(ParameterDirection::Out),
+            (false, false) => None,
+        }
     }
 
     /// Whether a type declares at least one member with an authored direction.
@@ -1096,20 +1135,40 @@ impl<D> SemanticModel<D> {
     ) -> Result<(), ResolutionError> {
         let source = self.settled_targets(id, &[ReferenceKind::TransitionSource]);
         let target = self.settled_targets(id, &[ReferenceKind::TransitionTarget]);
-        // A guard settles through the same expression pipeline every other condition does, so a
-        // non-Boolean constant is the same fact a non-Boolean constraint is.
-        if let Some(value) = self.evaluation_for(id).value() {
-            if !matches!(value, EvaluatedScalar::Boolean(_)) {
-                diagnostics.push(self.declaration_diagnostic(
-                    id,
-                    DiagnosticCode::TransitionGuardNonBoolean,
-                    DiagnosticSeverity::Warning,
-                )?);
+        // SysML 8.3.18.8 `validateTransitionFeatureMembershipGuardExpression`: the guard is the
+        // transition's owned guard-role Boolean expression, and it settles through the same
+        // expression pipeline every other condition does, so a non-Boolean constant is the same
+        // fact a non-Boolean constraint is.
+        for guard in self.child_declarations(id).iter().copied().filter(|child| {
+            self.storage.declaration_facts(*child).is_some_and(|facts| {
+                facts.transition_feature_role == Some(TransitionFeatureRole::Guard)
+            })
+        }) {
+            if let Some(value) = self.evaluation_for(guard).value() {
+                if !matches!(value, EvaluatedScalar::Boolean(_)) {
+                    diagnostics.push(self.declaration_diagnostic(
+                        id,
+                        DiagnosticCode::TransitionGuardNonBoolean,
+                        DiagnosticSeverity::Warning,
+                    )?);
+                }
             }
         }
         let (Some(source), Some(target)) = (source.first(), target.first()) else {
             return Ok(());
         };
+        // A transition in an action body (SysML `ActionBodyItem` admits `TransitionUsage`) moves
+        // between actions, as the normative `Actions` library itself does, so the endpoint rules
+        // below are state-machine rules and apply only to a transition a state owns.
+        if !self
+            .storage
+            .declaration(id)
+            .and_then(|transition| transition.owner)
+            .and_then(|owner| self.kind_of(owner))
+            .is_some_and(is_state_kind)
+        {
+            return Ok(());
+        }
         let (Some(source_kind), Some(target_kind)) = (self.kind_of(*source), self.kind_of(*target))
         else {
             return Ok(());
@@ -1132,12 +1191,8 @@ impl<D> SemanticModel<D> {
             diagnostics.push(diagnostic);
             return Ok(());
         }
-        let source_context = self.enclosing(*source, |kind| {
-            kind == DeclarationKind::StateDefinition || kind == DeclarationKind::StateUsage
-        });
-        let target_context = self.enclosing(*target, |kind| {
-            kind == DeclarationKind::StateDefinition || kind == DeclarationKind::StateUsage
-        });
+        let source_context = self.enclosing(*source, is_state_kind);
+        let target_context = self.enclosing(*target, is_state_kind);
         if let (Some(source_context), Some(target_context)) = (source_context, target_context) {
             if source_context != target_context {
                 let mut diagnostic = self.declaration_diagnostic(
@@ -1196,10 +1251,22 @@ impl<D> SemanticModel<D> {
             if self.kind_of(id) != Some(DeclarationKind::StateDefinition) {
                 continue;
             }
+            if self.storage.declaration_facts(id).is_some_and(|facts| {
+                facts
+                    .modifiers
+                    .effectively_abstract(DeclarationKind::StateDefinition)
+            }) {
+                continue;
+            }
             let states = self
                 .child_declarations(id)
                 .iter()
-                .filter(|child| self.kind_of(**child) == Some(DeclarationKind::StateUsage))
+                .filter(|child| {
+                    matches!(
+                        self.kind_of(**child),
+                        Some(DeclarationKind::StateUsage | DeclarationKind::ExhibitStateUsage)
+                    )
+                })
                 .count();
             if states == 0 {
                 continue;
@@ -1215,44 +1282,10 @@ impl<D> SemanticModel<D> {
                     )),
                 )?);
             }
-            // A machine whose transitions form a cycle has no terminating path by construction,
-            // so the absence of a final state states its shape rather than an omission.
-            if !final_by_context.contains_key(&id) && !self.state_transitions_are_cyclic(id) {
-                diagnostics.push(self.declaration_message_diagnostic(
-                    id,
-                    DiagnosticCode::MissingFinalState,
-                    DiagnosticSeverity::Information,
-                    Some(format!(
-                        "State definition '{}' owns states but declares no finality indicator.",
-                        self.display_name(id)
-                    )),
-                )?);
-            }
+            // SysML 7.18.2-3 permits state behavior without a transition to `done`.
+            // A finality indicator is optional even when there is no transition cycle.
         }
         Ok(())
-    }
-
-    /// Whether the settled transitions owned by one state definition form a cycle.
-    ///
-    /// Over settled endpoints, not authored expressions: a transition whose ends did not resolve
-    /// contributes no edge, which is the same answer as having no transition at all.
-    pub(crate) fn state_transitions_are_cyclic(&self, state_definition: DeclarationId) -> bool {
-        let mut edges: BTreeMap<DeclarationId, Vec<DeclarationId>> = BTreeMap::new();
-        for child in self.child_declarations(state_definition) {
-            if self.kind_of(*child) != Some(DeclarationKind::Transition) {
-                continue;
-            }
-            let source = self.settled_targets(*child, &[ReferenceKind::TransitionSource]);
-            let target = self.settled_targets(*child, &[ReferenceKind::TransitionTarget]);
-            if let (Some(source), Some(target)) = (source.first(), target.first()) {
-                edges.entry(*source).or_default().push(*target);
-            }
-        }
-        let mut visited = BTreeSet::new();
-        let mut stack = BTreeSet::new();
-        edges
-            .keys()
-            .any(|start| reaches_cycle(*start, &edges, &mut visited, &mut stack))
     }
 
     // ------------------------------------------------------------------------------------------
@@ -1268,6 +1301,7 @@ impl<D> SemanticModel<D> {
             let kind = self.kind_of(id).ok_or(ResolutionError::InvalidStorage)?;
             if supports_subject_role(kind) {
                 self.collect_subject_roles(id, diagnostics)?;
+                self.collect_objective_roles(id, diagnostics)?;
             }
             match kind {
                 DeclarationKind::Satisfy => self.collect_satisfy(id, diagnostics)?,
@@ -1331,6 +1365,44 @@ impl<D> SemanticModel<D> {
         Ok(())
     }
 
+    /// SysML 8.3.22.2/8.3.22.3 `validateCase{Definition,Usage}OnlyOneObjective`: at most one
+    /// featureMembership is an ObjectiveMembership. Each owned objective after the first, in
+    /// source order, is reported with the first as related information, as the Pilot's
+    /// `checkAtMostOne` does.
+    pub(crate) fn collect_objective_roles(
+        &self,
+        id: DeclarationId,
+        diagnostics: &mut Vec<Diagnostic>,
+    ) -> Result<(), ResolutionError> {
+        let mut objectives = self
+            .child_declarations(id)
+            .iter()
+            .copied()
+            .filter(|child| {
+                self.effective_membership_role(*child) == Some(crate::MembershipRole::Objective)
+            })
+            .collect::<Vec<_>>();
+        objectives.sort_by_key(|child| self.declaration_range(*child));
+        let Some((first, rest)) = objectives.split_first() else {
+            return Ok(());
+        };
+        for objective in rest {
+            let mut diagnostic = self.declaration_message_diagnostic(
+                *objective,
+                DiagnosticCode::DuplicateRoleMember,
+                DiagnosticSeverity::Warning,
+                Some(format!(
+                    "'{}' declares more than one objective member.",
+                    self.display_name(id)
+                )),
+            )?;
+            diagnostic.related =
+                Box::from([self.related_declaration(*first, RELATED_FIRST_DECLARATION)?]);
+            diagnostics.push(diagnostic);
+        }
+        Ok(())
+    }
+
     /// The subject-cardinality and subject-order rules of one declaration.
     pub(crate) fn collect_subject_roles(
         &self,
@@ -1342,7 +1414,16 @@ impl<D> SemanticModel<D> {
             .iter()
             .filter_map(|child| {
                 let declaration = self.storage.declaration(*child)?;
-                is_input_role_member(declaration.kind).then_some((*child, declaration.kind))
+                // `Type::input`: the subject, actor and stakeholder parameters, and every other
+                // owned feature directed `in` or `inout` (`in ref part other : P;`).
+                let directed_input = self.storage.declaration_facts(*child).is_some_and(|facts| {
+                    matches!(
+                        facts.direction,
+                        Some(ParameterDirection::In) | Some(ParameterDirection::InOut)
+                    )
+                });
+                (is_input_role_member(declaration.kind) || directed_input)
+                    .then_some((*child, declaration.kind))
             })
             .collect::<Vec<_>>();
         roles.sort_by_key(|(child, _)| self.declaration_range(*child));
@@ -1424,10 +1505,16 @@ impl<D> SemanticModel<D> {
                 DiagnosticCode::ViewpointConformanceInvalidTargetKind,
                 diagnostics,
             ),
+            // SysML 8.3.21.10 `validateSatisfyRequirementUsageReference`: the satisfied feature
+            // is a RequirementUsage. A requirement definition is not one, so `satisfy ReqDef by
+            // x;` is reported; a viewpoint or concern usage is a RequirementUsage.
             (false, false) => self.collect_target_kind(
                 id,
                 &[ReferenceKind::SatisfySource],
-                |kind| is_requirement_kind(kind) || is_viewpoint_kind(kind),
+                |kind| {
+                    crate::model::element_kind::element_kind(kind)
+                        .conforms_to(sysml_contract::ElementKind::RequirementUsage)
+                },
                 DiagnosticCode::SatisfyInvalidEndpointKind,
                 diagnostics,
             ),
@@ -1447,24 +1534,8 @@ impl<D> SemanticModel<D> {
         for id in declared.iter().copied() {
             match self.kind_of(id) {
                 Some(DeclarationKind::ViewUsage) => {
-                    // A view with members that exposes nothing renders nothing. Reported as
-                    // information: it is legal, and a view under construction passes through it.
-                    let members = self.child_declarations(id);
-                    if !members.is_empty()
-                        && !members
-                            .iter()
-                            .any(|child| self.kind_of(*child) == Some(DeclarationKind::Expose))
-                    {
-                        diagnostics.push(self.declaration_message_diagnostic(
-                            id,
-                            DiagnosticCode::ViewExposeEmpty,
-                            DiagnosticSeverity::Information,
-                            Some(format!(
-                                "View '{}' declares a body but exposes no members.",
-                                self.display_name(id)
-                            )),
-                        )?);
-                    }
+                    // Empty exposure is legal, including views under construction and views
+                    // whose exposure is inherited. Validate authored targets independently.
                     for (reference_id, reference) in
                         self.authored_references(id, &[ReferenceKind::FeatureTyping])
                     {
@@ -1487,19 +1558,79 @@ impl<D> SemanticModel<D> {
                         )?);
                     }
                 }
-                Some(DeclarationKind::RenderingUsage) => self.collect_target_kind(
-                    id,
-                    &[ReferenceKind::FeatureTyping],
-                    |kind| {
-                        matches!(
-                            kind,
-                            DeclarationKind::RenderingDefinition | DeclarationKind::RenderingUsage
-                        )
-                    },
-                    DiagnosticCode::ViewRenderingInvalidTarget,
-                    diagnostics,
-                )?,
+                Some(DeclarationKind::RenderingUsage) => {
+                    self.collect_target_kind(
+                        id,
+                        &[ReferenceKind::FeatureTyping],
+                        |kind| {
+                            matches!(
+                                kind,
+                                DeclarationKind::RenderingDefinition
+                                    | DeclarationKind::RenderingUsage
+                            )
+                        },
+                        DiagnosticCode::ViewRenderingInvalidTarget,
+                        diagnostics,
+                    )?;
+                    if self.effective_membership_role(id)
+                        == Some(crate::MembershipRole::ViewRendering)
+                    {
+                        let owner = self
+                            .storage
+                            .declaration(id)
+                            .and_then(|declaration| declaration.owner);
+                        if !owner
+                            .and_then(|owner| self.kind_of(owner))
+                            .is_some_and(|kind| {
+                                matches!(
+                                    kind,
+                                    DeclarationKind::ViewDefinition | DeclarationKind::ViewUsage
+                                )
+                            })
+                        {
+                            diagnostics.push(self.declaration_diagnostic(
+                                id,
+                                DiagnosticCode::ViewRenderingInvalidOwner,
+                                DiagnosticSeverity::Warning,
+                            )?);
+                        }
+                        if let Some(reference_id) = self
+                            .storage
+                            .declaration_facts(id)
+                            .and_then(|facts| facts.view_rendering_reference)
+                        {
+                            if let Some(target) = self.settled_target(reference_id) {
+                                if self.kind_of(target) != Some(DeclarationKind::RenderingUsage) {
+                                    let reference = &self.storage.references[reference_id.index()];
+                                    diagnostics.push(self.reference_diagnostic(
+                                        reference,
+                                        DiagnosticCode::ViewRenderingInvalidTarget,
+                                        DiagnosticSeverity::Warning,
+                                        Some(target),
+                                    )?);
+                                }
+                            }
+                        }
+                    }
+                }
                 _ => {}
+            }
+            if matches!(
+                self.kind_of(id),
+                Some(DeclarationKind::ViewDefinition | DeclarationKind::ViewUsage)
+            ) {
+                let mut renderings = self.owned_feature_members(id).into_iter().filter(|member| {
+                    self.effective_membership_role(*member)
+                        == Some(crate::MembershipRole::ViewRendering)
+                });
+                renderings.next();
+                for extra in renderings {
+                    diagnostics.push(self.declaration_diagnostic(
+                        extra,
+                        DiagnosticCode::ViewMultipleRenderings,
+                        DiagnosticSeverity::Warning,
+                    )?);
+                }
             }
         }
 
@@ -1509,7 +1640,7 @@ impl<D> SemanticModel<D> {
             }
             let declaration = self
                 .storage
-                .declaration(record.declaration)
+                .declaration(record.element)
                 .ok_or(ResolutionError::InvalidStorage)?;
             if declaration.document != document {
                 continue;
@@ -1522,7 +1653,7 @@ impl<D> SemanticModel<D> {
                 code: DiagnosticCode::ViewpointRepLanguageUnresolved,
                 severity: DiagnosticSeverity::Warning,
                 origin: DiagnosticOrigin::Semantic,
-                subject: self.symbol_id(record.declaration),
+                subject: self.symbol_id(record.element),
                 location: DiagnosticLocation {
                     document: writer::document_identity(self, document).into(),
                     range: document_range(&self.storage, document, &record.span)?,
@@ -1573,31 +1704,95 @@ impl<D> SemanticModel<D> {
         for id in declared.iter().copied() {
             let kind = self.kind_of(id).ok_or(ResolutionError::InvalidStorage)?;
 
-            // A multiplicity whose literal bounds cross admits nothing at all.
-            if let Some(multiplicity) = self
+            // KerML 8.3.4.11.2 `validateMultiplicityRangeBoundResultTypes`: a model-level
+            // evaluable bound must evaluate to a natural number, so a negative or non-integer
+            // literal bound is `multiplicity_bound_invalid`. Otherwise, a multiplicity whose literal bounds cross
+            // admits nothing at all. Both apply to the feature's own multiplicity and a connector
+            // end's cross multiplicity. A non-literal bound is judged below, at its own
+            // `bound` Expression, by its derived result type.
+            let facts = self
                 .storage
                 .declaration_facts(id)
-                .and_then(|facts| facts.multiplicity.as_ref())
+                .ok_or(ResolutionError::InvalidStorage)?;
+            for multiplicity in [&facts.multiplicity, &facts.cross_multiplicity]
+                .into_iter()
+                .flatten()
             {
-                if let (MultiplicityBound::Literal(lower), MultiplicityBound::Literal(upper)) =
-                    (multiplicity.lower, multiplicity.upper)
+                // Pilot `checkMultiplicityRange`: a model-level evaluable bound is valid only when
+                // `valueOf` yields a natural, so a negative or non-integer literal is rejected.
+                let not_natural = |bound: MultiplicityBound| {
+                    matches!(bound, MultiplicityBound::Literal(value) if value < 0)
+                        || bound == MultiplicityBound::NonIntegerLiteral
+                };
+                let code = if not_natural(multiplicity.lower) || not_natural(multiplicity.upper) {
+                    DiagnosticCode::MultiplicityBoundInvalid
+                } else if let (
+                    MultiplicityBound::Literal(lower),
+                    MultiplicityBound::Literal(upper),
+                ) = (multiplicity.lower, multiplicity.upper)
                 {
-                    if lower < 0 || upper < lower {
-                        diagnostics.push(Diagnostic {
-                            payload: None,
-                            message: DiagnosticCode::InvalidMultiplicity.describe().into(),
-                            code: DiagnosticCode::InvalidMultiplicity,
-                            severity: DiagnosticSeverity::Warning,
-                            origin: DiagnosticOrigin::Semantic,
-                            subject: self.symbol_id(id),
-                            location: DiagnosticLocation {
-                                document: writer::document_identity(self, document).into(),
-                                range: document_range(&self.storage, document, &multiplicity.span)?,
-                            },
-                            related: Box::default(),
-                        });
+                    if upper < lower {
+                        DiagnosticCode::InvalidMultiplicity
+                    } else {
+                        continue;
                     }
-                }
+                } else {
+                    continue;
+                };
+                diagnostics.push(Diagnostic {
+                    payload: None,
+                    message: code.describe().into(),
+                    code,
+                    severity: DiagnosticSeverity::Warning,
+                    origin: DiagnosticOrigin::Semantic,
+                    subject: self.symbol_id(id),
+                    location: DiagnosticLocation {
+                        document: writer::document_identity(self, document).into(),
+                        range: document_range(&self.storage, document, &multiplicity.span)?,
+                    },
+                    related: Box::default(),
+                });
+            }
+
+            // KerML 8.3.4.11.2 `validateMultiplicityRangeBoundResultTypes`, non-literal half
+            // (Pilot `checkMultiplicityRange`: `!b.isInteger`): a bound whose derived result type
+            // does not specialize `ScalarValues::Integer` is `multiplicity_bound_invalid`,
+            // reported at the multiplicity of the declaration owning the range. Literal bounds
+            // were judged above; an undecided result stays unanswered.
+            if self
+                .storage
+                .declaration_facts(id)
+                .is_some_and(|facts| facts.multiplicity_bound_form.is_some())
+                && self.multiplicity_bound_result(id)?
+                    == crate::check::expression::MultiplicityBoundResult::NonInteger
+            {
+                let owner = self
+                    .storage
+                    .declaration(id)
+                    .and_then(|bound| bound.owner)
+                    .and_then(|range| self.storage.declaration(range))
+                    .and_then(|range| range.owner)
+                    .ok_or(ResolutionError::InvalidStorage)?;
+                let span = self
+                    .storage
+                    .declaration_facts(owner)
+                    .and_then(|facts| facts.multiplicity.as_ref())
+                    .ok_or(ResolutionError::InvalidStorage)?
+                    .span;
+                let code = DiagnosticCode::MultiplicityBoundInvalid;
+                diagnostics.push(Diagnostic {
+                    payload: None,
+                    message: code.describe().into(),
+                    code,
+                    severity: DiagnosticSeverity::Warning,
+                    origin: DiagnosticOrigin::Semantic,
+                    subject: self.symbol_id(owner),
+                    location: DiagnosticLocation {
+                        document: writer::document_identity(self, document).into(),
+                        range: document_range(&self.storage, document, &span)?,
+                    },
+                    related: Box::default(),
+                });
             }
 
             // A `redefines` clause naming its own feature is deliberately not its own code: the
@@ -1666,121 +1861,145 @@ impl<D> SemanticModel<D> {
         diagnostics: &mut Vec<Diagnostic>,
     ) -> Result<(), ResolutionError> {
         for relationship in self.resolution.implied_relationships.iter() {
-            if relationship.kind != ReferenceKind::Redefinition {
-                continue;
+            if relationship.kind == ReferenceKind::Redefinition {
+                self.collect_inherited_value_pair(
+                    relationship.source,
+                    relationship.target,
+                    document,
+                    diagnostics,
+                )?;
             }
-            let source = relationship.source;
-            let declaration = self
-                .storage
-                .declaration(source)
-                .ok_or(ResolutionError::InvalidStorage)?;
-            if declaration.document != document {
-                continue;
-            }
-            // Only a value that overrides. `default = e` states a value the specialization may
-            // replace, which is exactly what redeclaring an inherited parameter to give it a
-            // default means, so it is not a silent override.
-            // KerML 8.4.4.5 specifies implicit redefinition for the parameters of a specializing
-            // behavior, so a specializing function restating `in v : T` or `return u : T = ...` is
-            // the authored way to give a body, not a silent override.
-            let is_parameter = self
-                .storage
-                .declaration_facts(source)
-                .is_some_and(|facts| facts.direction.is_some());
-            if is_parameter
-                || matches!(
-                    declaration.kind,
-                    DeclarationKind::ParameterUsage | DeclarationKind::SubjectUsage
-                )
-            {
-                continue;
-            }
-            let Some(value) = self
-                .storage
-                .feature_values
-                .iter()
-                .find(|value| value.declaration == source && !value.is_default)
-            else {
-                continue;
-            };
-            if !self
-                .authored_references(source, &[ReferenceKind::Redefinition])
-                .is_empty()
-            {
-                continue;
-            }
-            let target = relationship.target;
-            // Only a redefinition the *name* implies. The resolver also derives positional
-            // redefinitions -- a specializing function's `return u : T = ...` redefines the return
-            // parameter it inherits whatever either is called -- and those are the authored way to
-            // state a body, not a silently overridden member.
-            let named_collision = self
-                .storage
-                .declaration(source)
-                .and_then(|declaration| declaration.name)
-                .is_some_and(|name| {
-                    self.storage
-                        .declaration(target)
-                        .and_then(|declaration| declaration.name)
-                        == Some(name)
-                });
-            if !named_collision {
-                continue;
-            }
-            let mut diagnostic = self.declaration_message_diagnostic(
-                source,
-                DiagnosticCode::ImplicitRedefinitionWithoutOperator,
-                DiagnosticSeverity::Error,
-                Some(format!(
-                    "'{}' overrides inherited member '{}' but is missing the explicit ':>>' \
-                     operator.",
-                    self.display_name(source),
-                    self.display_name(target)
-                )),
-            )?;
-            diagnostic.related = Box::from([self.related_declaration(target, RELATED_INHERITED)?]);
-            diagnostics.push(diagnostic);
-
-            // A string bound to a member the inherited declaration types by an enumeration names
-            // no enumeration literal. Read from the settled value and the settled type, not from
-            // the authored text.
-            if declaration.kind != DeclarationKind::AttributeUsage {
-                continue;
-            }
-            if !matches!(
-                self.evaluation_for(source).value(),
-                Some(EvaluatedScalar::String(_))
-            ) {
-                continue;
-            }
-            let enumerated = self
-                .types
-                .effective_types(target)
-                .iter()
-                .any(|(type_id, _)| {
-                    self.kind_of(*type_id) == Some(DeclarationKind::EnumerationDefinition)
-                });
-            if !enumerated {
-                continue;
-            }
-            let mut diagnostic = self.declaration_message_diagnostic(
-                source,
-                DiagnosticCode::InheritedAttributeValueTypeMismatch,
-                DiagnosticSeverity::Error,
-                Some(format!(
-                    "'{}' is typed by an enumeration through '{}' but was assigned a string \
-                     literal; use an enumeration value.",
-                    self.display_name(source),
-                    self.display_name(target)
-                )),
-            )?;
-            diagnostic.location = DiagnosticLocation {
-                document: writer::document_identity(self, document).into(),
-                range: document_range(&self.storage, document, &value.span)?,
-            };
-            diagnostic.related = Box::from([self.related_declaration(target, RELATED_INHERITED)?]);
-            diagnostics.push(diagnostic);
         }
+        Ok(())
+    }
+
+    /// Applies the same authoring policy to an implied redefinition and a collision with a
+    /// canonical inherited membership. Neither path fabricates an authored relationship.
+    fn collect_inherited_value_pair(
+        &self,
+        source: DeclarationId,
+        target: DeclarationId,
+        document: DocumentIdx,
+        diagnostics: &mut Vec<Diagnostic>,
+    ) -> Result<(), ResolutionError> {
+        let declaration = self
+            .storage
+            .declaration(source)
+            .ok_or(ResolutionError::InvalidStorage)?;
+        if declaration.document != document {
+            return Ok(());
+        }
+        // Only a value that overrides. `default = e` states a value the specialization may
+        // replace, which is exactly what redeclaring an inherited parameter to give it a
+        // default means, so it is not a silent override.
+        // KerML 8.4.4.5 specifies implicit redefinition for the parameters of a specializing
+        // behavior, so a specializing function restating `in v : T` or `return u : T = ...` is
+        // the authored way to give a body, not a silent override.
+        let is_parameter = self
+            .storage
+            .declaration_facts(source)
+            .is_some_and(|facts| facts.direction.is_some());
+        if is_parameter
+            || matches!(
+                declaration.kind,
+                DeclarationKind::ParameterUsage | DeclarationKind::SubjectUsage
+            )
+        {
+            return Ok(());
+        }
+        let Some(value) = self
+            .storage
+            .feature_values
+            .iter()
+            .find(|value| value.declaration == source && !value.is_default)
+        else {
+            return Ok(());
+        };
+        if !self
+            .authored_references(source, &[ReferenceKind::Redefinition])
+            .is_empty()
+        {
+            return Ok(());
+        }
+        // Only a redefinition the *name* implies. The resolver also derives positional
+        // redefinitions -- a specializing function's `return u : T = ...` redefines the return
+        // parameter it inherits whatever either is called -- and those are the authored way to
+        // state a body, not a silently overridden member.
+        let named_collision = self
+            .resolution
+            .effective_names
+            .get(source.index())
+            .zip(self.resolution.effective_names.get(target.index()))
+            .is_some_and(|(source, target)| {
+                matches!(
+                    source.name,
+                    crate::resolve::results::EffectiveNameOutcome::Resolved(_)
+                ) && source.name == target.name
+            });
+        if !named_collision {
+            return Ok(());
+        }
+        let mut diagnostic = self.declaration_message_diagnostic(
+            source,
+            DiagnosticCode::ImplicitRedefinitionWithoutOperator,
+            DiagnosticSeverity::Error,
+            Some(format!(
+                "'{}' overrides inherited member '{}' but is missing the explicit ':>>' \
+                 operator.",
+                self.display_name(source),
+                self.display_name(target)
+            )),
+        )?;
+        diagnostic.related = Box::from([self.related_declaration(target, RELATED_INHERITED)?]);
+        diagnostics.push(diagnostic);
+
+        // A string bound to a member the inherited declaration types by an enumeration names
+        // no enumeration literal. Read from the settled value and the settled type, not from
+        // the authored text.
+        // A name collision alone creates no redefinition and inherits no typing. Keep this
+        // enumeration rule restricted to the canonical redefinition relationships it diagnoses.
+        if declaration.kind != DeclarationKind::AttributeUsage
+            || !self.types.specialization().reaches(
+                source,
+                target,
+                crate::index::types::ScopeBits::Redefinition,
+            )
+        {
+            return Ok(());
+        }
+        if !matches!(
+            self.evaluation_for(source).value(),
+            Some(EvaluatedScalar::String(_))
+        ) {
+            return Ok(());
+        }
+        let enumerated = self
+            .types
+            .effective_types(target)
+            .iter()
+            .any(|(type_id, _)| {
+                self.kind_of(*type_id) == Some(DeclarationKind::EnumerationDefinition)
+            });
+        if !enumerated {
+            return Ok(());
+        }
+        let mut diagnostic = self.declaration_message_diagnostic(
+            source,
+            DiagnosticCode::InheritedAttributeValueTypeMismatch,
+            DiagnosticSeverity::Error,
+            Some(format!(
+                "'{}' is typed by an enumeration through '{}' but was assigned a string \
+                 literal; use an enumeration value.",
+                self.display_name(source),
+                self.display_name(target)
+            )),
+        )?;
+        diagnostic.location = DiagnosticLocation {
+            document: writer::document_identity(self, document).into(),
+            range: document_range(&self.storage, document, &value.span)?,
+        };
+        diagnostic.related = Box::from([self.related_declaration(target, RELATED_INHERITED)?]);
+        diagnostics.push(diagnostic);
         Ok(())
     }
 
@@ -1943,33 +2162,14 @@ impl<D> SemanticModel<D> {
                     | DeclarationKind::AssertConstraintUsage
                     | DeclarationKind::RequireConstraintUsage
             )
-        }) && self
-            .storage
-            .evaluation_facts
-            .iter()
-            .any(|fact| fact.declaration == id)
+        }) && {
+            // A constraint's body expression is its result expression, which owns the
+            // evaluation; `evaluation_for` reads it through the same bridge.
+            let value = self.value_expression(id);
+            self.storage
+                .evaluation_facts
+                .iter()
+                .any(|fact| fact.declaration == id || Some(fact.declaration) == value)
+        }
     }
-}
-
-/// Whether a directed graph reaches a cycle from `node`.
-pub(crate) fn reaches_cycle(
-    node: DeclarationId,
-    edges: &BTreeMap<DeclarationId, Vec<DeclarationId>>,
-    visited: &mut BTreeSet<DeclarationId>,
-    stack: &mut BTreeSet<DeclarationId>,
-) -> bool {
-    if stack.contains(&node) {
-        return true;
-    }
-    if !visited.insert(node) {
-        return false;
-    }
-    stack.insert(node);
-    let found = edges
-        .get(&node)
-        .into_iter()
-        .flatten()
-        .any(|next| reaches_cycle(*next, edges, visited, stack));
-    stack.remove(&node);
-    found
 }

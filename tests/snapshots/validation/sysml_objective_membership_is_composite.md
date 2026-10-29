@@ -21,7 +21,7 @@ type=file
 package Roles {
     part def Component;
     case def Analysis {
-        subject item : Component;
+        subject 'item' : Component;
         objective achieved;
     }
 }
@@ -47,11 +47,11 @@ package Roles {
 # SMG
 ~~~sexpr
 (semantic-model
-  (publication (phase resolved) (completeness complete) (has-evaluation false) (source-digest "blake3:eb7dda169512cf200691831b68eef52e22ac33c7b23e6ac7ba2f9da53d53b04f"))
+  (publication (phase resolved) (completeness complete) (has-evaluation false) (source-digest "blake3:896729f9d661187163b3d6537bffbe1878c3215b5f8a8a7d4a98e6fe0f39b0e1"))
   (declarations
     (declaration (id (node (document "memory://snapshot/sysml_objective_membership_is_composite.md") (qualified-name "Roles"))) (kind package) (membership (kind owning) (visibility default)))
     (declaration (id (node (document "memory://snapshot/sysml_objective_membership_is_composite.md") (qualified-name "Roles::Analysis"))) (kind case-def) (membership (kind owning) (visibility default)))
-    (declaration (id (node (document "memory://snapshot/sysml_objective_membership_is_composite.md") (qualified-name "Roles::Analysis::achieved"))) (kind requirement) (membership (kind feature) (visibility default)))
+    (declaration (id (node (document "memory://snapshot/sysml_objective_membership_is_composite.md") (qualified-name "Roles::Analysis::achieved"))) (kind objective-requirement) (membership (kind feature) (visibility default)))
     (declaration (id (node (document "memory://snapshot/sysml_objective_membership_is_composite.md") (qualified-name "Roles::Analysis::item"))) (kind subject) (membership (kind feature) (visibility default)) (authored (membership (kind feature) (visibility default)) (relationships (featureTyping (reference "Component")))))
     (declaration (id (node (document "memory://snapshot/sysml_objective_membership_is_composite.md") (qualified-name "Roles::Component"))) (kind part-def) (membership (kind owning) (visibility default)))
   )
@@ -89,7 +89,7 @@ package Roles {
 # NAVIGATION
 ~~~sexpr
 (navigation
-  (query (document "memory://snapshot/sysml_objective_membership_is_composite.md") (range (start 9 23) (end 9 32)) (probe (position 9 23))
+  (query (document "memory://snapshot/sysml_objective_membership_is_composite.md") (range (start 9 25) (end 9 34)) (probe (position 9 25))
     (reference (id (source (node (document "memory://snapshot/sysml_objective_membership_is_composite.md") (qualified-name "Roles::Analysis::item"))) (kind featureTyping) (ordinal 0) (authored-target "Component")
       (outcome (status resolved) (target (node (document "memory://snapshot/sysml_objective_membership_is_composite.md") (qualified-name "Roles::Component")))))
     )

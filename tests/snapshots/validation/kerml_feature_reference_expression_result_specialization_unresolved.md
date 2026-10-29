@@ -4,6 +4,7 @@ description=KerML checkFeatureReferenceExpressionResultSpecialization remains un
 source_expectation=accepted
 rule_family=check
 expectation=semantics
+coverage_role=secondary
 rule_id=kerml-1.0:8.3.4.8.5:checkFeatureReferenceExpressionResultSpecialization
 ~~~
 # SOURCE
@@ -36,7 +37,7 @@ package Model {
 # SMG
 ~~~sexpr
 (semantic-model
-  (publication (phase resolved) (completeness complete) (has-evaluation true) (source-digest "blake3:2397e75f32ef445611202e7b92825b4cfbc1c494cfb92ca6461d36b13af1cc50"))
+  (publication (phase resolved) (completeness complete) (has-evaluation true) (source-digest "blake3:59b3e3a95540d96406325ec741a45dec5b9cc3a59e45236c6b643c32b75c72a1"))
   (declarations
     (declaration (id (node (document "memory://snapshot/kerml_feature_reference_expression_result_specialization_unresolved.md") (qualified-name "Model"))) (kind package) (membership (kind owning) (visibility default)))
     (declaration (id (node (document "memory://snapshot/kerml_feature_reference_expression_result_specialization_unresolved.md") (qualified-name "Model::Thing"))) (kind kerml-classifier) (membership (kind owning) (visibility default)))
@@ -52,6 +53,7 @@ package Model {
   (relationships
     (relationship (kind typeFeaturing) (source (node (document "memory://snapshot/kerml_feature_reference_expression_result_specialization_unresolved.md") (qualified-name "Model::Thing::copied"))) (target (node (document "memory://snapshot/kerml_feature_reference_expression_result_specialization_unresolved.md") (qualified-name "Model::Thing"))) (provenance implied))
     (relationship (kind subsetting) (source (node (document "memory://snapshot/kerml_feature_reference_expression_result_specialization_unresolved.md") (qualified-name "Model::Thing::copied"))) (target (node (document "memory://snapshot/kerml_feature_reference_expression_result_specialization_unresolved.md") (path (named (kind package) (name "Model")) (named (kind kerml-classifier) (name "Thing")) (named (kind kerml-feature) (name "copied")) (anonymous (kind kerml-expression) (ordinal 0)) (anonymous (kind kerml-feature) (ordinal 0))))) (provenance implied))
+    (relationship (kind typeFeaturing) (source (node (document "memory://snapshot/kerml_feature_reference_expression_result_specialization_unresolved.md") (path (named (kind package) (name "Model")) (named (kind kerml-classifier) (name "Thing")) (named (kind kerml-feature) (name "copied")) (anonymous (kind kerml-expression) (ordinal 0))))) (target (node (document "memory://snapshot/kerml_feature_reference_expression_result_specialization_unresolved.md") (qualified-name "Model::Thing"))) (provenance implied))
     (relationship (kind typeFeaturing) (source (node (document "memory://snapshot/kerml_feature_reference_expression_result_specialization_unresolved.md") (path (named (kind package) (name "Model")) (named (kind kerml-classifier) (name "Thing")) (named (kind kerml-feature) (name "copied")) (anonymous (kind kerml-expression) (ordinal 0)) (anonymous (kind kerml-feature) (ordinal 0))))) (target (node (document "memory://snapshot/kerml_feature_reference_expression_result_specialization_unresolved.md") (path (named (kind package) (name "Model")) (named (kind kerml-classifier) (name "Thing")) (named (kind kerml-feature) (name "copied")) (anonymous (kind kerml-expression) (ordinal 0))))) (provenance implied))
   )
   (evaluation
@@ -66,10 +68,19 @@ package Model {
       (featured-by (node (document "memory://snapshot/kerml_feature_reference_expression_result_specialization_unresolved.md") (qualified-name "Model::Thing")))
       (supertype (node (document "memory://snapshot/kerml_feature_reference_expression_result_specialization_unresolved.md") (path (named (kind package) (name "Model")) (named (kind kerml-classifier) (name "Thing")) (named (kind kerml-feature) (name "copied")) (anonymous (kind kerml-expression) (ordinal 0)) (anonymous (kind kerml-feature) (ordinal 0)))) (scopes any feature))
     )
+    (declaration (id (node (document "memory://snapshot/kerml_feature_reference_expression_result_specialization_unresolved.md") (path (named (kind package) (name "Model")) (named (kind kerml-classifier) (name "Thing")) (named (kind kerml-feature) (name "copied")) (anonymous (kind kerml-expression) (ordinal 0)))))
+      (featured-by (node (document "memory://snapshot/kerml_feature_reference_expression_result_specialization_unresolved.md") (qualified-name "Model::Thing")))
+    )
     (declaration (id (node (document "memory://snapshot/kerml_feature_reference_expression_result_specialization_unresolved.md") (path (named (kind package) (name "Model")) (named (kind kerml-classifier) (name "Thing")) (named (kind kerml-feature) (name "copied")) (anonymous (kind kerml-expression) (ordinal 0)) (anonymous (kind kerml-feature) (ordinal 0)))))
       (featured-by (node (document "memory://snapshot/kerml_feature_reference_expression_result_specialization_unresolved.md") (path (named (kind package) (name "Model")) (named (kind kerml-classifier) (name "Thing")) (named (kind kerml-feature) (name "copied")) (anonymous (kind kerml-expression) (ordinal 0)))))
       (subtype (node (document "memory://snapshot/kerml_feature_reference_expression_result_specialization_unresolved.md") (qualified-name "Model::Thing::copied")) (scopes any feature))
     )
+)
+~~~
+# EXPRESSIONS
+~~~sexpr
+(expressions
+  (declaration (id (node (document "memory://snapshot/kerml_feature_reference_expression_result_specialization_unresolved.md") (path (named (kind package) (name "Model")) (named (kind kerml-classifier) (name "Thing")) (named (kind kerml-feature) (name "copied")) (anonymous (kind kerml-expression) (ordinal 0))))) (outcome resolved) (feature-reference "missing" (target unresolved)))
 )
 ~~~
 # NAVIGATION

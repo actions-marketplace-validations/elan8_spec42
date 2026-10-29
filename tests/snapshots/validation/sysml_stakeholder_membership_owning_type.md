@@ -7,18 +7,21 @@ validation_rule=8.3.21.12 validateStakeholderMembershipOwningType
 source_expectation=accepted
 rule_family=validate
 expectation=by_construction
+evidence_reference=file:tests/snapshots/validation/sysml_grammar_restricted_membership_owners.md
 rule_id=sysml-2.0:8.3.21.12:validateStakeholderMembershipOwningType
-blocked_by=abstract-syntax-invalid-membership-owner
 type=file
 ~~~
 # SOURCE
 ~~~sysml
+// The violating side has no textual counterpart: the grammar admits this element only in
+// requirement bodies (StakeholderMember in RequirementBodyItem), whose owners all satisfy the rule.
+// sysml_grammar_restricted_membership_owners.md pins the parser rejecting a forbidden owner.
 package Roles {
     part def Component;
 
     // Conforming: the stakeholder membership is owned by a requirement definition.
     requirement def Good {
-        subject item : Component;
+        subject 'item' : Component;
         stakeholder owner : Component;
     }
 }
@@ -35,7 +38,7 @@ package Roles {
 # SMG
 ~~~sexpr
 (semantic-model
-  (publication (phase resolved) (completeness complete) (has-evaluation false) (source-digest "blake3:ac0479f2e0cf838c9e7f396ccaf482beba0b636be8d05798c9338fb964398955"))
+  (publication (phase resolved) (completeness complete) (has-evaluation false) (source-digest "blake3:57c4e84d7e4b0a88713d33944f6d67648dbefe8fdf4f2a58cfb556c7a583f7a6"))
   (declarations
     (declaration (id (node (document "memory://snapshot/sysml_stakeholder_membership_owning_type.md") (qualified-name "Roles"))) (kind package) (membership (kind owning) (visibility default)))
     (declaration (id (node (document "memory://snapshot/sysml_stakeholder_membership_owning_type.md") (qualified-name "Roles::Component"))) (kind part-def) (membership (kind owning) (visibility default)))
@@ -85,12 +88,12 @@ package Roles {
 # NAVIGATION
 ~~~sexpr
 (navigation
-  (query (document "memory://snapshot/sysml_stakeholder_membership_owning_type.md") (range (start 5 23) (end 5 32)) (probe (position 5 23))
+  (query (document "memory://snapshot/sysml_stakeholder_membership_owning_type.md") (range (start 8 25) (end 8 34)) (probe (position 8 25))
     (reference (id (source (node (document "memory://snapshot/sysml_stakeholder_membership_owning_type.md") (qualified-name "Roles::Good::item"))) (kind featureTyping) (ordinal 0) (authored-target "Component")
       (outcome (status resolved) (target (node (document "memory://snapshot/sysml_stakeholder_membership_owning_type.md") (qualified-name "Roles::Component")))))
     )
   )
-  (query (document "memory://snapshot/sysml_stakeholder_membership_owning_type.md") (range (start 6 28) (end 6 37)) (probe (position 6 28))
+  (query (document "memory://snapshot/sysml_stakeholder_membership_owning_type.md") (range (start 9 28) (end 9 37)) (probe (position 9 28))
     (reference (id (source (node (document "memory://snapshot/sysml_stakeholder_membership_owning_type.md") (qualified-name "Roles::Good::owner"))) (kind featureTyping) (ordinal 0) (authored-target "Component")
       (outcome (status resolved) (target (node (document "memory://snapshot/sysml_stakeholder_membership_owning_type.md") (qualified-name "Roles::Component")))))
     )

@@ -3,7 +3,7 @@
 description=Grid view keeps unresolved exposure explicit
 type=generate
 libraries=standard
-plugin=repository:diagram
+plugin=native:diagram
 viewKind=grid-view
 viewDocument=diagram_grid_unresolved.md
 viewQualifiedName=GridNegative::selected
@@ -34,7 +34,7 @@ package GridNegative {
 # SMG
 ~~~sexpr
 (semantic-model
-  (publication (phase resolved) (completeness complete) (has-evaluation true) (source-digest "blake3:ec4aa4a15eaed33cf96af6ab411c58a792f96ba41bdc98cff9bc39c13287a8c4") (admitted (standard-library 94)))
+  (publication (phase resolved) (completeness complete) (has-evaluation true) (source-digest "blake3:3b77d8e2b536145620d8b3aa06fdcdf16181edd750cc258d75be49d2db9d2197") (admitted (standard-library 94)))
   (declarations
     (declaration (id (node (document "memory://snapshot/diagram_grid_unresolved.md") (qualified-name "GridNegative"))) (kind package) (membership (kind owning) (visibility default)))
     (declaration (id (node (document "memory://snapshot/diagram_grid_unresolved.md") (path (named (kind package) (name "GridNegative")) (anonymous (kind import) (ordinal 0))))) (kind import) (membership (kind import) (visibility private)) (authored (membership (kind import) (visibility private)) (relationships (namespaceImport (reference "StandardViewDefinitions") (import (shape namespace) (recursive false))))))
@@ -135,8 +135,8 @@ package GridNegative {
 ## diagram.json
 ~~~json
 {
-  "schemaVersion": 5,
-  "modelDigest": "blake3:337f217c82f8dc8d729d43d0be7574703dca77843095d0acf14f360c15d4b5ec",
+  "schemaVersion": 10,
+  "modelDigest": "blake3:12f333667153fe1363263e58cc65c6a4bbb75bf54da0c73cc0cc1dbaa6e72d34",
   "documents": [
     {
       "uri": "memory://snapshot/diagram_grid_unresolved.md",
@@ -199,6 +199,7 @@ package GridNegative {
     "metadata": {
       "cells": [],
       "columns": [],
+      "layout": "element-table",
       "rows": []
     },
     "nodes": [],

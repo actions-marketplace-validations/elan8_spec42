@@ -8,7 +8,7 @@ mod ast_ranges;
 mod lexer;
 mod types;
 
-pub use ast_ranges::{ast_semantic_ranges, refine_declaration_ranges, SourceRange};
+pub use ast_ranges::{ast_semantic_ranges, SourceRange};
 pub use types::*;
 
 use lexer::tokenize_line;
@@ -44,7 +44,7 @@ fn token_ast_type(
     start_char: u32,
     length: u32,
     ast_ranges: &[(SourceRange, u32)],
-) -> Option<(u32, usize, u32)> {
+) -> Option<(u32, usize)> {
     let end_char = start_char + length;
     let mut best: Option<(u32, usize, u32)> = None;
     for (i, (r, token_type)) in ast_ranges.iter().enumerate() {
@@ -68,7 +68,15 @@ fn token_ast_type(
             }
         }
     }
-    best
+    best.map(|(ty, idx, _)| (ty, idx))
+}
+
+/// Whether `range` covers exactly the token at `line`/`start` of `len` characters.
+fn range_is_token(range: &SourceRange, line: u32, start: u32, len: u32) -> bool {
+    range.start_line == line
+        && range.end_line == line
+        && range.start_character == start
+        && range.end_character == start + len
 }
 
 fn apply_ast_semantic_ranges(
@@ -115,22 +123,20 @@ fn apply_ast_semantic_ranges(
             || *type_idx == TYPE_KEYWORD
             || *type_idx == TYPE_TYPE;
         if can_override {
-            if let Some((ast_type, range_idx, span_len)) =
-                token_ast_type(*line, *start, *len, ast_ranges)
-            {
-                if span_len > 2 * *len && ast_type != TYPE_NAMESPACE {
-                    continue;
-                }
+            if let Some((ast_type, range_idx)) = token_ast_type(*line, *start, *len, ast_ranges) {
                 if *type_idx == TYPE_TYPE && ast_type == TYPE_PROPERTY {
                     continue;
                 }
                 // Reserved-keyword text (e.g. `entry`, `standard`, `concern`) can also be a
                 // legal identifier (enum member, attribute name) elsewhere in the grammar.
                 // The lexer classifies purely by spelling, so only let the AST's precisely
-                // spanned identifier classification override it -- not looser AST guesses.
+                // spanned identifier classification override it -- not looser AST guesses,
+                // and not a range that merely contains the keyword (`in` before a parameter
+                // name, `as` inside a value expression).
                 if *type_idx == TYPE_KEYWORD
                     && ast_type != TYPE_KEYWORD
-                    && ast_type != TYPE_PROPERTY
+                    && (ast_type != TYPE_PROPERTY
+                        || !range_is_token(&ast_ranges[range_idx].0, *line, *start, *len))
                 {
                     continue;
                 }
@@ -213,6 +219,15 @@ pub fn semantic_tokens_full(
     text: &str,
     ast_ranges: Option<&[(SourceRange, u32)]>,
 ) -> (SemanticTokensDto, Vec<String>) {
+    semantic_tokens_full_debug(text, ast_ranges, false)
+}
+
+/// Produce semantic tokens for the full document, optionally tracing AST merges.
+pub fn semantic_tokens_full_debug(
+    text: &str,
+    ast_ranges: Option<&[(SourceRange, u32)]>,
+    debug: bool,
+) -> (SemanticTokensDto, Vec<String>) {
     let lines: Vec<&str> = text.lines().collect();
     let mut all_tokens = Vec::new();
     let mut in_block_comment = false;
@@ -221,10 +236,10 @@ pub fn semantic_tokens_full(
         in_block_comment = still_in;
         all_tokens.extend(line_tokens);
     }
-    let log_lines = Vec::new();
+    let mut log_lines = Vec::new();
     if let Some(ranges) = ast_ranges {
-        let refined = refine_declaration_ranges(text, ranges);
-        apply_ast_semantic_ranges(&mut all_tokens, &refined, &lines, None);
+        let log_out = debug.then_some(&mut log_lines);
+        apply_ast_semantic_ranges(&mut all_tokens, ranges, &lines, log_out);
     }
     (
         SemanticTokensDto {
@@ -270,6 +285,27 @@ pub fn semantic_tokens_range(
     end_character: u32,
     ast_ranges: Option<&[(SourceRange, u32)]>,
 ) -> (SemanticTokensDto, Vec<String>) {
+    semantic_tokens_range_debug(
+        text,
+        start_line,
+        start_character,
+        end_line,
+        end_character,
+        ast_ranges,
+        false,
+    )
+}
+
+/// Produce semantic tokens overlapping the given range, optionally tracing AST merges.
+pub fn semantic_tokens_range_debug(
+    text: &str,
+    start_line: u32,
+    start_character: u32,
+    end_line: u32,
+    end_character: u32,
+    ast_ranges: Option<&[(SourceRange, u32)]>,
+    debug: bool,
+) -> (SemanticTokensDto, Vec<String>) {
     let mut all_tokens = Vec::new();
     let lines: Vec<&str> = text.lines().collect();
     let max_line = lines.len().saturating_sub(1) as u32;
@@ -301,10 +337,10 @@ pub fn semantic_tokens_range(
         }
     }
 
-    let log_lines = Vec::new();
+    let mut log_lines = Vec::new();
     if let Some(ranges) = ast_ranges {
-        let refined = refine_declaration_ranges(text, ranges);
-        apply_ast_semantic_ranges(&mut all_tokens, &refined, &lines, None);
+        let log_out = debug.then_some(&mut log_lines);
+        apply_ast_semantic_ranges(&mut all_tokens, ranges, &lines, log_out);
     }
 
     (
@@ -368,6 +404,24 @@ mod tests {
         assert_ne!(
             tokens.data, lexer_only.data,
             "AST refinement should change token classification for part def names"
+        );
+    }
+
+    #[test]
+    fn debug_logging_is_empty_when_disabled_and_populated_when_enabled() {
+        let text = "package Demo {\n  part def Vehicle;\n}\n";
+        let parsed = sysml_query::syntax::SyntaxService::new().parse_text(text);
+        let ranges = ast_semantic_ranges(&parsed, text);
+        let (_, off) = semantic_tokens_full_debug(text, Some(&ranges), false);
+        let (_, on) = semantic_tokens_full_debug(text, Some(&ranges), true);
+        assert!(
+            off.is_empty(),
+            "debug traces stay empty unless explicitly requested"
+        );
+        assert!(
+            on.iter()
+                .any(|line| line.contains("[SYSML semantic tokens]")),
+            "enabled debug logging should record AST ranges or overrides: {on:?}"
         );
     }
 }

@@ -171,6 +171,7 @@ pub(crate) struct SemanticModel<D> {
     pub(crate) storage: SemanticModelStorage,
     pub(crate) direct_names: NameIndex,
     pub(crate) effective_imports: NameIndex,
+    pub(crate) exported_imports: NameIndex,
     pub(crate) identities: IdentityIndex,
     /// Every declaration's `::`-joined display path, settled at the barrier into one blob.
     pub(crate) qualified_names: QualifiedNameIndex,
@@ -186,6 +187,8 @@ pub(crate) struct SemanticModel<D> {
     pub(crate) evaluation: Box<[EvaluationFact]>,
     /// Settled unit, measurement and filter facts over the expressions this publication admitted.
     pub(crate) expressions: expression::ExpressionIndex,
+    /// The resolved structure of every authored constraint / calc / value expression.
+    pub(crate) resolved_expressions: crate::index::resolved_expressions::ResolvedExpressionIndex,
     /// Settled at the publication barrier alongside the indexes, so reading them is a lookup and
     /// a broken storage invariant fails the build instead of a later query.
     pub(crate) diagnostics: D,
@@ -229,6 +232,7 @@ impl<D> SemanticModel<D> {
             .map(|document| crate::pipeline::PreparedDocument {
                 identity: document.identity,
                 role: document.role,
+                language: document.language,
                 digest: document.digest,
                 parsed: document.parsed,
                 parse_errors: document.parse_errors.into_vec(),
@@ -236,9 +240,16 @@ impl<D> SemanticModel<D> {
             .collect();
         Ok(crate::pipeline::PreparedLibrary {
             documents,
-            settled: self
-                .settled_library()
-                .map_err(|_| crate::pipeline::CoordinatorError::ConstructionFailed)?,
+            settled: self.settled_library().map_err(|error| {
+                crate::BuildFailure::construction(
+                    crate::ConstructionPhase::LibrarySeed,
+                    self.storage
+                        .documents
+                        .iter()
+                        .map(|document| document.identity.as_ref()),
+                    error,
+                )
+            })?,
         })
     }
 
@@ -249,7 +260,11 @@ impl<D> SemanticModel<D> {
             if declaration.owner.is_some() {
                 continue;
             }
-            if let Some(name) = declaration.name.and_then(|name| self.storage.symbol(name)) {
+            if let Some(name) = declaration
+                .name
+                .resolved()
+                .and_then(|name| self.storage.symbol(name))
+            {
                 root_names.insert(name.into());
             }
         }
@@ -274,6 +289,12 @@ impl<D> SemanticModel<D> {
         }
         Ok(SettledLibrary {
             outcomes: self.resolution.outcomes.clone(),
+            expression_relationships:
+                crate::resolve::implied::synthesize_access_expression_result_relationships(
+                    &self.storage,
+                    &self.resolution,
+                )?
+                .into_boxed_slice(),
             root_names,
             unsettled_roots,
         })
@@ -286,13 +307,15 @@ mod tests {
     use crate::lower::facts::AuthoredExpression;
     use crate::lower::facts::CanonicalDocument;
     use crate::lower::facts::ExpressionGrammar;
+    use crate::lower::facts::OwnedEndFeature;
+    use crate::lower::facts::OwnedEndRecord;
     use source_identity::SourceRole;
     use sysml_v2_parser::ast::{Expression, QualifiedReferenceArena, RootNamespace, SourceStorage};
     use sysml_v2_parser::ParsedDocument;
 
     #[test]
     fn generated_feature_relationship_collection_contracts_are_complete_and_closed() {
-        assert_eq!(GENERATED_FEATURE_DERIVED_RELATIONSHIP_RULES.len(), 5);
+        assert_eq!(GENERATED_FEATURE_DERIVED_RELATIONSHIP_RULES.len(), 9);
         assert_eq!(
             GENERATED_FEATURE_DERIVED_RELATIONSHIP_RULES
                 .iter()
@@ -300,14 +323,34 @@ mod tests {
                 .collect::<Vec<_>>(),
             vec![
                 (
+                    "kerml-1.0:8.3.3.3.4:deriveFeatureChainingFeature",
+                    "Feature",
+                    FeatureDerivedRelationshipCollection::ChainingFeature,
+                ),
+                (
+                    "kerml-1.0:8.3.3.3.4:deriveFeatureOwnedCrossSubsetting",
+                    "Feature",
+                    FeatureDerivedRelationshipCollection::OwnedCrossSubsetting,
+                ),
+                (
                     "kerml-1.0:8.3.3.3.4:deriveFeatureOwnedFeatureChaining",
                     "Feature",
                     FeatureDerivedRelationshipCollection::OwnedFeatureChaining,
                 ),
                 (
+                    "kerml-1.0:8.3.3.3.4:deriveFeatureOwnedFeatureInverting",
+                    "Feature",
+                    FeatureDerivedRelationshipCollection::OwnedFeatureInverting,
+                ),
+                (
                     "kerml-1.0:8.3.3.3.4:deriveFeatureOwnedRedefinition",
                     "Feature",
                     FeatureDerivedRelationshipCollection::OwnedRedefinition,
+                ),
+                (
+                    "kerml-1.0:8.3.3.3.4:deriveFeatureOwnedReferenceSubsetting",
+                    "Feature",
+                    FeatureDerivedRelationshipCollection::OwnedReferenceSubsetting,
                 ),
                 (
                     "kerml-1.0:8.3.3.3.4:deriveFeatureOwnedSubsetting",
@@ -340,7 +383,7 @@ mod tests {
         assert_eq!(generated_library_specialization_rule_count(), 85);
         assert_eq!(
             generated_conditional_library_specialization_rule_count(),
-            58
+            59
         );
         let unique_rules = GENERATED_LIBRARY_SPECIALIZATION_RULES
             .iter()
@@ -385,7 +428,15 @@ mod tests {
         // contains no library declarations. That makes every missing prerequisite explicit, and
         // catches a manifest/generator change that adds a rule without publication coverage.
         let anchors = library_specialization_anchors(&storage_with_one_filter());
-        assert_eq!(anchors.by_rule.len(), 150);
+        assert_eq!(anchors.by_rule.len(), 152);
+        let individual_multiplicity_rule = crate::resolve::implied::specialization_check_rule(
+            crate::specialization_query::SpecializationCheckKind::OccurrenceDefinitionMultiplicity,
+        )
+        .expect("the individual multiplicity rule is published");
+        assert!(matches!(
+            anchors.outcome(individual_multiplicity_rule.rule_id),
+            Some(LibrarySpecializationAnchor::Missing)
+        ));
         for rule in GENERATED_LIBRARY_SPECIALIZATION_RULES {
             assert!(matches!(
                 anchors.outcome(rule.rule_id),
@@ -667,6 +718,10 @@ mod tests {
             unit_tokens: Box::new([]),
             filter_conditions: Box::new([]),
             invocations: Box::new([]),
+            assignments: Box::new([]),
+            trigger_invocations: Box::new([]),
+            unlowered_expressions: Box::new([]),
+            owned_end_features: Box::new([]),
         };
         let rule = GENERATED_CONDITIONAL_LIBRARY_SPECIALIZATION_RULES
             .iter()
@@ -781,6 +836,15 @@ mod tests {
             unit_tokens: Box::new([]),
             filter_conditions: Box::new([]),
             invocations: Box::new([]),
+            assignments: Box::new([]),
+            trigger_invocations: Box::new([]),
+            unlowered_expressions: Box::new([]),
+            owned_end_features: [(1, 2), (1, 3), (4, 5)]
+                .map(|(owner, end)| OwnedEndRecord {
+                    owner: id(owner),
+                    end: OwnedEndFeature::Declared(id(end)),
+                })
+                .into(),
         };
         let rule = |rule_id| {
             GENERATED_CONDITIONAL_LIBRARY_SPECIALIZATION_RULES
@@ -881,7 +945,7 @@ mod tests {
         Declaration {
             document,
             owner,
-            name,
+            name: name.into(),
             anonymous_ordinal: name.is_none().then_some(0),
             kind,
             span: Span::dummy(),
@@ -909,7 +973,9 @@ mod tests {
             digest: source_identity::ContentDigest::of_bytes(&[]),
             identity: "test".into(),
             role: SourceRole::Workspace,
+            language: source_identity::SourceLanguage::SysML,
             parsed: std::sync::Arc::new(ParsedDocument {
+                name_language: sysml_v2_parser::ast::NameLanguage::Sysml,
                 source: SourceStorage::default(),
                 qualified_references: QualifiedReferenceArena::default(),
                 root: RootNamespace {
@@ -954,11 +1020,16 @@ mod tests {
                     document: DocumentIdx(0),
                     grammar: ExpressionGrammar::Constraint,
                     operand_start: 0,
+                    operand_scope: crate::lower::facts::ExpressionOperandScope::Local,
                     node: Expression::LiteralInteger(5),
                 },
                 predicate: FilterPredicate::Unsupported,
             }]),
             invocations: Box::new([]),
+            assignments: Box::new([]),
+            trigger_invocations: Box::new([]),
+            unlowered_expressions: Box::new([]),
+            owned_end_features: Box::new([]),
         }
     }
 
@@ -1048,6 +1119,10 @@ mod tests {
             unit_tokens: Box::new([]),
             filter_conditions: Box::new([]),
             invocations: Box::new([]),
+            assignments: Box::new([]),
+            trigger_invocations: Box::new([]),
+            unlowered_expressions: Box::new([]),
+            owned_end_features: Box::new([]),
         }
     }
 
@@ -1135,14 +1210,20 @@ mod tests {
             unit_tokens: Box::new([]),
             filter_conditions: Box::new([]),
             invocations: Box::new([]),
+            assignments: Box::new([]),
+            trigger_invocations: Box::new([]),
+            unlowered_expressions: Box::new([]),
+            owned_end_features: Box::new([]),
         }
     }
 
     fn resolution_with_status(status: SolverStatus) -> ResolutionResults {
         ResolutionResults {
+            alias_failures: std::collections::BTreeSet::new(),
+            member_access_paths: Default::default(),
             outcomes: Box::new([]),
             ambiguous_candidates: Box::new([]),
-            inherited_names: NameIndex::build(Vec::new()).unwrap(),
+            inherited_names: crate::resolve::names::InheritedNameIndex::empty().unwrap(),
             effective_names: Box::new([]),
             solver_status: status,
             implied_relationships: Box::new([]),
@@ -1166,6 +1247,7 @@ mod tests {
             succession_endpoint_subsetting_projections: Box::default(),
             decision_outgoing_subsetting_status: Default::default(),
             merge_incoming_subsetting_status: Default::default(),
+            control_node_successions: Box::default(),
             transition_payload_subsetting_projections: Box::default(),
             transition_payload_subsetting_status: Default::default(),
             transition_succession_source_projections: Box::default(),
@@ -1345,7 +1427,13 @@ mod tests {
 
     fn resolve_fixture(
         fixture: &ResolverFixture,
-    ) -> (NameIndex, NameIndex, MembershipIndex, ResolutionResults) {
+    ) -> (
+        NameIndex,
+        NameIndex,
+        NameIndex,
+        MembershipIndex,
+        ResolutionResults,
+    ) {
         resolve_dense(
             &fixture.declarations,
             None,
@@ -1763,7 +1851,7 @@ mod tests {
     #[test]
     fn same_name_direct_parent_feature_synthesizes_implied_redefinition() {
         let fixture = redefinition_fixture();
-        let (_, _, _, resolution) = resolve_fixture(&fixture);
+        let (_, _, _, _, resolution) = resolve_fixture(&fixture);
         assert_eq!(resolution.solver_status, SolverStatus::Converged);
         assert_eq!(
             resolution.implied_relationships.as_ref(),
@@ -1786,7 +1874,7 @@ mod tests {
             false,
         ));
         fixture.references = references.into_boxed_slice();
-        let (_, _, _, resolution) = resolve_fixture(&fixture);
+        let (_, _, _, _, resolution) = resolve_fixture(&fixture);
         assert!(resolution.implied_relationships.is_empty());
     }
 
@@ -1799,7 +1887,7 @@ mod tests {
         declarations.push(declaration(
             DocumentIdx(0),
             Some(DeclarationId(1)),
-            Some(declarations[2].name.unwrap()),
+            Some(declarations[2].name.resolved().unwrap()),
             DeclarationKind::AttributeUsage,
         ));
         fixture.declarations = declarations.into_boxed_slice();
@@ -1812,7 +1900,7 @@ mod tests {
             span: Span::dummy(),
         });
         fixture.memberships = memberships.into_boxed_slice();
-        let (_, _, _, resolution) = resolve_fixture(&fixture);
+        let (_, _, _, _, resolution) = resolve_fixture(&fixture);
         assert!(resolution.implied_relationships.is_empty());
     }
 
@@ -1921,7 +2009,7 @@ mod tests {
             false,
         ));
         fixture.references = references.into_boxed_slice();
-        let (_, _, _, resolution) = resolve_fixture(&fixture);
+        let (_, _, _, _, resolution) = resolve_fixture(&fixture);
         assert_eq!(resolution.solver_status, SolverStatus::Converged);
         assert_eq!(
             resolution.outcome(AuthoredReferenceId(redefinition_index)),
@@ -1946,7 +2034,7 @@ mod tests {
             false,
         ));
         fixture.references = references.into_boxed_slice();
-        let (_, _, _, resolution) = resolve_fixture(&fixture);
+        let (_, _, _, _, resolution) = resolve_fixture(&fixture);
         assert_eq!(resolution.solver_status, SolverStatus::Converged);
         assert_eq!(
             resolution.outcome(AuthoredReferenceId(subsetting_index)),
@@ -2086,7 +2174,7 @@ mod tests {
             references: references.into_boxed_slice(),
         };
 
-        let (_, _, _, resolution) = resolve_fixture(&fixture);
+        let (_, _, _, _, resolution) = resolve_fixture(&fixture);
         assert_eq!(resolution.solver_status, SolverStatus::Converged);
         assert_eq!(
             resolution.outcome(AuthoredReferenceId(redefinition_index)),
@@ -2172,13 +2260,19 @@ mod tests {
             references: references.into_boxed_slice(),
         };
 
-        let (_, _, _, resolution) = resolve_fixture(&fixture);
-        assert_eq!(fixture.declarations[anonymous_length.index()].name, None);
+        let (_, _, _, _, resolution) = resolve_fixture(&fixture);
+        assert_eq!(
+            fixture.declarations[anonymous_length.index()].name,
+            crate::lower::facts::DeclaredName::Absent
+        );
         assert_eq!(
             resolution.effective_names[anonymous_length.index()].name,
             EffectiveNameOutcome::Resolved(length_name)
         );
-        assert!(resolution.effective_names[anonymous_length.index()].derived_from_redefinition);
+        assert_eq!(
+            resolution.effective_names[anonymous_length.index()].provenance,
+            crate::resolve::results::EffectiveNameProvenance::FirstRedefinition
+        );
         assert_eq!(
             resolution.outcome(AuthoredReferenceId(2)),
             Some(ResolutionStatus::Resolved(anonymous_length))
@@ -2277,7 +2371,7 @@ mod tests {
             references: references.into_boxed_slice(),
         };
 
-        let (_, _, _, resolution) = resolve_fixture(&fixture);
+        let (_, _, _, _, resolution) = resolve_fixture(&fixture);
         assert_eq!(resolution.solver_status, SolverStatus::Converged);
         assert_eq!(
             resolution.outcome(AuthoredReferenceId(0)),
@@ -2341,7 +2435,7 @@ mod tests {
     #[test]
     fn port_def_specialization_resolves_through_the_ancestor_fixed_point() {
         let fixture = port_def_specialization_fixture(false);
-        let (_, _, _, resolution) = resolve_fixture(&fixture);
+        let (_, _, _, _, resolution) = resolve_fixture(&fixture);
         assert_eq!(resolution.solver_status, SolverStatus::Converged);
         assert_eq!(
             resolution.outcome(AuthoredReferenceId(0)),
@@ -2401,7 +2495,7 @@ mod tests {
     #[test]
     fn occurrence_def_specialization_resolves_through_the_ancestor_fixed_point() {
         let fixture = occurrence_def_specialization_fixture();
-        let (_, _, _, resolution) = resolve_fixture(&fixture);
+        let (_, _, _, _, resolution) = resolve_fixture(&fixture);
         assert_eq!(resolution.solver_status, SolverStatus::Converged);
         assert_eq!(
             resolution.outcome(AuthoredReferenceId(0)),
@@ -2461,7 +2555,7 @@ mod tests {
     #[test]
     fn analysis_case_def_specialization_resolves_through_the_ancestor_fixed_point() {
         let fixture = analysis_case_def_specialization_fixture();
-        let (_, _, _, resolution) = resolve_fixture(&fixture);
+        let (_, _, _, _, resolution) = resolve_fixture(&fixture);
         assert_eq!(resolution.solver_status, SolverStatus::Converged);
         assert_eq!(
             resolution.outcome(AuthoredReferenceId(0)),
@@ -2512,7 +2606,7 @@ mod tests {
     #[test]
     fn case_def_specialization_resolves_through_the_ancestor_fixed_point() {
         let fixture = case_family_def_specialization_fixture(DeclarationKind::CaseDefinition);
-        let (_, _, _, resolution) = resolve_fixture(&fixture);
+        let (_, _, _, _, resolution) = resolve_fixture(&fixture);
         assert_eq!(resolution.solver_status, SolverStatus::Converged);
         assert_eq!(
             resolution.outcome(AuthoredReferenceId(0)),
@@ -2524,7 +2618,7 @@ mod tests {
     fn verification_case_def_specialization_resolves_through_the_ancestor_fixed_point() {
         let fixture =
             case_family_def_specialization_fixture(DeclarationKind::VerificationCaseDefinition);
-        let (_, _, _, resolution) = resolve_fixture(&fixture);
+        let (_, _, _, _, resolution) = resolve_fixture(&fixture);
         assert_eq!(resolution.solver_status, SolverStatus::Converged);
         assert_eq!(
             resolution.outcome(AuthoredReferenceId(0)),
@@ -2535,7 +2629,7 @@ mod tests {
     #[test]
     fn use_case_def_specialization_resolves_through_the_ancestor_fixed_point() {
         let fixture = case_family_def_specialization_fixture(DeclarationKind::UseCaseDefinition);
-        let (_, _, _, resolution) = resolve_fixture(&fixture);
+        let (_, _, _, _, resolution) = resolve_fixture(&fixture);
         assert_eq!(resolution.solver_status, SolverStatus::Converged);
         assert_eq!(
             resolution.outcome(AuthoredReferenceId(0)),
@@ -2550,7 +2644,7 @@ mod tests {
         // declaration itself, which the resolved outcome still names correctly.
         let fixture = port_def_specialization_fixture(true);
         assert!(fixture.references[0].flags.conjugated);
-        let (_, _, _, resolution) = resolve_fixture(&fixture);
+        let (_, _, _, _, resolution) = resolve_fixture(&fixture);
         assert_eq!(resolution.solver_status, SolverStatus::Converged);
         assert_eq!(
             resolution.outcome(AuthoredReferenceId(0)),
@@ -2619,7 +2713,7 @@ mod tests {
     #[test]
     fn item_def_specialization_resolves_through_the_ancestor_fixed_point() {
         let fixture = item_def_specialization_fixture();
-        let (_, _, _, resolution) = resolve_fixture(&fixture);
+        let (_, _, _, _, resolution) = resolve_fixture(&fixture);
         assert_eq!(resolution.solver_status, SolverStatus::Converged);
         assert_eq!(
             resolution.outcome(AuthoredReferenceId(0)),
@@ -2680,7 +2774,7 @@ mod tests {
     #[test]
     fn class_def_specialization_resolves_through_the_ancestor_fixed_point() {
         let fixture = class_def_specialization_fixture();
-        let (_, _, _, resolution) = resolve_fixture(&fixture);
+        let (_, _, _, _, resolution) = resolve_fixture(&fixture);
         assert_eq!(resolution.solver_status, SolverStatus::Converged);
         assert_eq!(
             resolution.outcome(AuthoredReferenceId(0)),
@@ -2741,7 +2835,7 @@ mod tests {
     #[test]
     fn action_def_specialization_resolves_through_the_ancestor_fixed_point() {
         let fixture = action_def_specialization_fixture();
-        let (_, _, _, resolution) = resolve_fixture(&fixture);
+        let (_, _, _, _, resolution) = resolve_fixture(&fixture);
         assert_eq!(resolution.solver_status, SolverStatus::Converged);
         assert_eq!(
             resolution.outcome(AuthoredReferenceId(0)),
@@ -2802,7 +2896,7 @@ mod tests {
     #[test]
     fn state_def_specialization_resolves_through_the_ancestor_fixed_point() {
         let fixture = state_def_specialization_fixture();
-        let (_, _, _, resolution) = resolve_fixture(&fixture);
+        let (_, _, _, _, resolution) = resolve_fixture(&fixture);
         assert_eq!(resolution.solver_status, SolverStatus::Converged);
         assert_eq!(
             resolution.outcome(AuthoredReferenceId(0)),
@@ -2863,7 +2957,7 @@ mod tests {
     #[test]
     fn metadata_def_specialization_resolves_through_the_ancestor_fixed_point() {
         let fixture = metadata_def_specialization_fixture();
-        let (_, _, _, resolution) = resolve_fixture(&fixture);
+        let (_, _, _, _, resolution) = resolve_fixture(&fixture);
         assert_eq!(resolution.solver_status, SolverStatus::Converged);
         assert_eq!(
             resolution.outcome(AuthoredReferenceId(0)),
@@ -2926,7 +3020,7 @@ mod tests {
     #[test]
     fn metadata_annotation_on_part_usage_resolves_to_metadata_def() {
         let fixture = metadata_annotation_fixture("Safety");
-        let (_, _, _, resolution) = resolve_fixture(&fixture);
+        let (_, _, _, _, resolution) = resolve_fixture(&fixture);
         assert_eq!(resolution.solver_status, SolverStatus::Converged);
         assert_eq!(
             resolution.outcome(AuthoredReferenceId(0)),
@@ -2937,7 +3031,7 @@ mod tests {
     #[test]
     fn metadata_annotation_with_unresolvable_target_stays_unresolved() {
         let fixture = metadata_annotation_fixture("NoSuchMetadata");
-        let (_, _, _, resolution) = resolve_fixture(&fixture);
+        let (_, _, _, _, resolution) = resolve_fixture(&fixture);
         assert_eq!(resolution.solver_status, SolverStatus::Converged);
         assert_eq!(
             resolution.outcome(AuthoredReferenceId(0)),
@@ -2998,7 +3092,7 @@ mod tests {
     #[test]
     fn connection_def_specialization_resolves_through_the_ancestor_fixed_point() {
         let fixture = connection_def_specialization_fixture();
-        let (_, _, _, resolution) = resolve_fixture(&fixture);
+        let (_, _, _, _, resolution) = resolve_fixture(&fixture);
         assert_eq!(resolution.solver_status, SolverStatus::Converged);
         assert_eq!(
             resolution.outcome(AuthoredReferenceId(0)),
@@ -3055,7 +3149,7 @@ mod tests {
     #[test]
     fn interface_def_specialization_resolves_through_the_ancestor_fixed_point() {
         let fixture = interface_def_specialization_fixture();
-        let (_, _, _, resolution) = resolve_fixture(&fixture);
+        let (_, _, _, _, resolution) = resolve_fixture(&fixture);
         assert_eq!(resolution.solver_status, SolverStatus::Converged);
         assert_eq!(
             resolution.outcome(AuthoredReferenceId(0)),
@@ -3117,7 +3211,7 @@ mod tests {
     #[test]
     fn connector_end_reference_resolves_to_its_target() {
         let fixture = connector_end_reference_fixture();
-        let (_, _, _, resolution) = resolve_fixture(&fixture);
+        let (_, _, _, _, resolution) = resolve_fixture(&fixture);
         assert_eq!(resolution.solver_status, SolverStatus::Converged);
         assert_eq!(
             resolution.outcome(AuthoredReferenceId(0)),
@@ -3128,7 +3222,8 @@ mod tests {
     #[test]
     fn namespace_import_populates_index_used_by_feature_typing() {
         let fixture = cross_file_fixture(false);
-        let (direct_names, effective_imports, _memberships, resolution) = resolve_fixture(&fixture);
+        let (direct_names, effective_imports, _exported_imports, _memberships, resolution) =
+            resolve_fixture(&fixture);
         assert_eq!(
             resolution.outcome(AuthoredReferenceId(0)),
             Some(ResolutionStatus::Resolved(DeclarationId(0)))
@@ -3186,15 +3281,22 @@ mod tests {
 
         assert!(index.is_public(DeclarationId(0)));
         assert!(index.is_public(DeclarationId(1)));
-        assert!(!index.is_public(DeclarationId(2)));
-        assert!(!index.is_public(DeclarationId(3)));
+        assert!(
+            index.is_public(DeclarationId(2)),
+            "a default membership is public in any namespace, not only a package (#231)"
+        );
+        assert!(
+            !index.is_public(DeclarationId(3)),
+            "an import is the one membership that defaults to private"
+        );
     }
 
     #[test]
     fn namespace_import_excludes_explicitly_private_members() {
         let mut fixture = cross_file_fixture(false);
         fixture.memberships[1].visibility = Visibility::Private;
-        let (_, effective_imports, _memberships, resolution) = resolve_fixture(&fixture);
+        let (_, effective_imports, _exported_imports, _memberships, resolution) =
+            resolve_fixture(&fixture);
 
         assert!(effective_imports
             .candidates(Some(DeclarationId(2)), NameId(2))
@@ -3208,7 +3310,7 @@ mod tests {
     #[test]
     fn duplicate_imported_type_is_canonically_ambiguous() {
         let fixture = cross_file_fixture(true);
-        let (_, _, _, resolution) = resolve_fixture(&fixture);
+        let (_, _, _, _, resolution) = resolve_fixture(&fixture);
         let Some(ResolutionStatus::Ambiguous(range)) = resolution.outcome(AuthoredReferenceId(1))
         else {
             panic!("feature typing must retain ambiguity");
@@ -3222,7 +3324,8 @@ mod tests {
     #[test]
     fn transitive_namespace_imports_converge_without_reference_scans() {
         let fixture = transitive_import_fixture();
-        let (_, effective_imports, _memberships, resolution) = resolve_fixture(&fixture);
+        let (_, effective_imports, _exported_imports, _memberships, resolution) =
+            resolve_fixture(&fixture);
         assert_eq!(resolution.solver_status, SolverStatus::Converged);
         assert_eq!(resolution.work.passes, 4);
         assert_eq!(resolution.work.import_evaluations, 12);
@@ -3242,7 +3345,8 @@ mod tests {
     #[test]
     fn an_import_target_can_become_visible_through_an_earlier_import() {
         let fixture = imported_target_fixture();
-        let (_, effective_imports, _memberships, resolution) = resolve_fixture(&fixture);
+        let (_, effective_imports, _exported_imports, _memberships, resolution) =
+            resolve_fixture(&fixture);
         assert_eq!(resolution.solver_status, SolverStatus::Converged);
         assert_eq!(
             resolution.outcome(AuthoredReferenceId(1)),
@@ -3261,7 +3365,8 @@ mod tests {
     #[test]
     fn cyclic_namespace_imports_reach_a_finite_canonical_closure() {
         let fixture = cyclic_import_fixture();
-        let (_, effective_imports, _memberships, resolution) = resolve_fixture(&fixture);
+        let (_, effective_imports, _exported_imports, _memberships, resolution) =
+            resolve_fixture(&fixture);
         assert_eq!(resolution.solver_status, SolverStatus::Converged);
         assert_eq!(resolution.work.passes, 3);
         assert_eq!(
@@ -3277,7 +3382,8 @@ mod tests {
     #[test]
     fn later_qualified_segments_use_the_effective_import_index() {
         let fixture = qualified_import_target_fixture();
-        let (_, effective_imports, _memberships, resolution) = resolve_fixture(&fixture);
+        let (_, effective_imports, _exported_imports, _memberships, resolution) =
+            resolve_fixture(&fixture);
         assert_eq!(resolution.solver_status, SolverStatus::Converged);
         assert_eq!(
             resolution.outcome(AuthoredReferenceId(1)),
@@ -3296,7 +3402,7 @@ mod tests {
     #[test]
     fn exhausted_bound_is_a_typed_non_converged_publication_state() {
         let fixture = cross_file_fixture(false);
-        let (_, _, _memberships, resolution) = resolve_dense_with_limit(
+        let (_, _, _, _memberships, resolution) = resolve_dense_with_limit(
             &fixture.declarations,
             None,
             &fixture.memberships,
@@ -3322,7 +3428,7 @@ mod tests {
     fn missing_and_filtered_references_remain_explicit() {
         let mut fixture = cross_file_fixture(false);
         fixture.references[0].kind = ReferenceKind::FilterImport;
-        let (_, _, _, resolution) = resolve_fixture(&fixture);
+        let (_, _, _, _, resolution) = resolve_fixture(&fixture);
         assert_eq!(
             resolution.outcome(AuthoredReferenceId(0)),
             Some(ResolutionStatus::Unsupported)
@@ -3428,13 +3534,140 @@ mod tests {
     #[test]
     fn diamond_inherited_member_lookup_dedups_to_a_single_target() {
         let fixture = diamond_fixture("p", "Member");
-        let (_, _, _, resolution) = resolve_fixture(&fixture);
+        let (_, _, _, _, resolution) = resolve_fixture(&fixture);
         assert_eq!(resolution.solver_status, SolverStatus::Converged);
         // Member is owned only by Base (id 2), reached via both Left -> Base and Right -> Base;
         // the diamond must dedup to exactly one Resolved outcome rather than an Ambiguous one.
         assert_eq!(
             resolution.outcome(AuthoredReferenceId(4)),
             Some(ResolutionStatus::Resolved(DeclarationId(2)))
+        );
+    }
+
+    /// KerML 8.3.3.1: `class B conjugates A` gives `B` the memberships of `A`, so `B::f` and a
+    /// further specialization `C :> B` both name `A::f`. A feature may also conjugate a feature
+    /// directly (`feature k ~ f`).
+    #[test]
+    fn conjugated_type_exposes_its_original_types_members() {
+        let mut symbols = SymbolTableBuilder::default();
+        let package_name = symbols.intern("Conjugation").unwrap();
+        let a_name = symbols.intern("A").unwrap();
+        let b_name = symbols.intern("B").unwrap();
+        let c_name = symbols.intern("C").unwrap();
+        let f_name = symbols.intern("f").unwrap();
+        let g_name = symbols.intern("g").unwrap();
+        let h_name = symbols.intern("h").unwrap();
+        let k_name = symbols.intern("k").unwrap();
+        let mut paths = SymbolPathArenaBuilder::default();
+        let a_path = paths.push(&[a_name], false).unwrap();
+        let b_path = paths.push(&[b_name], false).unwrap();
+        let f_path = paths.push(&[f_name], false).unwrap();
+        let b_f_path = paths.push(&[b_name, f_name], false).unwrap();
+        let c_f_path = paths.push(&[c_name, f_name], false).unwrap();
+
+        let package = DeclarationId(0);
+        let class_a = DeclarationId(1);
+        let feature_f = DeclarationId(2);
+        let class_b = DeclarationId(3);
+        let class_c = DeclarationId(5);
+        let declarations = vec![
+            declaration(
+                DocumentIdx(0),
+                None,
+                Some(package_name),
+                DeclarationKind::Package,
+            ),
+            declaration(
+                DocumentIdx(0),
+                Some(package),
+                Some(a_name),
+                DeclarationKind::ClassDefinition,
+            ),
+            declaration(
+                DocumentIdx(0),
+                Some(class_a),
+                Some(f_name),
+                DeclarationKind::KermlFeature,
+            ),
+            declaration(
+                DocumentIdx(0),
+                Some(package),
+                Some(b_name),
+                DeclarationKind::ClassDefinition,
+            ),
+            declaration(
+                DocumentIdx(0),
+                Some(package),
+                Some(g_name),
+                DeclarationKind::KermlFeature,
+            ),
+            declaration(
+                DocumentIdx(0),
+                Some(package),
+                Some(c_name),
+                DeclarationKind::ClassDefinition,
+            ),
+            declaration(
+                DocumentIdx(0),
+                Some(package),
+                Some(h_name),
+                DeclarationKind::KermlFeature,
+            ),
+            declaration(
+                DocumentIdx(0),
+                Some(class_a),
+                Some(k_name),
+                DeclarationKind::KermlFeature,
+            ),
+        ];
+        let references = vec![
+            reference(class_b, ReferenceKind::Conjugation, a_path, false),
+            reference(class_c, ReferenceKind::Subclassification, b_path, false),
+            reference(
+                DeclarationId(4),
+                ReferenceKind::Conjugation,
+                b_f_path,
+                false,
+            ),
+            reference(
+                DeclarationId(6),
+                ReferenceKind::Conjugation,
+                c_f_path,
+                false,
+            ),
+            reference(DeclarationId(7), ReferenceKind::Conjugation, f_path, false),
+        ];
+        let _symbols = symbols.freeze();
+        let memberships = memberships_for(&declarations, &[]);
+        let fixture = ResolverFixture {
+            declarations: declarations.into_boxed_slice(),
+            memberships,
+            paths: paths.freeze(),
+            references: references.into_boxed_slice(),
+        };
+        let (_, _, _, _, resolution) = resolve_fixture(&fixture);
+        assert_eq!(resolution.solver_status, SolverStatus::Converged);
+        assert_eq!(
+            resolution.outcome(AuthoredReferenceId(0)),
+            Some(ResolutionStatus::Resolved(class_a))
+        );
+        assert_eq!(
+            resolution.outcome(AuthoredReferenceId(1)),
+            Some(ResolutionStatus::Resolved(class_b))
+        );
+        assert_eq!(
+            resolution.outcome(AuthoredReferenceId(2)),
+            Some(ResolutionStatus::Resolved(feature_f)),
+            "B::f is a member B inherits through its conjugation of A"
+        );
+        assert_eq!(
+            resolution.outcome(AuthoredReferenceId(3)),
+            Some(ResolutionStatus::Resolved(feature_f)),
+            "C :> B still sees the member B inherited by conjugation"
+        );
+        assert_eq!(
+            resolution.outcome(AuthoredReferenceId(4)),
+            Some(ResolutionStatus::Resolved(feature_f))
         );
     }
 
@@ -3450,7 +3683,7 @@ mod tests {
         references.remove(3);
         references.remove(1);
         fixture.references = references.into_boxed_slice();
-        let (_, _, _, resolution) = resolve_fixture(&fixture);
+        let (_, _, _, _, resolution) = resolve_fixture(&fixture);
         assert_eq!(resolution.solver_status, SolverStatus::Converged);
         assert_eq!(
             resolution.outcome(AuthoredReferenceId(2)),
@@ -3548,7 +3781,7 @@ mod tests {
     #[test]
     fn diamond_with_conflicting_ancestor_members_publishes_an_explicit_ambiguous_outcome() {
         let fixture = diamond_conflict_fixture();
-        let (_, _, _, resolution) = resolve_fixture(&fixture);
+        let (_, _, _, _, resolution) = resolve_fixture(&fixture);
         assert_eq!(resolution.solver_status, SolverStatus::Converged);
         match resolution.outcome(AuthoredReferenceId(2)) {
             Some(ResolutionStatus::Ambiguous(range)) => {
@@ -3625,7 +3858,7 @@ mod tests {
     #[test]
     fn cyclic_specialization_yields_a_typed_non_converged_typing_outcome_not_a_loop() {
         let fixture = cyclic_specialization_fixture();
-        let (_, _, _, resolution) = resolve_fixture(&fixture);
+        let (_, _, _, _, resolution) = resolve_fixture(&fixture);
         // The import/typing fixed point above this family still converges; only the
         // ancestor-closure-dependent FeatureTyping outcome for the cyclically-specialized owner
         // is explicitly NonConverged, rather than the solver looping forever or silently guessing
@@ -3701,7 +3934,7 @@ mod tests {
     #[test]
     fn alias_binding_resolves_through_the_shared_lexical_lookup_fixed_point() {
         let fixture = alias_binding_fixture();
-        let (_, _, _, resolution) = resolve_fixture(&fixture);
+        let (_, _, _, _, resolution) = resolve_fixture(&fixture);
         assert_eq!(resolution.solver_status, SolverStatus::Converged);
         // DeviceAlias's own authored `AliasBinding` reference resolves to Device (id 1), using
         // the same fixed point as every other authored reference kind rather than a separate
@@ -3715,7 +3948,7 @@ mod tests {
     #[test]
     fn typing_through_an_alias_resolves_transitively_to_the_ultimate_target() {
         let fixture = alias_binding_fixture();
-        let (_, _, _, resolution) = resolve_fixture(&fixture);
+        let (_, _, _, _, resolution) = resolve_fixture(&fixture);
         assert_eq!(resolution.solver_status, SolverStatus::Converged);
         // `device : DeviceAlias`'s own FeatureTyping outcome targets the alias declaration (id 2)
         // itself -- the alias's own authored fact is never weakened or bypassed.
@@ -3790,7 +4023,7 @@ mod tests {
         // test would time out (rather than merely fail an assertion) if alias cycle detection
         // ever degenerated into an unbounded chase.
         let fixture = cyclic_alias_binding_fixture();
-        let (_, _, _, resolution) = resolve_fixture(&fixture);
+        let (_, _, _, _, resolution) = resolve_fixture(&fixture);
         assert_eq!(resolution.solver_status, SolverStatus::Converged);
         assert_eq!(
             resolution.outcome(AuthoredReferenceId(0)),
@@ -3883,7 +4116,7 @@ mod tests {
         // it must shadow the imported, domain-compatible
         // A::T rather than being silently discarded in favor of the import or left Unresolved.
         let fixture = local_shadow_fixture(false);
-        let (_, _, _, resolution) = resolve_fixture(&fixture);
+        let (_, _, _, _, resolution) = resolve_fixture(&fixture);
         assert_eq!(resolution.solver_status, SolverStatus::Converged);
         assert_eq!(
             resolution.outcome(AuthoredReferenceId(1)),
@@ -3907,7 +4140,7 @@ mod tests {
         let mut references = fixture.references.into_vec();
         references[1].source = DeclarationId(4);
         fixture.references = references.into_boxed_slice();
-        let (_, _, _, resolution) = resolve_fixture(&fixture);
+        let (_, _, _, _, resolution) = resolve_fixture(&fixture);
         assert_eq!(resolution.solver_status, SolverStatus::Converged);
         assert_eq!(
             resolution.outcome(AuthoredReferenceId(1)),
@@ -3922,7 +4155,7 @@ mod tests {
         // chain to C, find C::T there, and shadow A::T at that outer tier before ever consulting
         // imports.
         let fixture = local_shadow_fixture(true);
-        let (_, _, _, resolution) = resolve_fixture(&fixture);
+        let (_, _, _, _, resolution) = resolve_fixture(&fixture);
         assert_eq!(resolution.solver_status, SolverStatus::Converged);
         assert_eq!(
             resolution.outcome(AuthoredReferenceId(1)),

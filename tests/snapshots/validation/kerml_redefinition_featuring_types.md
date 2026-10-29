@@ -8,7 +8,6 @@ source_expectation=accepted
 rule_family=validate
 expectation=diagnostics
 rule_id=kerml-1.0:8.3.3.3.8:validateRedefinitionFeaturingTypes
-blocked_by=semantic-redefinition-featuring-type-compatibility
 type=file
 ~~~
 # SOURCE
@@ -23,10 +22,10 @@ package Redefinitions {
         feature original : Thing redefines Base::original;
     }
     classifier Invalid {
-        feature first : Thing;
+        feature 'first' : Thing;
 
         // Invalid: both features are featured by Invalid alone.
-        feature second : Thing redefines first;
+        feature second : Thing redefines Redefinitions::Invalid::'first';
     }
 }
 ~~~
@@ -36,10 +35,16 @@ package Redefinitions {
   (document "memory://snapshot/kerml_redefinition_featuring_types.md"
     (diagnostics
       (diagnostic
-        (severity warning)
+        (severity error)
         (code "redefinition_featuring_type_incompatible")
         (source "semantic")
-        (range (start 13 8) (end 13 47))
+        (range (start 13 41) (end 13 72))
+        (related-information
+          (related
+            (uri "memory://snapshot/kerml_redefinition_featuring_types.md")
+            (range (start 10 8) (end 10 32))
+          )
+        )
       )
     )
   )
@@ -50,6 +55,18 @@ package Redefinitions {
 (fixture-diagnostics
   (document "memory://snapshot/kerml_redefinition_featuring_types.md"
     (diagnostics
+      (diagnostic
+        (severity error)
+        (code "redefinition_featuring_type_incompatible")
+        (source "semantic")
+        (range (start 13 41) (end 13 72))
+        (related-information
+          (related
+            (uri "memory://snapshot/kerml_redefinition_featuring_types.md")
+            (range (start 10 8) (end 10 32))
+          )
+        )
+      )
     )
   )
 )
@@ -57,7 +74,7 @@ package Redefinitions {
 # SMG
 ~~~sexpr
 (semantic-model
-  (publication (phase resolved) (completeness complete) (has-evaluation false) (source-digest "blake3:2509561083bc2998fc80a48f1d867d54d8870b72841043b0b722d00d8a353b66"))
+  (publication (phase resolved) (completeness complete) (has-evaluation false) (source-digest "blake3:6d3922f103e38085a82c7525b17bd251f82a8f8fb0d5537191b592ad154bf202"))
   (declarations
     (declaration (id (node (document "memory://snapshot/kerml_redefinition_featuring_types.md") (qualified-name "Redefinitions"))) (kind package) (membership (kind owning) (visibility default)))
     (declaration (id (node (document "memory://snapshot/kerml_redefinition_featuring_types.md") (qualified-name "Redefinitions::Base"))) (kind kerml-classifier) (membership (kind owning) (visibility default)))
@@ -66,7 +83,7 @@ package Redefinitions {
     (declaration (id (node (document "memory://snapshot/kerml_redefinition_featuring_types.md") (qualified-name "Redefinitions::Conforming::original"))) (kind kerml-feature) (membership (kind feature) (visibility default)) (authored (membership (kind feature) (visibility default)) (relationships (featureTyping (reference "Thing")) (redefinition (reference "Base::original")))))
     (declaration (id (node (document "memory://snapshot/kerml_redefinition_featuring_types.md") (qualified-name "Redefinitions::Invalid"))) (kind kerml-classifier) (membership (kind owning) (visibility default)))
     (declaration (id (node (document "memory://snapshot/kerml_redefinition_featuring_types.md") (qualified-name "Redefinitions::Invalid::first"))) (kind kerml-feature) (membership (kind feature) (visibility default)) (authored (membership (kind feature) (visibility default)) (relationships (featureTyping (reference "Thing")))))
-    (declaration (id (node (document "memory://snapshot/kerml_redefinition_featuring_types.md") (qualified-name "Redefinitions::Invalid::second"))) (kind kerml-feature) (membership (kind feature) (visibility default)) (authored (membership (kind feature) (visibility default)) (relationships (featureTyping (reference "Thing")) (redefinition (reference "first")))))
+    (declaration (id (node (document "memory://snapshot/kerml_redefinition_featuring_types.md") (qualified-name "Redefinitions::Invalid::second"))) (kind kerml-feature) (membership (kind feature) (visibility default)) (authored (membership (kind feature) (visibility default)) (relationships (featureTyping (reference "Thing")) (redefinition (reference "Redefinitions::Invalid::first")))))
     (declaration (id (node (document "memory://snapshot/kerml_redefinition_featuring_types.md") (qualified-name "Redefinitions::Thing"))) (kind kerml-classifier) (membership (kind owning) (visibility default)))
   )
   (references
@@ -89,7 +106,7 @@ package Redefinitions {
       (authored-target "Thing")
       (outcome (status resolved) (target (node (document "memory://snapshot/kerml_redefinition_featuring_types.md") (qualified-name "Redefinitions::Thing")))))
     (reference (id (source (node (document "memory://snapshot/kerml_redefinition_featuring_types.md") (qualified-name "Redefinitions::Invalid::second"))) (kind redefinition) (ordinal 0))
-      (authored-target "first")
+      (authored-target "Redefinitions::Invalid::first")
       (outcome (status resolved) (target (node (document "memory://snapshot/kerml_redefinition_featuring_types.md") (qualified-name "Redefinitions::Invalid::first")))))
   )
   (relationships
@@ -179,7 +196,7 @@ package Redefinitions {
       (outcome (status resolved) (target (node (document "memory://snapshot/kerml_redefinition_featuring_types.md") (qualified-name "Redefinitions::Base::original")))))
     )
   )
-  (query (document "memory://snapshot/kerml_redefinition_featuring_types.md") (range (start 10 24) (end 10 29)) (probe (position 10 24))
+  (query (document "memory://snapshot/kerml_redefinition_featuring_types.md") (range (start 10 26) (end 10 31)) (probe (position 10 26))
     (reference (id (source (node (document "memory://snapshot/kerml_redefinition_featuring_types.md") (qualified-name "Redefinitions::Invalid::first"))) (kind featureTyping) (ordinal 0) (authored-target "Thing")
       (outcome (status resolved) (target (node (document "memory://snapshot/kerml_redefinition_featuring_types.md") (qualified-name "Redefinitions::Thing")))))
     )
@@ -189,8 +206,8 @@ package Redefinitions {
       (outcome (status resolved) (target (node (document "memory://snapshot/kerml_redefinition_featuring_types.md") (qualified-name "Redefinitions::Thing")))))
     )
   )
-  (query (document "memory://snapshot/kerml_redefinition_featuring_types.md") (range (start 13 41) (end 13 46)) (probe (position 13 41))
-    (reference (id (source (node (document "memory://snapshot/kerml_redefinition_featuring_types.md") (qualified-name "Redefinitions::Invalid::second"))) (kind redefinition) (ordinal 0) (authored-target "first")
+  (query (document "memory://snapshot/kerml_redefinition_featuring_types.md") (range (start 13 41) (end 13 72)) (probe (position 13 41))
+    (reference (id (source (node (document "memory://snapshot/kerml_redefinition_featuring_types.md") (qualified-name "Redefinitions::Invalid::second"))) (kind redefinition) (ordinal 0) (authored-target "Redefinitions::Invalid::first")
       (outcome (status resolved) (target (node (document "memory://snapshot/kerml_redefinition_featuring_types.md") (qualified-name "Redefinitions::Invalid::first")))))
     )
   )

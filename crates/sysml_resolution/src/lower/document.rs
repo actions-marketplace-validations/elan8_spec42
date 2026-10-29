@@ -37,8 +37,12 @@ use crate::lower::facts::FeatureValueRecord;
 use crate::lower::facts::MembershipRecord;
 use crate::lower::facts::MetadataAnnotationRecord;
 use crate::lower::facts::OperatorExpressionRecord;
+use crate::lower::facts::OwnedEndFeature;
+use crate::lower::facts::OwnedEndRecord;
+use crate::lower::facts::ParserReferenceId;
 use crate::lower::facts::PendingEvaluationFact;
 use crate::lower::facts::RecoveryRecord;
+use crate::lower::facts::ThenSource;
 use crate::lower::facts::UnsupportedRecord;
 use crate::lower::intern::SymbolPathArena;
 use crate::lower::intern::SymbolTable;
@@ -77,6 +81,10 @@ pub(crate) struct LoweredDocument {
     pub(crate) unit_tokens: Box<[AuthoredUnitToken]>,
     pub(crate) filter_conditions: Box<[AuthoredFilterCondition]>,
     pub(crate) invocations: Box<[AuthoredInvocation]>,
+    pub(crate) assignments: Box<[crate::lower::facts::AssignmentRecord]>,
+    pub(crate) trigger_invocations: Box<[crate::lower::facts::TriggerInvocationRecord]>,
+    pub(crate) unlowered_expressions: Box<[crate::lower::facts::UnloweredExpressionSite]>,
+    pub(crate) owned_end_features: Box<[OwnedEndRecord]>,
     /// The names this document interned, in the order the walk first interned them.
     pub(crate) symbols: SymbolTable,
     /// The qualified paths this document interned, in the order the walk first interned them.
@@ -90,13 +98,16 @@ pub(crate) struct LoweredDocument {
 /// implementation to drift from the first.
 pub(crate) fn lower_document(
     parsed: Arc<ParsedDocument>,
+    language: source_identity::SourceLanguage,
 ) -> Result<LoweredDocument, ConstructionError> {
     let mut builder = SemanticModelBuilder::default();
     // The identity, role, digest and parse errors of the admitted document are not read by the
-    // lowering walk; they belong to the whole build, which supplies its own when it splices.
+    // lowering walk; they belong to the whole build, which supplies its own when it splices. The
+    // language is read: it selects the metaclass of productions the two languages share.
     let document = builder.admit_document(
         "",
         source_identity::SourceRole::Workspace,
+        language,
         source_identity::ContentDigest::of_bytes(&[]),
         parsed,
         Vec::new(),
@@ -122,6 +133,10 @@ pub(crate) fn lower_document(
         unit_tokens: builder.unit_tokens.into_boxed_slice(),
         filter_conditions: builder.filter_conditions.into_boxed_slice(),
         invocations: builder.invocations.into_boxed_slice(),
+        assignments: builder.assignments.into_boxed_slice(),
+        trigger_invocations: builder.trigger_invocations.into_boxed_slice(),
+        unlowered_expressions: builder.unlowered_expressions.into_boxed_slice(),
+        owned_end_features: builder.owned_end_features.into_boxed_slice(),
         symbols: builder.symbols.freeze(),
         paths: builder.paths.freeze(),
     })
@@ -165,6 +180,18 @@ impl Relocation {
             .ok_or(ConstructionError::InvalidIdentity)
     }
 
+    fn declared_name(
+        &self,
+        name: super::facts::DeclaredName,
+    ) -> Result<super::facts::DeclaredName, ConstructionError> {
+        use super::facts::DeclaredName;
+        match name {
+            DeclaredName::Absent => Ok(DeclaredName::Absent),
+            DeclaredName::Malformed => Ok(DeclaredName::Malformed),
+            DeclaredName::Resolved(name) => self.symbol(name).map(DeclaredName::Resolved),
+        }
+    }
+
     fn optional_symbol(&self, local: Option<NameId>) -> Result<Option<NameId>, ConstructionError> {
         local.map(|id| self.symbol(id)).transpose()
     }
@@ -176,11 +203,21 @@ impl Relocation {
             .ok_or(ConstructionError::InvalidIdentity)
     }
 
+    /// A parser reference's local id indexes its own document's parse tree, which splicing does
+    /// not change; only the document it names moves.
+    fn parser_reference(&self, local: ParserReferenceId) -> ParserReferenceId {
+        ParserReferenceId {
+            document: self.document,
+            local: local.local,
+        }
+    }
+
     fn expression(&self, expression: &AuthoredExpression) -> AuthoredExpression {
         AuthoredExpression {
             document: self.document,
             grammar: expression.grammar,
             operand_start: expression.operand_start,
+            operand_scope: expression.operand_scope,
             node: expression.node.clone(),
         }
     }
@@ -254,13 +291,14 @@ impl SemanticModelBuilder {
                     .owner
                     .map(|owner| relocation.declaration(owner))
                     .transpose()?,
-                name: relocation.optional_symbol(declaration.name)?,
+                name: relocation.declared_name(declaration.name)?,
                 anonymous_ordinal: declaration.anonymous_ordinal,
                 kind: declaration.kind,
                 span: declaration.span,
             });
             self.declaration_facts.push(DeclarationFacts {
-                short_name: relocation.optional_symbol(facts.short_name)?,
+                short_name: relocation.declared_name(facts.short_name)?,
+                derived_name: relocation.optional_symbol(facts.derived_name)?,
                 cross_feature_projection: facts
                     .cross_feature_projection
                     .map(|projection| {
@@ -274,6 +312,19 @@ impl SemanticModelBuilder {
                 expression_result: facts
                     .expression_result
                     .map(|result| relocation.declaration(result))
+                    .transpose()?,
+                then_source: facts
+                    .then_source
+                    .map(|source| {
+                        Ok::<_, ConstructionError>(match source {
+                            ThenSource::Declaration(id) => {
+                                ThenSource::Declaration(relocation.declaration(id)?)
+                            }
+                            ThenSource::InitialNode(id) => {
+                                ThenSource::InitialNode(relocation.declaration(id)?)
+                            }
+                        })
+                    })
                     .transpose()?,
                 ..facts.clone()
             });
@@ -295,7 +346,7 @@ impl SemanticModelBuilder {
             self.references.push(AuthoredReference {
                 source: relocation.declaration(reference.source)?,
                 kind: reference.kind,
-                target: reference.target,
+                target: relocation.parser_reference(reference.target),
                 path: relocation.path(reference.path)?,
                 ordinal: reference.ordinal,
                 import: reference.import,
@@ -306,11 +357,23 @@ impl SemanticModelBuilder {
                     .map(|narrowing| {
                         Ok(crate::lower::facts::MemberAccessNarrowing {
                             segment_count: narrowing.segment_count,
-                            target: relocation.reference(narrowing.target)?,
+                            target: match narrowing.target {
+                                crate::lower::facts::MemberAccessTarget::Reference(reference) => {
+                                    crate::lower::facts::MemberAccessTarget::Reference(
+                                        relocation.reference(reference)?,
+                                    )
+                                }
+                                crate::lower::facts::MemberAccessTarget::ExpressionResult(
+                                    result,
+                                ) => crate::lower::facts::MemberAccessTarget::ExpressionResult(
+                                    relocation.declaration(result)?,
+                                ),
+                            },
                         })
                     })
                     .collect::<Result<Vec<_>, ConstructionError>>()?
                     .into_boxed_slice(),
+                chaining_feature_ends: reference.chaining_feature_ends.clone(),
                 span: reference.span,
             });
         }
@@ -332,7 +395,7 @@ impl SemanticModelBuilder {
         reserve(&mut self.documentation, lowered.documentation.len())?;
         for record in lowered.documentation.iter() {
             self.documentation.push(DocumentationRecord {
-                declaration: relocation.declaration(record.declaration)?,
+                element: relocation.declaration(record.element)?,
                 form: record.form,
                 locale: relocation.optional_symbol(record.locale)?,
                 language: relocation.optional_symbol(record.language)?,
@@ -350,6 +413,7 @@ impl SemanticModelBuilder {
                 kind: record.kind,
                 is_default: record.is_default,
                 has_operator: record.has_operator,
+                is_expression_body: record.is_expression_body,
                 span: record.span,
             });
         }
@@ -426,6 +490,7 @@ impl SemanticModelBuilder {
             self.metadata_annotations.push(MetadataAnnotationRecord {
                 annotation: relocation.declaration(record.annotation)?,
                 annotated_element: relocation.declaration(record.annotated_element)?,
+                form: record.form,
             });
         }
 
@@ -485,6 +550,74 @@ impl SemanticModelBuilder {
                 callee: relocation.reference(invocation.callee)?,
                 argument_count: invocation.argument_count,
                 span: invocation.span,
+            });
+        }
+
+        reserve(
+            &mut self.unlowered_expressions,
+            lowered.unlowered_expressions.len(),
+        )?;
+        for record in lowered.unlowered_expressions.iter() {
+            self.unlowered_expressions
+                .push(crate::lower::facts::UnloweredExpressionSite {
+                    site: relocation.declaration(record.site)?,
+                    kind: record.kind,
+                });
+        }
+
+        reserve(
+            &mut self.trigger_invocations,
+            lowered.trigger_invocations.len(),
+        )?;
+        for record in lowered.trigger_invocations.iter() {
+            use crate::lower::facts::TriggerArgument;
+            self.trigger_invocations
+                .push(crate::lower::facts::TriggerInvocationRecord {
+                    expression: relocation.declaration(record.expression)?,
+                    kind: record.kind,
+                    argument: match record.argument {
+                        TriggerArgument::FeatureReference(reference) => {
+                            TriggerArgument::FeatureReference(relocation.reference(reference)?)
+                        }
+                        other => other,
+                    },
+                });
+        }
+
+        reserve(&mut self.assignments, lowered.assignments.len())?;
+        for record in lowered.assignments.iter() {
+            self.assignments
+                .push(crate::lower::facts::AssignmentRecord {
+                    assignment: relocation.declaration(record.assignment)?,
+                    target_parameter: relocation.declaration(record.target_parameter)?,
+                    starting_at: relocation.declaration(record.starting_at)?,
+                    accessed_feature: relocation.declaration(record.accessed_feature)?,
+                    referent: record
+                        .referent
+                        .map(|referent| relocation.reference(referent))
+                        .transpose()?,
+                });
+        }
+
+        reserve(
+            &mut self.owned_end_features,
+            lowered.owned_end_features.len(),
+        )?;
+        for record in lowered.owned_end_features.iter() {
+            self.owned_end_features.push(OwnedEndRecord {
+                owner: relocation.declaration(record.owner)?,
+                end: match record.end {
+                    OwnedEndFeature::Declared(end) => {
+                        OwnedEndFeature::Declared(relocation.declaration(end)?)
+                    }
+                    OwnedEndFeature::Bare(reference) => {
+                        OwnedEndFeature::Bare(relocation.reference(reference)?)
+                    }
+                    OwnedEndFeature::Flow { end, reference } => OwnedEndFeature::Flow {
+                        end: relocation.declaration(end)?,
+                        reference: relocation.reference(reference)?,
+                    },
+                },
             });
         }
 

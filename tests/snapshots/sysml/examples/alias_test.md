@@ -51,12 +51,6 @@ package AliasTest {
         (source "semantic")
         (range (start 2 16) (end 2 23))
       )
-      (diagnostic
-        (severity information)
-        (code "unconnected_port")
-        (source "semantic")
-        (range (start 5 8) (end 5 20))
-      )
     )
   )
 )
@@ -64,7 +58,7 @@ package AliasTest {
 # SMG
 ~~~sexpr
 (semantic-model
-  (publication (phase resolved) (completeness complete) (has-evaluation false) (source-digest "blake3:7cea3549e21bfc7a29a70f9088bd3189e97e433d93d0a0d957aec1ba8062489a"))
+  (publication (phase resolved) (completeness complete) (has-evaluation false) (source-digest "blake3:f3f0dfa1d424ef9e1be08a5a95e2f2bade33c32abb03ab93bbc1c863e613a9b1"))
   (declarations
     (declaration (id (node (document "memory://snapshot/alias_test.md") (qualified-name "AliasTest"))) (kind package) (membership (kind owning) (visibility default)))
     (declaration (id (node (document "memory://snapshot/alias_test.md") (path (named (kind package) (name "AliasTest")) (anonymous (kind import) (ordinal 0))))) (kind import) (membership (kind import) (visibility private)) (authored (membership (kind import) (visibility private)) (relationships (membershipImport (reference "ISQSpaceTime::breadth") (import (shape membership) (recursive false))))))
@@ -95,7 +89,7 @@ package AliasTest {
       (outcome (status resolved) (target (node (document "memory://snapshot/alias_test.md") (qualified-name "AliasTest::p2::pdest")))))
     (reference (id (source (node (document "memory://snapshot/alias_test.md") (path (named (kind package) (name "AliasTest")) (anonymous (kind bare-connect) (ordinal 1))))) (kind memberAccessOperand) (ordinal 1))
       (authored-target "p2::pd1")
-      (outcome (status resolved) (target (node (document "memory://snapshot/alias_test.md") (qualified-name "AliasTest::p2::pd1")))))
+      (outcome (status resolved) (target (node (document "memory://snapshot/alias_test.md") (qualified-name "AliasTest::p2::pdest")))))
     (reference (id (source (node (document "memory://snapshot/alias_test.md") (qualified-name "AliasTest::P1::po1"))) (kind aliasBinding) (ordinal 0))
       (authored-target "porig1")
       (outcome (status resolved) (target (node (document "memory://snapshot/alias_test.md") (qualified-name "AliasTest::P1::porig1")))))
@@ -107,7 +101,7 @@ package AliasTest {
       (outcome (status resolved) (target (node (document "memory://snapshot/alias_test.md") (qualified-name "AliasTest::P1")))))
     (reference (id (source (node (document "memory://snapshot/alias_test.md") (qualified-name "AliasTest::p1::po1"))) (kind redefinition) (ordinal 0))
       (authored-target "po1")
-      (outcome (status resolved) (target (node (document "memory://snapshot/alias_test.md") (qualified-name "AliasTest::P1::po1")))))
+      (outcome (status resolved) (target (node (document "memory://snapshot/alias_test.md") (qualified-name "AliasTest::P1::porig1")))))
     (reference (id (source (node (document "memory://snapshot/alias_test.md") (qualified-name "AliasTest::p2"))) (kind featureTyping) (ordinal 0))
       (authored-target "P1")
       (outcome (status resolved) (target (node (document "memory://snapshot/alias_test.md") (qualified-name "AliasTest::P1")))))
@@ -119,10 +113,10 @@ package AliasTest {
     (relationship (kind memberAccessOperand) (source (node (document "memory://snapshot/alias_test.md") (path (named (kind package) (name "AliasTest")) (anonymous (kind bare-connect) (ordinal 0))))) (target (node (document "memory://snapshot/alias_test.md") (qualified-name "AliasTest::p1::po1"))) (provenance authored) (authored-reference (source (node (document "memory://snapshot/alias_test.md") (path (named (kind package) (name "AliasTest")) (anonymous (kind bare-connect) (ordinal 0))))) (kind memberAccessOperand) (ordinal 0)))
     (relationship (kind memberAccessOperand) (source (node (document "memory://snapshot/alias_test.md") (path (named (kind package) (name "AliasTest")) (anonymous (kind bare-connect) (ordinal 1))))) (target (node (document "memory://snapshot/alias_test.md") (qualified-name "AliasTest::p1::po1"))) (provenance authored) (authored-reference (source (node (document "memory://snapshot/alias_test.md") (path (named (kind package) (name "AliasTest")) (anonymous (kind bare-connect) (ordinal 1))))) (kind memberAccessOperand) (ordinal 0)))
     (relationship (kind memberAccessOperand) (source (node (document "memory://snapshot/alias_test.md") (path (named (kind package) (name "AliasTest")) (anonymous (kind bare-connect) (ordinal 0))))) (target (node (document "memory://snapshot/alias_test.md") (qualified-name "AliasTest::p2::pdest"))) (provenance authored) (authored-reference (source (node (document "memory://snapshot/alias_test.md") (path (named (kind package) (name "AliasTest")) (anonymous (kind bare-connect) (ordinal 0))))) (kind memberAccessOperand) (ordinal 1)))
-    (relationship (kind memberAccessOperand) (source (node (document "memory://snapshot/alias_test.md") (path (named (kind package) (name "AliasTest")) (anonymous (kind bare-connect) (ordinal 1))))) (target (node (document "memory://snapshot/alias_test.md") (qualified-name "AliasTest::p2::pd1"))) (provenance authored) (authored-reference (source (node (document "memory://snapshot/alias_test.md") (path (named (kind package) (name "AliasTest")) (anonymous (kind bare-connect) (ordinal 1))))) (kind memberAccessOperand) (ordinal 1)))
+    (relationship (kind memberAccessOperand) (source (node (document "memory://snapshot/alias_test.md") (path (named (kind package) (name "AliasTest")) (anonymous (kind bare-connect) (ordinal 1))))) (target (node (document "memory://snapshot/alias_test.md") (qualified-name "AliasTest::p2::pdest"))) (provenance authored) (authored-reference (source (node (document "memory://snapshot/alias_test.md") (path (named (kind package) (name "AliasTest")) (anonymous (kind bare-connect) (ordinal 1))))) (kind memberAccessOperand) (ordinal 1)))
     (relationship (kind aliasBinding) (source (node (document "memory://snapshot/alias_test.md") (qualified-name "AliasTest::P1::po1"))) (target (node (document "memory://snapshot/alias_test.md") (qualified-name "AliasTest::P1::porig1"))) (provenance authored) (authored-reference (source (node (document "memory://snapshot/alias_test.md") (qualified-name "AliasTest::P1::po1"))) (kind aliasBinding) (ordinal 0)))
     (relationship (kind typing) (source (node (document "memory://snapshot/alias_test.md") (qualified-name "AliasTest::p1"))) (target (node (document "memory://snapshot/alias_test.md") (qualified-name "AliasTest::P1"))) (provenance authored) (authored-reference (source (node (document "memory://snapshot/alias_test.md") (qualified-name "AliasTest::p1"))) (kind featureTyping) (ordinal 0)))
-    (relationship (kind redefinition) (source (node (document "memory://snapshot/alias_test.md") (qualified-name "AliasTest::p1::po1"))) (target (node (document "memory://snapshot/alias_test.md") (qualified-name "AliasTest::P1::po1"))) (provenance authored) (authored-reference (source (node (document "memory://snapshot/alias_test.md") (qualified-name "AliasTest::p1::po1"))) (kind redefinition) (ordinal 0)))
+    (relationship (kind redefinition) (source (node (document "memory://snapshot/alias_test.md") (qualified-name "AliasTest::p1::po1"))) (target (node (document "memory://snapshot/alias_test.md") (qualified-name "AliasTest::P1::porig1"))) (provenance authored) (authored-reference (source (node (document "memory://snapshot/alias_test.md") (qualified-name "AliasTest::p1::po1"))) (kind redefinition) (ordinal 0)))
     (relationship (kind typing) (source (node (document "memory://snapshot/alias_test.md") (qualified-name "AliasTest::p2"))) (target (node (document "memory://snapshot/alias_test.md") (qualified-name "AliasTest::P1"))) (provenance authored) (authored-reference (source (node (document "memory://snapshot/alias_test.md") (qualified-name "AliasTest::p2"))) (kind featureTyping) (ordinal 0)))
     (relationship (kind aliasBinding) (source (node (document "memory://snapshot/alias_test.md") (qualified-name "AliasTest::p2::pd1"))) (target (node (document "memory://snapshot/alias_test.md") (qualified-name "AliasTest::p2::pdest"))) (provenance authored) (authored-reference (source (node (document "memory://snapshot/alias_test.md") (qualified-name "AliasTest::p2::pd1"))) (kind aliasBinding) (ordinal 0)))
     (relationship (kind memberAccessOperand) (source (node (document "memory://snapshot/alias_test.md") (path (named (kind package) (name "AliasTest")) (anonymous (kind bare-connect) (ordinal 1))))) (target (node (document "memory://snapshot/alias_test.md") (qualified-name "AliasTest::p2::pdest"))) (provenance implied))
@@ -142,9 +136,6 @@ package AliasTest {
       (subtype (node (document "memory://snapshot/alias_test.md") (qualified-name "AliasTest::p1")) (scopes any))
       (subtype (node (document "memory://snapshot/alias_test.md") (qualified-name "AliasTest::p2")) (scopes any))
     )
-    (declaration (id (node (document "memory://snapshot/alias_test.md") (qualified-name "AliasTest::P1::po1")))
-      (subtype (node (document "memory://snapshot/alias_test.md") (qualified-name "AliasTest::p1::po1")) (scopes any feature))
-    )
     (declaration (id (node (document "memory://snapshot/alias_test.md") (qualified-name "AliasTest::P1::porig1")))
       (featured-by (node (document "memory://snapshot/alias_test.md") (qualified-name "AliasTest::P1")))
       (subtype (node (document "memory://snapshot/alias_test.md") (qualified-name "AliasTest::p1::po1")) (scopes any feature))
@@ -156,7 +147,6 @@ package AliasTest {
     )
     (declaration (id (node (document "memory://snapshot/alias_test.md") (qualified-name "AliasTest::p1::po1")))
       (featured-by (node (document "memory://snapshot/alias_test.md") (qualified-name "AliasTest::p1")))
-      (supertype (node (document "memory://snapshot/alias_test.md") (qualified-name "AliasTest::P1::po1")) (scopes any feature))
       (supertype (node (document "memory://snapshot/alias_test.md") (qualified-name "AliasTest::P1::porig1")) (scopes any feature))
     )
     (declaration (id (node (document "memory://snapshot/alias_test.md") (qualified-name "AliasTest::p2")))
@@ -167,6 +157,13 @@ package AliasTest {
     (declaration (id (node (document "memory://snapshot/alias_test.md") (qualified-name "AliasTest::p2::pdest")))
       (featured-by (node (document "memory://snapshot/alias_test.md") (qualified-name "AliasTest::p2")))
     )
+)
+~~~
+# CONNECTIONS
+~~~sexpr
+(connections
+  (connector (id (node (document "memory://snapshot/alias_test.md") (path (named (kind package) (name "AliasTest")) (anonymous (kind bare-connect) (ordinal 0))))) (kind connection) (end bare (feature-chain (root (node (document "memory://snapshot/alias_test.md") (qualified-name "AliasTest::p1"))) (terminal (resolved (node (document "memory://snapshot/alias_test.md") (qualified-name "AliasTest::p1::po1")))) (path (node (document "memory://snapshot/alias_test.md") (qualified-name "AliasTest::p1")) (node (document "memory://snapshot/alias_test.md") (qualified-name "AliasTest::p1::po1"))) "p1::po1")) (end bare (feature-chain (root (node (document "memory://snapshot/alias_test.md") (qualified-name "AliasTest::p2"))) (terminal (resolved (node (document "memory://snapshot/alias_test.md") (qualified-name "AliasTest::p2::pdest")))) (path (node (document "memory://snapshot/alias_test.md") (qualified-name "AliasTest::p2")) (node (document "memory://snapshot/alias_test.md") (qualified-name "AliasTest::p2::pdest"))) "p2::pdest")))
+  (connector (id (node (document "memory://snapshot/alias_test.md") (path (named (kind package) (name "AliasTest")) (anonymous (kind bare-connect) (ordinal 1))))) (kind connection) (end bare (feature-chain (root (node (document "memory://snapshot/alias_test.md") (qualified-name "AliasTest::p1"))) (terminal (resolved (node (document "memory://snapshot/alias_test.md") (qualified-name "AliasTest::p1::po1")))) (path (node (document "memory://snapshot/alias_test.md") (qualified-name "AliasTest::p1")) (node (document "memory://snapshot/alias_test.md") (qualified-name "AliasTest::p1::po1"))) "p1::po1")) (end bare (feature-chain (root (node (document "memory://snapshot/alias_test.md") (qualified-name "AliasTest::p2"))) (terminal (resolved (node (document "memory://snapshot/alias_test.md") (qualified-name "AliasTest::p2::pdest")))) (path (node (document "memory://snapshot/alias_test.md") (qualified-name "AliasTest::p2")) (node (document "memory://snapshot/alias_test.md") (qualified-name "AliasTest::p2::pdest"))) "p2::pd1")))
 )
 ~~~
 # NAVIGATION
@@ -194,7 +191,7 @@ package AliasTest {
   )
   (query (document "memory://snapshot/alias_test.md") (range (start 20 19) (end 20 25)) (probe (position 20 19))
     (reference (id (source (node (document "memory://snapshot/alias_test.md") (path (named (kind package) (name "AliasTest")) (anonymous (kind bare-connect) (ordinal 1))))) (kind memberAccessOperand) (ordinal 1) (authored-target "p2::pd1")
-      (outcome (status resolved) (target (node (document "memory://snapshot/alias_test.md") (qualified-name "AliasTest::p2::pd1")))))
+      (outcome (status resolved) (target (node (document "memory://snapshot/alias_test.md") (qualified-name "AliasTest::p2::pdest")))))
     )
   )
   (query (document "memory://snapshot/alias_test.md") (range (start 6 22) (end 6 28)) (probe (position 6 22))
@@ -214,7 +211,7 @@ package AliasTest {
   )
   (query (document "memory://snapshot/alias_test.md") (range (start 10 21) (end 10 24)) (probe (position 10 21))
     (reference (id (source (node (document "memory://snapshot/alias_test.md") (qualified-name "AliasTest::p1::po1"))) (kind redefinition) (ordinal 0) (authored-target "po1")
-      (outcome (status resolved) (target (node (document "memory://snapshot/alias_test.md") (qualified-name "AliasTest::P1::po1")))))
+      (outcome (status resolved) (target (node (document "memory://snapshot/alias_test.md") (qualified-name "AliasTest::P1::porig1")))))
     )
   )
   (query (document "memory://snapshot/alias_test.md") (range (start 13 14) (end 13 16)) (probe (position 13 14))

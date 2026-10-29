@@ -2,9 +2,11 @@ mod capabilities;
 pub(crate) mod custom;
 mod diagnostics;
 mod documents;
+mod draw;
 mod features;
 mod generation;
 mod hierarchy;
+mod layout;
 mod lifecycle;
 mod navigation;
 mod project_registry;
@@ -21,16 +23,34 @@ use tower_lsp::{Client, LanguageServer, LspService, Server};
 
 use crate::host::config::Spec42Config;
 use crate::session::state::ServerState;
-use crate::session::RuntimeConfig;
+use crate::session::{RuntimeConfig, WorkspaceHandle};
 use crate::views::dto;
 use custom::{
     sysml_feature_inspector_result, sysml_library_search_result, sysml_server_stats_result,
 };
+use draw::{canvas_size, DrawEngine, DrawParams, DrawResult};
 use generation::{
-    DiagramViewsParams, DiagramViewsResult, GenerateParams, GenerateResult, GeneratorService,
-    StateTransitionViewsParams, StateTransitionViewsResult,
+    DiagramParams, DiagramResult, DiagramViewsParams, DiagramViewsResult, GenerateParams,
+    GenerateResult, GeneratorService, StateTransitionViewsParams, StateTransitionViewsResult,
 };
+use layout::{legacy_engine_requested, LayoutEngine, LayoutParams, LayoutResult};
 use project_registry::ProjectRegistry;
+
+fn require_current_analysis(state: &ServerState) -> Result<()> {
+    use sysml_query::publication::AnalysisStatus;
+    match state.session.analysis_status() {
+        AnalysisStatus::Current => Ok(()),
+        AnalysisStatus::Updating | AnalysisStatus::CancelledRetained => {
+            Err(tower_lsp::jsonrpc::Error::content_modified())
+        }
+        AnalysisStatus::FailedRetained => Err(tower_lsp::jsonrpc::Error {
+            code: tower_lsp::jsonrpc::ErrorCode::InternalError,
+            message: "Analysis of the current source failed; the previous publication is retained"
+                .into(),
+            data: None,
+        }),
+    }
+}
 
 struct Backend {
     client: Client,
@@ -42,7 +62,7 @@ struct Backend {
     /// everywhere else without touching the actor. LSP guarantees
     /// `initialize` precedes every other request.
     runtime_config: Arc<std::sync::OnceLock<RuntimeConfig>>,
-    generator_service: Arc<std::result::Result<GeneratorService, String>>,
+    generator_service: Arc<GeneratorService>,
 }
 
 #[tower_lsp::async_trait]
@@ -69,6 +89,13 @@ impl LanguageServer for Backend {
     }
 
     async fn shutdown(&self) -> Result<()> {
+        for handle in self.projects.handles() {
+            handle.close_session().await.map_err(|error| {
+                let mut failure = tower_lsp::jsonrpc::Error::internal_error();
+                failure.message = error.to_string().into();
+                failure
+            })?;
+        }
         Ok(())
     }
 
@@ -137,43 +164,96 @@ impl LanguageServer for Backend {
             handles.push(handle);
         }
         for handle in handles {
-            documents::did_close(&self.client, &handle, params.clone()).await;
+            documents::did_close(
+                &self.client,
+                &handle,
+                &self.config,
+                &self.runtime_config,
+                params.clone(),
+            )
+            .await;
         }
     }
 
     async fn did_change_watched_files(&self, params: DidChangeWatchedFilesParams) {
+        let mut ordinary_changes = Vec::new();
+        let mut project_inputs_changed = false;
         for change in params.changes {
             if change
                 .uri
                 .to_file_path()
                 .ok()
-                .and_then(|path| path.file_name().map(|name| name == ".project.json"))
+                .and_then(|path| {
+                    path.file_name().map(|name| {
+                        name == sysml_query::source::PROJECT_MANIFEST_FILE
+                            || name == sysml_query::source::PROJECT_CONFIG_FILE
+                            || name == library_catalog::sysand::SYSAND_LOCK_FILE
+                            || name == library_catalog::sysand::SYSAND_ENV_FILE
+                    })
+                })
                 .unwrap_or(false)
             {
-                self.projects.rediscover().await;
-                documents::initialized(
-                    &self.client,
-                    &self.projects,
-                    &self.server_name,
-                    &self.runtime_config,
-                )
-                .await;
+                project_inputs_changed = true;
                 continue;
             }
-            let Some(handle) = self.projects.handle_for_uri(&change.uri).await else {
-                continue;
-            };
-            documents::did_change_watched_files(
+            ordinary_changes.push(change);
+        }
+        if project_inputs_changed {
+            let previous_workspace_uris = self
+                .projects
+                .handles()
+                .iter()
+                .flat_map(|handle| {
+                    handle
+                        .snapshot()
+                        .index
+                        .iter()
+                        .filter(|(_, entry)| !entry.document.kind().is_library())
+                        .map(|(uri, _)| uri.clone())
+                        .collect::<Vec<_>>()
+                })
+                .collect::<Vec<_>>();
+            self.projects.rediscover().await;
+            for uri in previous_workspace_uris {
+                if self.projects.existing_handle_for_uri(&uri).is_none() {
+                    self.client.publish_diagnostics(uri, Vec::new(), None).await;
+                }
+            }
+            documents::initialized(
                 &self.client,
-                &handle,
-                &self.config,
+                &self.projects,
+                &self.server_name,
                 &self.runtime_config,
-                DidChangeWatchedFilesParams {
-                    changes: vec![change],
-                },
             )
             .await;
         }
+        self.publish_grouped_file_events(ordinary_changes).await;
+    }
+
+    /// A rename reported this way is one user action, not two independent filesystem events: the
+    /// old and new halves rebuild in the same batch this dispatches, so a dependant's diagnostics
+    /// never observe the gap between a delete and a create the way two separate watched-file
+    /// notifications could. The declared capability filter admits only file-pattern matches, so a
+    /// folder rename (reported as one URI covering unlisted children) never reaches this handler;
+    /// the filesystem watcher's per-file delete/create pairs remain the path for those.
+    async fn did_rename_files(&self, params: RenameFilesParams) {
+        let mut events = Vec::new();
+        for rename in params.files {
+            let (Ok(old_uri), Ok(new_uri)) =
+                (Url::parse(&rename.old_uri), Url::parse(&rename.new_uri))
+            else {
+                continue;
+            };
+            events.push(FileEvent {
+                uri: old_uri,
+                typ: FileChangeType::DELETED,
+            });
+            events.push(FileEvent {
+                uri: new_uri,
+                typ: FileChangeType::CREATED,
+            });
+        }
+        self.publish_grouped_file_events(events).await;
     }
 
     async fn did_change_configuration(&self, params: DidChangeConfigurationParams) {
@@ -229,7 +309,8 @@ impl LanguageServer for Backend {
     }
 
     async fn signature_help(&self, params: SignatureHelpParams) -> Result<Option<SignatureHelp>> {
-        let state = self.state_for_uri(&params.text_document_position_params.text_document.uri)?;
+        let state =
+            self.source_state_for_uri(&params.text_document_position_params.text_document.uri)?;
         features::signature_help(
             &state,
             params.text_document_position_params.text_document.uri,
@@ -298,7 +379,7 @@ impl LanguageServer for Backend {
         &self,
         params: SelectionRangeParams,
     ) -> Result<Option<Vec<SelectionRange>>> {
-        let state = self.state_for_uri(&params.text_document.uri)?;
+        let state = self.source_state_for_uri(&params.text_document.uri)?;
         features::selection_range(&state, params.text_document.uri, params.positions)
     }
 
@@ -340,12 +421,12 @@ impl LanguageServer for Backend {
         &self,
         params: DocumentSymbolParams,
     ) -> Result<Option<DocumentSymbolResponse>> {
-        let state = self.state_for_uri(&params.text_document.uri)?;
+        let state = self.source_state_for_uri(&params.text_document.uri)?;
         features::document_symbol(&state, params.text_document.uri)
     }
 
     async fn folding_range(&self, params: FoldingRangeParams) -> Result<Option<Vec<FoldingRange>>> {
-        let state = self.state_for_uri(&params.text_document.uri)?;
+        let state = self.source_state_for_uri(&params.text_document.uri)?;
         features::folding_range(&state, params.text_document.uri)
     }
 
@@ -362,6 +443,7 @@ impl LanguageServer for Backend {
         let mut symbols = Vec::new();
         for handle in self.projects.handles() {
             let state = handle.snapshot();
+            require_current_analysis(&state)?;
             if let Some(mut project_symbols) =
                 features::workspace_symbol(&state, params.query.clone(), perf_logging_enabled)?
             {
@@ -415,7 +497,7 @@ impl LanguageServer for Backend {
     }
 
     async fn formatting(&self, params: DocumentFormattingParams) -> Result<Option<Vec<TextEdit>>> {
-        let state = self.state_for_uri(&params.text_document.uri)?;
+        let state = self.source_state_for_uri(&params.text_document.uri)?;
         features::formatting(&state, params.text_document.uri, params.options)
     }
 
@@ -424,21 +506,21 @@ impl LanguageServer for Backend {
         params: SemanticTokensParams,
     ) -> Result<Option<SemanticTokensResult>> {
         let state = self.state_for_uri(&params.text_document.uri)?;
-        let perf_logging_enabled = self
+        let cfg = self
             .runtime_config
             .get()
-            .expect("initialize precedes all other LSP requests")
-            .perf_logging_enabled;
+            .expect("initialize precedes all other LSP requests");
         let Some((tokens, log_lines)) = features::semantic_tokens_full_request(
             &state,
             params.text_document.uri,
-            perf_logging_enabled,
+            cfg.perf_logging_enabled,
+            cfg.semantic_tokens_debug,
         )?
         else {
             return Ok(None);
         };
         drop(state);
-        if perf_logging_enabled {
+        if cfg.semantic_tokens_debug {
             for line in &log_lines {
                 self.client.log_message(MessageType::LOG, line).await;
             }
@@ -451,22 +533,22 @@ impl LanguageServer for Backend {
         params: SemanticTokensRangeParams,
     ) -> Result<Option<SemanticTokensRangeResult>> {
         let state = self.state_for_uri(&params.text_document.uri)?;
-        let perf_logging_enabled = self
+        let cfg = self
             .runtime_config
             .get()
-            .expect("initialize precedes all other LSP requests")
-            .perf_logging_enabled;
+            .expect("initialize precedes all other LSP requests");
         let Some((tokens, log_lines)) = features::semantic_tokens_range_request(
             &state,
             params.text_document.uri,
             params.range,
-            perf_logging_enabled,
+            cfg.perf_logging_enabled,
+            cfg.semantic_tokens_debug,
         )?
         else {
             return Ok(None);
         };
         drop(state);
-        if perf_logging_enabled {
+        if cfg.semantic_tokens_debug {
             for line in &log_lines {
                 self.client.log_message(MessageType::LOG, line).await;
             }
@@ -478,7 +560,8 @@ impl LanguageServer for Backend {
         &self,
         params: LinkedEditingRangeParams,
     ) -> Result<Option<LinkedEditingRanges>> {
-        let state = self.state_for_uri(&params.text_document_position_params.text_document.uri)?;
+        let state =
+            self.source_state_for_uri(&params.text_document_position_params.text_document.uri)?;
         features::linked_editing_range(
             &state,
             params.text_document_position_params.text_document.uri,
@@ -516,30 +599,72 @@ impl LanguageServer for Backend {
 }
 
 impl Backend {
-    fn state_for_uri(&self, uri: &Url) -> Result<Arc<ServerState>> {
-        if let Some(error) = self.projects.admission_error_for_uri(uri) {
-            return Err(tower_lsp::jsonrpc::Error::invalid_params(error));
+    /// Groups file-change events by the project they resolve to and applies each project's group
+    /// as one batch, so one file operation on many URIs becomes one semantic publication per
+    /// project rather than one per event. Shared by `did_change_watched_files` and
+    /// `did_rename_files`, which differ only in how they derive their `FileEvent`s.
+    async fn publish_grouped_file_events(&self, changes: Vec<FileEvent>) {
+        let mut grouped: Vec<(WorkspaceHandle, Vec<FileEvent>)> = Vec::new();
+        for change in changes {
+            let Some(handle) = self.projects.handle_for_uri(&change.uri).await else {
+                continue;
+            };
+            if let Some((_, events)) = grouped
+                .iter_mut()
+                .find(|(candidate, _)| candidate.same_session(&handle))
+            {
+                events.push(change);
+            } else {
+                grouped.push((handle, vec![change]));
+            }
         }
+        for (handle, changes) in grouped {
+            documents::did_change_watched_files(
+                &self.client,
+                &handle,
+                &self.config,
+                &self.runtime_config,
+                DidChangeWatchedFilesParams { changes },
+            )
+            .await;
+        }
+    }
+
+    fn source_state_for_uri(&self, uri: &Url) -> Result<Arc<ServerState>> {
         self.projects
-            .existing_handle_for_uri(uri)
+            .query_handle_for_uri(uri, None)
             .map(|handle| handle.snapshot())
-            .ok_or_else(|| {
-                tower_lsp::jsonrpc::Error::invalid_params(
-                    "document URI is outside the configured workspace projects",
-                )
-            })
+            .map_err(tower_lsp::jsonrpc::Error::invalid_params)
+    }
+
+    fn state_for_uri(&self, uri: &Url) -> Result<Arc<ServerState>> {
+        let state = self.source_state_for_uri(uri)?;
+        require_current_analysis(&state)?;
+        Ok(state)
     }
     async fn sysml_feature_inspector(
         &self,
         params: serde_json::Value,
     ) -> Result<dto::SysmlFeatureInspectorResultDto> {
-        let (uri, _) = crate::views::parse_sysml_feature_inspector_params(&params)?;
-        let state = self.state_for_uri(&uri)?;
+        let (uri, _, project_uri) =
+            crate::views::feature_inspector::parse_sysml_feature_inspector_context(&params)?;
+        let state = self
+            .projects
+            .query_handle_for_uri(&uri, project_uri.as_ref())
+            .map_err(tower_lsp::jsonrpc::Error::invalid_params)?
+            .snapshot();
+        require_current_analysis(&state)?;
         sysml_feature_inspector_result(&state, params)
     }
 
     async fn sysml_server_stats(&self) -> Result<dto::SysmlServerStatsDto> {
         let mut result = dto::SysmlServerStatsDto {
+            analysis: dto::SysmlAnalysisSummaryDto {
+                state: dto::SysmlAnalysisStateDto::Current,
+                active_jobs: 0,
+                pending_jobs: 0,
+                failure: None,
+            },
             uptime: self.start_time.elapsed().as_secs(),
             memory: dto::SysmlServerMemoryDto { rss: 0 },
             caches: dto::SysmlServerCachesDto {
@@ -549,7 +674,17 @@ impl Backend {
             },
         };
         for handle in self.projects.handles() {
-            let project = sysml_server_stats_result(&handle.snapshot(), self.start_time);
+            let project = sysml_server_stats_result(
+                &handle.snapshot(),
+                self.start_time,
+                handle.analysis_occupancy(),
+            );
+            result.analysis.state = result.analysis.state.merge(project.analysis.state);
+            result.analysis.active_jobs += project.analysis.active_jobs;
+            result.analysis.pending_jobs += project.analysis.pending_jobs;
+            if result.analysis.failure.is_none() {
+                result.analysis.failure = project.analysis.failure;
+            }
             result.caches.documents += project.caches.documents;
             result.caches.symbol_tables += project.caches.symbol_tables;
             result.caches.semantic_tokens += project.caches.semantic_tokens;
@@ -592,10 +727,6 @@ impl Backend {
             .map_err(tower_lsp::jsonrpc::Error::invalid_params)?;
         let service = Arc::clone(&self.generator_service);
         tokio::task::spawn_blocking(move || {
-            let service = service
-                .as_ref()
-                .as_ref()
-                .map_err(|message| message.clone())?;
             service.generate(
                 &module_bytes,
                 publication,
@@ -630,20 +761,14 @@ impl Backend {
         }
         let publication = Arc::clone(state.session.current());
         let service = Arc::clone(&self.generator_service);
-        tokio::task::spawn_blocking(move || {
-            let service = service
-                .as_ref()
-                .as_ref()
-                .map_err(|message| message.clone())?;
-            service.state_transition_views(publication)
-        })
-        .await
-        .map_err(|error| {
-            tower_lsp::jsonrpc::Error::invalid_params(format!(
-                "state-transition catalog worker did not complete: {error}"
-            ))
-        })?
-        .map_err(tower_lsp::jsonrpc::Error::invalid_params)
+        tokio::task::spawn_blocking(move || service.state_transition_views(publication))
+            .await
+            .map_err(|error| {
+                tower_lsp::jsonrpc::Error::invalid_params(format!(
+                    "state-transition catalog worker did not complete: {error}"
+                ))
+            })?
+            .map_err(tower_lsp::jsonrpc::Error::invalid_params)
     }
 
     async fn spec42_diagram_views(&self, params: DiagramViewsParams) -> Result<DiagramViewsResult> {
@@ -661,20 +786,122 @@ impl Backend {
         }
         let publication = Arc::clone(state.session.current());
         let service = Arc::clone(&self.generator_service);
+        tokio::task::spawn_blocking(move || service.diagram_views(publication))
+            .await
+            .map_err(|error| {
+                tower_lsp::jsonrpc::Error::invalid_params(format!(
+                    "diagram catalog worker did not complete: {error}"
+                ))
+            })?
+            .map_err(tower_lsp::jsonrpc::Error::invalid_params)
+    }
+
+    async fn spec42_diagram(&self, params: DiagramParams) -> Result<DiagramResult> {
+        let model_uri = Url::parse(&params.model_uri).map_err(|error| {
+            tower_lsp::jsonrpc::Error::invalid_params(format!("invalid model URI: {error}"))
+        })?;
+        let state = self.state_for_uri(&model_uri)?;
+        if !state
+            .index
+            .contains_key(&crate::common::util::normalize_file_uri(&model_uri))
+        {
+            return Err(tower_lsp::jsonrpc::Error::invalid_params(
+                "model URI is not part of the current workspace publication",
+            ));
+        }
+        let publication = Arc::clone(state.session.current());
+        let service = Arc::clone(&self.generator_service);
         tokio::task::spawn_blocking(move || {
-            let service = service
-                .as_ref()
-                .as_ref()
-                .map_err(|message| message.clone())?;
-            service.diagram_views(publication)
+            service.diagram(
+                publication,
+                &params.handle,
+                params.expected_model_digest.as_deref(),
+                &params.expanded,
+            )
         })
         .await
         .map_err(|error| {
             tower_lsp::jsonrpc::Error::invalid_params(format!(
-                "diagram catalog worker did not complete: {error}"
+                "diagram worker did not complete: {error}"
             ))
         })?
         .map_err(tower_lsp::jsonrpc::Error::invalid_params)
+    }
+
+    async fn spec42_layout(&self, params: LayoutParams) -> Result<LayoutResult> {
+        if legacy_engine_requested() {
+            return Err(tower_lsp::jsonrpc::Error::invalid_params(
+                "SPEC42_LAYOUT_ENGINE=legacy: native layout is disabled on this server",
+            ));
+        }
+        let LayoutParams {
+            model_digest,
+            view_handle,
+            presentation_revision,
+            graph,
+        } = params;
+        let layout = tokio::task::spawn_blocking(move || diagram_layout::layout_value(&graph))
+            .await
+            .map_err(|error| {
+                tower_lsp::jsonrpc::Error::invalid_params(format!(
+                    "layout worker did not complete: {error}"
+                ))
+            })?
+            .map_err(|error| tower_lsp::jsonrpc::Error::invalid_params(error.to_string()))?;
+        Ok(LayoutResult {
+            model_digest,
+            view_handle,
+            presentation_revision,
+            layout,
+            engine: LayoutEngine::Native,
+        })
+    }
+
+    async fn spec42_draw(&self, params: DrawParams) -> Result<DrawResult> {
+        if legacy_engine_requested() {
+            return Err(tower_lsp::jsonrpc::Error::invalid_params(
+                "SPEC42_LAYOUT_ENGINE=legacy: native drawing is disabled on this server; there \
+                 is no client drawing fallback",
+            ));
+        }
+        let DrawParams {
+            model_digest,
+            view_handle,
+            presentation_revision,
+            product,
+            width,
+            height,
+            color_scheme,
+            disclosure,
+        } = params;
+        let width = canvas_size(width, 960.0);
+        let height = canvas_size(height, 640.0);
+        let scheme = color_scheme.unwrap_or_else(|| "light".into());
+        let disclosure = disclosure.unwrap_or_default();
+        let svg = tokio::task::spawn_blocking(move || {
+            let theme = diagram_draw::theme::theme_for_scheme(&scheme);
+            diagram_draw::render_svg_from_payload_with_options(
+                &product,
+                theme,
+                width,
+                height,
+                Some(&disclosure),
+            )
+        })
+        .await
+        .map_err(|error| {
+            tower_lsp::jsonrpc::Error::invalid_params(format!(
+                "draw worker did not complete: {error}"
+            ))
+        })?
+        .map_err(|error| tower_lsp::jsonrpc::Error::invalid_params(error.to_string()))?;
+        Ok(DrawResult {
+            model_digest,
+            view_handle,
+            presentation_revision,
+            svg,
+            engine: DrawEngine::Native,
+        })
     }
 
     async fn sysml_library_search(
@@ -698,7 +925,9 @@ impl Backend {
                 "sysml/librarySearch requires project provenance in a multi-project workspace",
             ));
         }
-        sysml_library_search_result(&handles[0].snapshot(), params)
+        let state = handles[0].snapshot();
+        require_current_analysis(&state)?;
+        sysml_library_search_result(&state, params)
     }
 
     async fn custom_rpc_method(
@@ -765,6 +994,9 @@ pub async fn run(config: Arc<Spec42Config>, server_name: &str) {
     .custom_method("sysml/librarySearch", Backend::sysml_library_search)
     .custom_method("spec42/generate", Backend::spec42_generate)
     .custom_method("spec42/diagramViews", Backend::spec42_diagram_views)
+    .custom_method("spec42/diagram", Backend::spec42_diagram)
+    .custom_method("spec42/layout", Backend::spec42_layout)
+    .custom_method("spec42/draw", Backend::spec42_draw)
     .custom_method(
         "spec42/stateTransitionViews",
         Backend::spec42_state_transition_views,
@@ -795,4 +1027,32 @@ pub async fn run(config: Arc<Spec42Config>, server_name: &str) {
         .concurrency_level(1)
         .serve(service)
         .await;
+}
+
+#[cfg(test)]
+mod analysis_policy_tests {
+    use super::*;
+
+    #[test]
+    fn pending_cancelled_and_failed_analysis_are_never_successful_positional_queries() {
+        let mut state = ServerState::default();
+        state.session.complete_startup();
+        assert!(require_current_analysis(&state).is_ok());
+        state.session.invalidate_inputs();
+        assert_eq!(
+            require_current_analysis(&state).unwrap_err().code,
+            tower_lsp::jsonrpc::ErrorCode::ContentModified
+        );
+        state.session.finish_preparation_cancelled();
+        assert_eq!(
+            require_current_analysis(&state).unwrap_err().code,
+            tower_lsp::jsonrpc::ErrorCode::ContentModified
+        );
+        state.session.invalidate_inputs();
+        state.session.finish_preparation_failure();
+        assert_eq!(
+            require_current_analysis(&state).unwrap_err().code,
+            tower_lsp::jsonrpc::ErrorCode::InternalError
+        );
+    }
 }

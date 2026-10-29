@@ -1,28 +1,41 @@
+import { DIAGRAM_PRODUCT_SCHEMA_VERSION } from "../../generated/diagram-product/schemaVersion";
 import assert from "node:assert/strict";
 import { describe, it } from "node:test";
 import {
   allDiagramViewOptions,
   authoredDiagramViewOptions,
-  buildGenerateArgv,
   diagramRenderIsStale,
   diagramViewsForDocument,
   diagramViewKindForHandle,
   DIAGRAM_VIEWS,
   isPathInsideWorkspace,
+  MAX_DIAGRAM_PRODUCT_BYTES,
+  oversizedProductMessage,
   parseDiagramProduct,
   parseDiagramViewCatalog,
-  parseGenerationReport,
-  parseLspGenerationResult,
+  parseLspDiagramResult,
   parseStateTransitionViewCatalog,
   parseSourceNavigation,
   reconcileDelayMs,
   resolveDiagramSelection,
-  selectSingleDiagramJson,
   visibleSourceColumn,
 } from "../../diagram/diagramViewerCore";
-import { isEmptyIncompleteDiagramProduct } from "../../diagram/diagramProductState";
+import { isEmptyIncompleteDiagramProduct, sameProjectedNodes } from "../../diagram/diagramProductState";
 
 describe("diagram viewer core", () => {
+  it("reuses disclosure only while a product projects the same nodes", () => {
+    const node = (name: string) => ({ reference: 0, name });
+    const product = (digest: string, names: string[]) => ({
+      modelDigest: digest, references: [{ kind: "qualified-name" }], projection: { nodes: names.map(node) },
+    });
+    const before = product("blake3:a", ["root", "child"]);
+    assert.equal(sameProjectedNodes(before, product("blake3:a", ["root", "child"])), true);
+    // Loading a browser branch keeps the digest but adds nodes and shifts their indexes.
+    assert.equal(sameProjectedNodes(before, product("blake3:a", ["root", "loaded", "child"])), false);
+    assert.equal(sameProjectedNodes(before, product("blake3:b", ["root", "child"])), false);
+    assert.equal(sameProjectedNodes(undefined, before), false);
+  });
+
   it("reuses an already-visible source column and otherwise requests a new one", () => {
     const editors = [
       { uri: "file:///workspace/other.sysml", viewColumn: 1 },
@@ -32,51 +45,18 @@ describe("diagram viewer core", () => {
     assert.equal(visibleSourceColumn("file:///workspace/missing.sysml", editors), undefined);
   });
 
-  it("builds a bounded saved-file generation invocation", () => {
-    assert.deepEqual(buildGenerateArgv("/plugin.wasm", "/w/model.sysml", "/tmp/out", "/w", ["/lib"]), [
-      "generate", "/plugin.wasm", "/w/model.sysml", "--output", "/tmp/out", "--format", "json",
-      "--timeout-seconds", "30", "--max-files", "16", "--max-total-bytes", "16777216",
-      "--workspace-root", "/w", "--library-path", "/lib",
-    ]);
-  });
-
-  it("requires the authoritative digest in the report", () => {
-    assert.deepEqual(parseGenerationReport({ status: "generated", model_digest: "sha256:abc" }), {
-      status: "generated", model_digest: "sha256:abc",
-    });
-    assert.throws(() => parseGenerationReport({ status: "generated" }));
-  });
-
-  it("declares all renderer views at the plugin boundary", () => {
+  it("declares all renderer views", () => {
     assert.deepEqual(DIAGRAM_VIEWS.map((view) => view.id), [
       "general-view", "interconnection-view", "action-flow-view", "state-transition-view",
       "sequence-view", "browser-view", "grid-view", "geometry-view",
     ]);
   });
 
-  it("selects exactly one diagram JSON artifact", () => {
-    assert.equal(selectSingleDiagramJson(["diagram.json", ".spec42-generator-manifest.json"]), "diagram.json");
-    assert.throws(() => selectSingleDiagramJson([]));
-    assert.throws(() => selectSingleDiagramJson(["a.json", "b.json"]));
-  });
-
-  it("validates persistent LSP artifacts and timing identity", () => {
-    const value = {
-      modelDigest: "blake3:model",
-      generatorDigest: "sha256:guest",
-      artifacts: [{ path: "diagram.json", content: [123, 125] }],
-      timings: {
-        modulePrepareMs: 0,
-        guestExecutionUs: 1000,
-        preparedReused: true,
-        compilationCacheEnabled: true,
-        compilationCacheHits: 1,
-        compilationCacheMisses: 0,
-        compilationCacheError: null,
-      },
-    };
-    assert.deepEqual(parseLspGenerationResult(value), value);
-    assert.throws(() => parseLspGenerationResult({ ...value, artifacts: [{ path: "diagram.json", content: [256] }] }));
+  it("validates the native diagram result", () => {
+    const value = { modelDigest: "blake3:model", productJson: "{}", durationUs: 1000 };
+    assert.deepEqual(parseLspDiagramResult(value), value);
+    assert.throws(() => parseLspDiagramResult({ modelDigest: "blake3:model", durationUs: 1 }));
+    assert.throws(() => parseLspDiagramResult(null));
   });
 
   it("validates typed state-transition view choices", () => {
@@ -137,9 +117,21 @@ describe("diagram viewer core", () => {
     assert.deepEqual(diagramViewsForDocument(catalog, "file:///workspace/structure.sysml"), []);
   });
 
+  it("explains an oversized product by its size and element counts", () => {
+    const message = oversizedProductMessage(JSON.stringify({
+      projection: { nodes: [{}, {}], edges: [{}], relationships: [] },
+    }), 20 * 1024 * 1024);
+    assert.match(message, /20\.0 MiB \(2 elements, 1 edges, 0 relationships\), over the 16\.0 MiB viewer limit/);
+    assert.match(oversizedProductMessage("{", 17 * 1024 * 1024), /^This view's diagram product is 17\.0 MiB, over/);
+    assert.throws(
+      () => parseDiagramProduct(" ".repeat(MAX_DIAGRAM_PRODUCT_BYTES + 1)),
+      /over the 16\.0 MiB viewer limit/,
+    );
+  });
+
   it("validates the versioned render product and explicit incompleteness", () => {
     const value = {
-      schemaVersion: 5,
+      schemaVersion: DIAGRAM_PRODUCT_SCHEMA_VERSION,
       modelDigest: "blake3:model",
       documents: [{ uri: "file:///workspace/model.sysml", sourceDomain: "workspace" }],
       sources: [{ document: 0, range: [0, 0, 0, 1] }],
@@ -188,7 +180,7 @@ describe("diagram viewer core", () => {
       ...value,
       projection: { ...value.projection, exposedRoots: [0], nodes: [node] },
     })).projection.nodes.length, 1);
-    const versionFive = {
+    const typedNodes = {
       ...value,
       projection: {
         ...value.projection,
@@ -196,15 +188,15 @@ describe("diagram viewer core", () => {
         nodes: [{ ...node, typing: { status: "resolved", types: [{ reference: 0, label: "P" }] } }],
       },
     };
-    assert.equal(parseDiagramProduct(JSON.stringify(versionFive)).projection.nodes.length, 1);
+    assert.equal(parseDiagramProduct(JSON.stringify(typedNodes)).projection.nodes.length, 1);
     assert.throws(() => parseDiagramProduct(JSON.stringify({
-      ...versionFive,
-      projection: { ...versionFive.projection, nodes: [{ ...node, typing: undefined }] },
+      ...typedNodes,
+      projection: { ...typedNodes.projection, nodes: [{ ...node, typing: undefined }] },
     })));
     assert.throws(() => parseDiagramProduct(JSON.stringify({
-      ...versionFive,
+      ...typedNodes,
       projection: {
-        ...versionFive.projection,
+        ...typedNodes.projection,
         nodes: [{ ...node, typing: { status: "resolved", types: [] } }],
       },
     })));
@@ -213,42 +205,70 @@ describe("diagram viewer core", () => {
       projection: { ...value.projection, nodes: [{ ...node, compartments: undefined }] },
     })));
     assert.throws(() => parseDiagramProduct(JSON.stringify({ ...value, schemaVersion: 4 })));
+    assert.throws(() => parseDiagramProduct(JSON.stringify({ ...value, schemaVersion: 5 })));
+    assert.throws(() => parseDiagramProduct(JSON.stringify({ ...value, schemaVersion: 6 })));
+    assert.throws(() => parseDiagramProduct(JSON.stringify({ ...value, schemaVersion: 8 })));
+    assert.throws(() => parseDiagramProduct(JSON.stringify({ ...value, schemaVersion: 9 })));
     assert.throws(() => parseDiagramProduct(JSON.stringify({ ...value, projection: { ...value.projection, kind: "grid-view" } })));
     assert.throws(() => parseDiagramProduct(JSON.stringify({ ...value, selectedView: { ...value.selectedView, reference: 1 } })));
     assert.throws(() => parseDiagramProduct(JSON.stringify({ ...value, sources: [{ document: 1, range: [0, 0, 0, 1] }] })));
+    const withReason = (reason: unknown) => JSON.stringify({
+      ...value,
+      completeness: { status: "incomplete", reasons: [reason] },
+      projection: { ...value.projection, exposedRoots: [0], nodes: [node] },
+    });
+    assert.equal(parseDiagramProduct(withReason({ code: "sequence-content-omitted", elements: [0] })).completeness.reasons.length, 1);
+    assert.equal(parseDiagramProduct(withReason({
+      code: "sequence-ordering-cycle",
+      witness: [{ source: 0, target: 0, events: [0], provenance: "implied" }],
+    })).completeness.reasons.length, 1);
+    assert.throws(() => parseDiagramProduct(withReason({ code: "sequence-content-omitted", elements: [1] })));
+    assert.throws(() => parseDiagramProduct(withReason({ code: "sequence-content-omitted" })));
+    assert.throws(() => parseDiagramProduct(withReason({ code: "sequence-ordering-cycle" })));
+    assert.throws(() => parseDiagramProduct(withReason({
+      code: "sequence-ordering-cycle",
+      witness: [{ source: 0, target: 3, events: [], provenance: "authored" }],
+    })));
+    assert.throws(() => parseDiagramProduct(withReason({
+      code: "sequence-ordering-cycle",
+      witness: [{ source: 0, target: 0, provenance: "authored" }],
+    })));
   });
 
-  it("lists every authored view in the model, grouped by file and keyed by handle", () => {
+  it("lists every authored view in the model, grouped by canonical namespace and keyed by handle", () => {
     const catalog = parseDiagramViewCatalog({
       modelDigest: "blake3:model",
       views: [{
         handle: "view:b",
         kind: "sequence-view",
         reference: { kind: "qualified-name", document: "file:///w/views.sysml", qualifiedName: "P::flow", sourceDomain: "workspace" },
+        namespace: "P",
         name: "checkoutFlow",
         source: { uri: "file:///w/views.sysml" },
       }, {
         handle: "view:a",
         kind: "general-view",
         reference: { kind: "qualified-name", document: "file:///w/views.sysml", qualifiedName: "P::structure", sourceDomain: "workspace" },
+        namespace: "P",
         name: "structure",
         source: { uri: "file:///w/views.sysml" },
       }, {
         handle: "view:elsewhere",
         kind: "grid-view",
         reference: { kind: "qualified-name", document: "file:///w/aaa.sysml", qualifiedName: "Q::matrix", sourceDomain: "workspace" },
+        namespace: "Q",
         name: "matrix",
         source: { uri: "file:///w/aaa.sysml" },
       }],
     });
     const all = allDiagramViewOptions(catalog);
-    // Ordered by file basename (aaa before views), then kind, then name.
-    assert.deepEqual(all.map((option) => option.handle), ["view:elsewhere", "view:a", "view:b"]);
-    assert.deepEqual(all.map((option) => option.group), ["aaa.sysml", "views.sysml", "views.sysml"]);
-    assert.equal(all[1].label, "structure · General View");
+    // Namespace and view-name order take precedence over file and kind.
+    assert.deepEqual(all.map((option) => option.handle), ["view:b", "view:a", "view:elsewhere"]);
+    assert.deepEqual(all.map((option) => option.group), ["P", "P", "Q"]);
+    assert.equal(all[1].label, "structure");
 
     const authored = authoredDiagramViewOptions(catalog, "file:///w/views.sysml");
-    assert.deepEqual(authored.map((option) => option.handle), ["view:a", "view:b"]);
+    assert.deepEqual(authored.map((option) => option.handle), ["view:b", "view:a"]);
     assert.equal(diagramViewKindForHandle(catalog, "view:b"), "sequence-view");
     assert.equal(diagramViewKindForHandle(catalog, "missing"), undefined);
   });
@@ -261,6 +281,29 @@ describe("diagram viewer core", () => {
     assert.equal(resolveDiagramSelection(options, "h2")?.handle, "h2");
     assert.equal(resolveDiagramSelection(options, "gone")?.handle, "h1");
     assert.equal(resolveDiagramSelection([], "h1"), undefined);
+  });
+
+  it("uses canonical namespace and source ranges without splitting quoted qualified names", () => {
+    const catalog = parseDiagramViewCatalog({modelDigest:"m", views:[{
+      handle:"h",kind:"general-view",name:"A::quoted name",namespace:"P::'Namespace::with separators'",
+      reference:{kind:"qualified-name",document:"file:///w/views.sysml",qualifiedName:"opaque",sourceDomain:"workspace"},
+      source:{uri:"file:///w/views.sysml",range:{startLine:10,startCharacter:4,endLine:12,endCharacter:5}},
+    }]});
+    const [view] = allDiagramViewOptions(catalog);
+    assert.equal(view.group, "P::'Namespace::with separators'");
+    assert.equal(view.label, "A::quoted name");
+    assert.equal(view.kindLabel, "General View");
+    assert.deepEqual(view.definition, {uri:"file:///w/views.sysml",startLine:10,startCharacter:4,endLine:12,endCharacter:5});
+    const root = allDiagramViewOptions({...catalog, views:[{...catalog.views[0], namespace:null}]});
+    assert.equal(root[0].group,"(Root namespace)");
+    assert.equal(allDiagramViewOptions({...catalog, views:[{...catalog.views[0], namespace:""}]} )[0].group, "(Unnamed namespace)");
+    const legacy = allDiagramViewOptions({...catalog, views:[{...catalog.views[0], namespace:undefined, source:{uri:"file:///w/views.sysml"}}]});
+    assert.equal(legacy[0].group,"(Namespace unavailable)");
+    assert.equal(legacy[0].definition, undefined);
+    assert.throws(()=>parseDiagramViewCatalog({...catalog, views:[{...catalog.views[0], namespace:42}]}));
+    assert.throws(()=>parseDiagramViewCatalog({...catalog, views:[{...catalog.views[0], source:{uri:"file:///w/views.sysml",range:{startLine:-1}}}]}));
+    const multiple = allDiagramViewOptions({...catalog, views:[catalog.views[0], {...catalog.views[0],handle:"h2",kind:"sequence-view"}]});
+    assert.deepEqual(multiple.map(view=>view.label),["A::quoted name · General View", "A::quoted name · Sequence View"]);
   });
 
   it("backs the reconcile loop off exponentially, then settles slow", () => {

@@ -3,7 +3,7 @@
 description=State transition view keeps unresolved exposure explicit
 type=generate
 libraries=standard
-plugin=repository:diagram
+plugin=native:diagram
 viewKind=state-transition-view
 viewDocument=diagram_state_transition_unresolved.md
 viewQualifiedName=StateNegative::selected
@@ -34,7 +34,7 @@ package StateNegative {
 # SMG
 ~~~sexpr
 (semantic-model
-  (publication (phase resolved) (completeness complete) (has-evaluation true) (source-digest "blake3:edb1aa4c77fcc00a34fbe53e16a0d799afb27614cf482e59544ca092b897b757") (admitted (standard-library 94)))
+  (publication (phase resolved) (completeness complete) (has-evaluation true) (source-digest "blake3:a414c64f1546fd4811b3602e09bd805a4e82098b58900d2c89ccb31559fce1e8") (admitted (standard-library 94)))
   (declarations
     (declaration (id (node (document "memory://snapshot/diagram_state_transition_unresolved.md") (qualified-name "StateNegative"))) (kind package) (membership (kind owning) (visibility default)))
     (declaration (id (node (document "memory://snapshot/diagram_state_transition_unresolved.md") (path (named (kind package) (name "StateNegative")) (anonymous (kind import) (ordinal 0))))) (kind import) (membership (kind import) (visibility private)) (authored (membership (kind import) (visibility private)) (relationships (namespaceImport (reference "StandardViewDefinitions") (import (shape namespace) (recursive false))))))
@@ -128,8 +128,8 @@ package StateNegative {
 ## diagram.json
 ~~~json
 {
-  "schemaVersion": 5,
-  "modelDigest": "blake3:614c7d21d4a7ff8ca8f1a9d7e5bee1883abef613f2676d6cae1d31f77facffb2",
+  "schemaVersion": 10,
+  "modelDigest": "blake3:2215b8ef910755195e87db3afd589fc76ff01a87a7a136983b3a61498531442e",
   "documents": [
     {
       "uri": "memory://snapshot/diagram_state_transition_unresolved.md",

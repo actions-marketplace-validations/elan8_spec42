@@ -11,7 +11,7 @@ fn lsp_goto_definition() {
     let mut stdin = child.stdin.take().expect("stdin");
     let mut stdout = child.stdout.take().expect("stdout");
 
-    let uri = "file:///def_test.sysml";
+    let uri = "file:///c:/spec42-lsp-tests/def_test.sysml";
     let content = "package P { part def A; part a : A; }";
 
     let init_id = next_id();
@@ -89,10 +89,10 @@ fn lsp_cross_file_goto_definition() {
     let mut stdin = child.stdin.take().expect("stdin");
     let mut stdout = child.stdout.take().expect("stdout");
 
-    let uri_def = "file:///workspace/def.sysml";
-    let uri_use = "file:///workspace/use.sysml";
+    let uri_def = "file:///c:/spec42-lsp-tests/workspace/def.sysml";
+    let uri_use = "file:///c:/spec42-lsp-tests/workspace/use.sysml";
     let content_def = "package P { part def Engine; }";
-    let content_use = "package Q { import P::*; part e : Engine; }";
+    let content_use = "package Q { private import P::*; part e : Engine; }";
 
     let init_id = next_id();
     let init_req = serde_json::json!({
@@ -101,7 +101,7 @@ fn lsp_cross_file_goto_definition() {
         "method": "initialize",
         "params": {
             "processId": null,
-            "rootUri": "file:///workspace",
+            "rootUri": "file:///c:/spec42-lsp-tests/workspace",
             "capabilities": {},
             "clientInfo": { "name": "test", "version": "0.1.0" }
         }
@@ -143,7 +143,7 @@ fn lsp_cross_file_goto_definition() {
         "method": "textDocument/definition",
         "params": {
             "textDocument": { "uri": uri_use },
-            "position": { "line": 0, "character": 35 }
+            "position": { "line": 0, "character": 43 }
         }
     });
     send_message(&mut stdin, &def_req.to_string());
@@ -179,13 +179,13 @@ fn lsp_goto_definition_resolves_public_reexported_type() {
     let mut stdin = child.stdin.take().expect("stdin");
     let mut stdout = child.stdout.take().expect("stdout");
 
-    let uri_core = "file:///workspace/core.sysml";
-    let uri_domain = "file:///workspace/domain.sysml";
-    let uri_use = "file:///workspace/use.sysml";
+    let uri_core = "file:///c:/spec42-lsp-tests/workspace/core.sysml";
+    let uri_domain = "file:///c:/spec42-lsp-tests/workspace/domain.sysml";
+    let uri_use = "file:///c:/spec42-lsp-tests/workspace/use.sysml";
     let content_core = "package Core { attribute def Name; }";
     let content_domain = "package Domain { public import Core::*; }";
     let content_use =
-        "package Demo { import Domain::*; part def Consumer { attribute groupName : Name; } }";
+        "package Demo { private import Domain::*; part def Consumer { attribute groupName : Name; } }";
 
     let init_id = next_id();
     let init_req = serde_json::json!({
@@ -194,7 +194,7 @@ fn lsp_goto_definition_resolves_public_reexported_type() {
         "method": "initialize",
         "params": {
             "processId": null,
-            "rootUri": "file:///workspace",
+            "rootUri": "file:///c:/spec42-lsp-tests/workspace",
             "capabilities": {},
             "clientInfo": { "name": "test", "version": "0.1.0" }
         }
@@ -234,7 +234,7 @@ fn lsp_goto_definition_resolves_public_reexported_type() {
         "method": "textDocument/definition",
         "params": {
             "textDocument": { "uri": uri_use },
-            "position": { "line": 0, "character": 75 }
+            "position": { "line": 0, "character": 83 }
         }
     });
     send_message(&mut stdin, &def_req.to_string());

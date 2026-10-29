@@ -8,7 +8,6 @@ source_expectation=accepted
 rule_family=validate
 expectation=diagnostics
 rule_id=sysml-2.0:8.3.24.2:validateRequirementVerificationMembershipOwningType
-blocked_by=semantic-verification-membership-owner
 type=file
 ~~~
 # SOURCE
@@ -19,7 +18,7 @@ package Verification {
 
     // Conforming: the verification membership sits inside the objective of a verification case.
     verification def Good {
-        subject item : Component;
+        subject 'item' : Component;
         objective {
             verify requirement limit : Limit;
         }
@@ -40,7 +39,7 @@ package Verification {
         (severity warning)
         (code "verification_membership_invalid_owner")
         (source "semantic")
-        (range (start 13 4) (end 13 18))
+        (range (start 14 8) (end 14 41))
       )
     )
   )
@@ -51,6 +50,12 @@ package Verification {
 (fixture-diagnostics
   (document "memory://snapshot/sysml_requirement_verification_membership_owning_type.md"
     (diagnostics
+      (diagnostic
+        (severity warning)
+        (code "verification_membership_invalid_owner")
+        (source "semantic")
+        (range (start 14 8) (end 14 41))
+      )
     )
   )
 )
@@ -58,7 +63,7 @@ package Verification {
 # SMG
 ~~~sexpr
 (semantic-model
-  (publication (phase resolved) (completeness complete) (has-evaluation false) (source-digest "blake3:72febbfed1d4fce8abd5bf1ef64a07d29e1f21866c12cd1c795330cbdf8a19d4"))
+  (publication (phase resolved) (completeness complete) (has-evaluation false) (source-digest "blake3:31860e00f0b19d3d5ee74480822f92d501c9128a843720cd24dc99bd8769caed"))
   (declarations
     (declaration (id (node (document "memory://snapshot/sysml_requirement_verification_membership_owning_type.md") (qualified-name "Verification"))) (kind package) (membership (kind owning) (visibility default)))
     (declaration (id (node (document "memory://snapshot/sysml_requirement_verification_membership_owning_type.md") (qualified-name "Verification::Bad"))) (kind part-def) (membership (kind owning) (visibility default)))
@@ -66,7 +71,7 @@ package Verification {
     (declaration (id (node (document "memory://snapshot/sysml_requirement_verification_membership_owning_type.md") (qualified-name "Verification::Component"))) (kind part-def) (membership (kind owning) (visibility default)))
     (declaration (id (node (document "memory://snapshot/sysml_requirement_verification_membership_owning_type.md") (qualified-name "Verification::Good"))) (kind verification-def) (membership (kind owning) (visibility default)))
     (declaration (id (node (document "memory://snapshot/sysml_requirement_verification_membership_owning_type.md") (qualified-name "Verification::Good::item"))) (kind subject) (membership (kind feature) (visibility default)) (authored (membership (kind feature) (visibility default)) (relationships (featureTyping (reference "Component")))))
-    (declaration (id (node (document "memory://snapshot/sysml_requirement_verification_membership_owning_type.md") (qualified-name "Verification::Good::objective"))) (kind requirement) (membership (kind feature) (visibility default)))
+    (declaration (id (node (document "memory://snapshot/sysml_requirement_verification_membership_owning_type.md") (qualified-name "Verification::Good::objective"))) (kind objective-requirement) (membership (kind feature) (visibility default)))
     (declaration (id (node (document "memory://snapshot/sysml_requirement_verification_membership_owning_type.md") (qualified-name "Verification::Good::objective::limit"))) (kind verify-requirement) (membership (kind feature) (visibility default)) (authored (membership (kind feature) (visibility default)) (relationships (featureTyping (reference "Limit")))))
     (declaration (id (node (document "memory://snapshot/sysml_requirement_verification_membership_owning_type.md") (qualified-name "Verification::Limit"))) (kind requirement-def) (membership (kind owning) (visibility default)))
   )
@@ -135,7 +140,7 @@ package Verification {
       (outcome (status resolved) (target (node (document "memory://snapshot/sysml_requirement_verification_membership_owning_type.md") (qualified-name "Verification::Limit")))))
     )
   )
-  (query (document "memory://snapshot/sysml_requirement_verification_membership_owning_type.md") (range (start 6 23) (end 6 32)) (probe (position 6 23))
+  (query (document "memory://snapshot/sysml_requirement_verification_membership_owning_type.md") (range (start 6 25) (end 6 34)) (probe (position 6 25))
     (reference (id (source (node (document "memory://snapshot/sysml_requirement_verification_membership_owning_type.md") (qualified-name "Verification::Good::item"))) (kind featureTyping) (ordinal 0) (authored-target "Component")
       (outcome (status resolved) (target (node (document "memory://snapshot/sysml_requirement_verification_membership_owning_type.md") (qualified-name "Verification::Component")))))
     )

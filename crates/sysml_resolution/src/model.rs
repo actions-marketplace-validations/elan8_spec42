@@ -76,6 +76,10 @@ pub(crate) enum DeclarationKind {
     /// binding, conformance, connector-end validation) are out of scope here; only ownership,
     /// specialization, and owned-member structure are lowered.
     PortDefinition,
+    /// The `ConjugatedPortDefinition` minted for every named `PortDefinition` (SysML 8.3.12.2):
+    /// named `~` + its name, owned under an `OwningMembership`, and the source of an implied
+    /// `PortConjugation` to it. It is never authored.
+    ConjugatedPortDefinition,
     /// A package/definition/usage-level `port` feature member (BNF PortUsage), e.g.
     /// `port source : ~InputPort;`. Mirrors PartUsage lowering. Its `:`/`:>` typing target may be
     /// conjugated (a leading `~`, e.g. `~InputPort`); the conjugation polarity is carried as an
@@ -128,6 +132,11 @@ pub(crate) enum DeclarationKind {
     /// `state s;` or `state s : SomeState;`. Mirrors ActionUsage lowering. `StateUsage`'s typing
     /// is a structured `TypingRelationship` (not a bare `QualifiedReferenceId`).
     StateUsage,
+    /// An `exhibit` member of a part def/usage (BNF `ExhibitStateUsage`): either the declared
+    /// `exhibit state name : Type` form or the `exhibit <path>;` form, whose exhibited state is
+    /// an owned ReferenceSubsetting (`ReferenceKind::References`). It is a StateUsage and a
+    /// PerformActionUsage, and never composite.
+    ExhibitStateUsage,
     /// `metadata def` (BNF MetadataDefinition): a type whose owned members are attribute/nested
     /// usages, mirroring ItemDefinition lowering: ownership, membership, an optional `:>`
     /// specialization relationship, and owned-member structure through the shared
@@ -574,6 +583,10 @@ pub(crate) enum DeclarationKind {
     /// out of scope -- only the bare two-operand statement form's `from`/`to` references are
     /// resolved here.
     Flow,
+    /// A `succession flow` (`ast::FlowUsageKind::SuccessionFlow`): lowered exactly like
+    /// [`DeclarationKind::Flow`], but its metaclass is `SuccessionFlowUsage`, whose transfer
+    /// happens after its source ends (`Flows::successionFlows`).
+    SuccessionFlow,
     /// A `stakeholder` member found in a requirement/viewpoint def body (BNF `StakeholderMember`,
     /// `ast::requirement::StakeholderMember`), e.g. `stakeholder driver : Driver;` inside
     /// `requirement def SafetyRequirement`. The typed AST folds three distinct textual shapes into
@@ -630,6 +643,12 @@ pub(crate) enum DeclarationKind {
     /// merely an unresolved reference, mirroring `Satisfy::inline_requirement`'s own scope boundary)
     /// is out of scope and left as an explicit unsupported-member diagnostic.
     VerifyRequirement,
+    /// The `RequirementUsage` a case-family definition or usage owns through its
+    /// `ObjectiveMembership` (`objective { ... }`, `objective obj : RequirementCheck;`): the
+    /// `objectiveRequirement` of a `CaseDefinition`/`CaseUsage`. The element is an ordinary
+    /// `RequirementUsage`; the kind carries the membership role, as `VerifyRequirement` does for
+    /// `RequirementVerificationMembership`.
+    ObjectiveRequirement,
     // --- Bodied KerML classifier declarations (`KermlClassifierDecl`) ---------------------
     //
     // One variant per metaclass the declaration's keyword denotes. KerML makes these distinct
@@ -669,6 +688,11 @@ pub(crate) enum DeclarationKind {
     /// Both spellings reach `ast::KermlClassifierDecl` (the bare form as a `;` body), so both
     /// lower as resolvable declarations.
     KermlMultiplicity,
+    /// The anonymous KerML `MultiplicityRange` owned by every declaration that authors a
+    /// `[m..n]` multiplicity (KerML 8.3.4.11, `deriveTypeMultiplicity`). It is minted once per
+    /// authored multiplicity at the end of the document walk; its bounds are not duplicated here
+    /// but remain the owning declaration's authored `multiplicity` fact.
+    KermlMultiplicityRange,
 
     // --- KerML feature members (`KermlFeatureMember`) ------------------------------------
     //
@@ -690,6 +714,20 @@ pub(crate) enum DeclarationKind {
     /// `bool earlierFirstIncomingTransferSort : IncomingTransferSort { ... }`. KerML
     /// `BooleanExpression`.
     KermlBooleanExpression,
+    /// A `true`/`false` literal written inside an expression. KerML `LiteralBoolean`.
+    KermlLiteralBoolean,
+    /// An integer literal written inside an expression. KerML `LiteralInteger`.
+    KermlLiteralInteger,
+    /// A real literal written inside an expression. KerML `LiteralRational`.
+    KermlLiteralRational,
+    /// A string literal written inside an expression. KerML `LiteralString`.
+    KermlLiteralString,
+    /// `*` written as an expression (an unbounded multiplicity bound). KerML `LiteralInfinity`.
+    KermlLiteralInfinity,
+    /// `null` or `()` written inside an expression. KerML `NullExpression`.
+    KermlNullExpression,
+    /// `X.metadata` written inside an expression. KerML `MetadataAccessExpression`.
+    KermlMetadataAccessExpression,
     /// A keyword-less `<name> = <expr>;` / `<name> : <Type>;` binding (`DefaultReferenceUsage`,
     /// BNF §8.2.2.6 / Spec §7.6.4), e.g. `baseType = Atom meta KerML::Classifier;` (KerML
     /// `metaclass` body) or the anonymous leading-redefinition form `:>> dimension =
@@ -731,6 +769,11 @@ pub(crate) enum DeclarationKind {
     /// "anonymous nested declaration" pattern. `is_negated` is not modeled as a distinct fact
     /// here (see `AssertConstraintMember`'s own `is_negated` scope boundary).
     KermlInvariant,
+    /// A KerML `metadata` feature or `@` annotation (KerML `MetadataFeature`, §8.3.4.12). The
+    /// parser gives `metadata` one node in both languages; a document admitted as KerML lowers it
+    /// to this kind rather than to the SysML [`DeclarationKind::MetadataUsage`], which
+    /// specializes `MetadataFeature` and carries its own nearer library anchor.
+    KermlMetadataFeature,
     /// A KerML end member with an owned cross feature (`KermlEndMember`), e.g. `end happensDuring
     /// [1..*] subsets timeCoincidentOccurrences feature thatOccurrence: Occurrence redefines
     /// longerOccurrence;` (KerML Spec Annex A-3, association-end form). Distinct from a plain
@@ -742,6 +785,11 @@ pub(crate) enum DeclarationKind {
     /// the existing `lower_kerml_feature_member` (itself owned by this end declaration, not the
     /// enclosing `assoc`/type). The end's own multiplicity is not modeled as a distinct fact here.
     KermlEnd,
+    /// The KerML `FlowEnd` minted for each `from`/`to` endpoint of a flow (KerML 8.3.4.9,
+    /// SysML `FlowEnd = FlowEndSubsetting? FlowFeatureMember`). Anonymous, owned by the flow as
+    /// an end Feature, it owns one anonymous flow feature (`KermlFeature`). Never authored as a
+    /// declaration: its endpoint is the flow's authored FlowSource/FlowTarget reference.
+    FlowEnd,
     /// An anonymous feature synthesized for an `assign <target> := <value>;` reassignment
     /// statement (BNF `AssignStmt`, `ast::AssignStmt`, `is_then` covering both the plain and
     /// `then assign ...;` spellings) found in an action def/usage body, mirroring `Bind`'s
@@ -812,6 +860,16 @@ pub(crate) enum DeclarationKind {
     /// Its `RelationshipBody` members (doc/comment/metadata only) are walked through the shared
     /// `lower_relationship_body_elements` helper used by `Import`/`AliasDef`.
     Dependency,
+    /// A `comment` (or keyword-less `/* ... */`) annotating member: KerML `Comment`, owned by the
+    /// namespace it is written in under an `OwningMembership`. Its body and locale are its
+    /// `DocumentationRecord`; each `about` target is a `ReferenceKind::Annotation` sourced here.
+    Comment,
+    /// A `doc` annotating member: KerML `Documentation`, owned like a `Comment`; its owner is
+    /// its `documentedElement`.
+    Documentation,
+    /// A `rep` annotating member: KerML `TextualRepresentation`, owned like a `Comment`; its
+    /// owner is its `representedElement`.
+    TextualRepresentation,
     /// `#<keyword>+ def <Name> ...` (BNF ExtendedDefinition, `structure.rs` struct
     /// `ExtendedDefinition`, planning/UPSTREAM_PARSER_GAPS.md gap #12's short form), e.g. `#scenario def
     /// DeviceFailure { ... }`. Gap #12 tracked only the parser production landing upstream; this
@@ -819,20 +877,10 @@ pub(crate) enum DeclarationKind {
     /// shape an ordinary `package { ... }` body uses, so its owned members are lowered through
     /// the shared `lower_package_body` walker (reused verbatim, mirroring `lower_package`/
     /// `lower_namespace`). An optional `:>` `specializes` clause is lowered like
-    /// `AllocationDefinition`/`ViewDefinition`. The `#`-prefix keyword tags themselves
-    /// (`prefix_keywords`, a metadata-annotation-shaped list) and the `abstract`/`variation`
-    /// `definition_prefix` flag are out of scope, matching every other definition kind's
-    /// established "ownership, specialization, and owned-member structure only" scope boundary.
+    /// `AllocationDefinition`/`ViewDefinition`. Prefix keywords are metadata annotations;
+    /// semantic metadata supplies implicit subclassification (SysML 7.27.3–7.27.4). The authored
+    /// declaration remains a generic Definition, and its abstract/variation modifiers are retained.
     ExtendedDefinition,
-    /// `individual def` (BNF IndividualDef, `structure.rs` struct `IndividualDef`): a type whose
-    /// owned members participate in the shared Subclassification/FeatureTyping
-    /// `DeclarationDomain::Type` fixed point, mirroring `lower_item_def`/`lower_class_def` --
-    /// `IndividualDef`'s `body: AttributeBody` is the exact same shape, so owned members are
-    /// lowered through the existing `lower_attribute_body`. Distinct from the `individual`
-    /// usage-side prefix (`individual occurrence def`/`individual item ...`, already handled
-    /// elsewhere per planning/UPSTREAM_PARSER_GAPS.md gap #7); this is the standalone `individual def
-    /// <Name> [:> <Type>] { ... }` definition form.
-    IndividualDefinition,
     /// An anonymous connector feature synthesized for a keyword-less bare `connect <from> to
     /// <to> [:> ...] [:>> ...] { ... }` member (BNF `Connect`, distinct from `ConnectStmt`; see
     /// `lower_bare_connect`), mirroring `ForLoop`/`EntryActionBinding`'s nested-declaration
@@ -896,6 +944,7 @@ impl DeclarationKind {
                 | Self::SendActionUsage
                 | Self::TerminateActionUsage
                 | Self::StateUsage
+                | Self::ExhibitStateUsage
                 | Self::CaseUsage
                 | Self::AnalysisCaseUsage
                 | Self::VerificationCaseUsage
@@ -1062,13 +1111,28 @@ pub(crate) enum ReferenceKind {
     /// annotation relationship never collapses into ordinary typing/specialization in query
     /// output. Sourced directly at the declaration `MetadataAnnotation` decorates (no anonymous
     /// nested-declaration scope shift is needed -- unlike `Succession`/`Transition`, the
-    /// annotation is not itself a feature, just a fact about its owner). The `about` clause
-    /// (explicit annotation targets other than the owner) and the annotation body's nested
-    /// feature-value overrides (`isMandatory = true;`) are deliberately out of scope for this
-    /// slice: `about` needs its own multi-target fact shape, and the body's overrides need
-    /// value-assignment machinery this repository has not built yet (see `lower_attribute_body`
-    /// scope notes) -- only the annotation-target reference itself is resolved here.
+    /// annotation is not itself a feature, just a fact about its owner). The annotation body's
+    /// nested feature-value overrides (`isMandatory = true;`) are lowered separately as anonymous
+    /// redefining `AttributeUsage` members of the annotation; the `about` clause is
+    /// `MetadataAnnotationAbout`.
     MetadataAnnotation,
+    /// One authored `about` target of an `@Name ... about X, Y;` metadata annotation or a
+    /// `metadata m about X;` usage (`ast::MetadataAnnotation::about_targets` /
+    /// `ast::MetadataUsage::about_targets`). Unlike the annotation's own `MetadataAnnotation`
+    /// typing target, an `about` target is an arbitrary element, so it resolves through the
+    /// `DeclarationDomain::Any` lexical lookup shared with `AliasBinding` / `ConnectorEnd` /
+    /// `Succession` rather than the metadata-def `DeclarationDomain::Type` pass. One reference per
+    /// listed target, sourced at the annotation declaration, kept as its own `ReferenceKind` so
+    /// the `about` relationship never collapses into typing or ordinary reference resolution in
+    /// query output.
+    MetadataAnnotationAbout,
+    /// One authored `about` target of a `comment ... about X, Y` (`ast::CommentAnnotation::
+    /// about_targets`): KerML `Annotation::annotatedElement` of an Annotation owned by the
+    /// Comment (its `owningAnnotatingElement`), sourced at the Comment declaration. Any element
+    /// may be annotated, so it resolves through the `DeclarationDomain::Any` lexical lookup like
+    /// `MetadataAnnotationAbout`. A Comment with no `about` clause has no Annotation: its
+    /// `annotatedElement` is its owning namespace.
+    Annotation,
     /// The metadata-def operand of an `@Name` metadata-classification test (`Expression::
     /// Classification`'s `metaclass`) found while walking a package-level `filter <expr>;`
     /// statement's condition (BNF `ElementFilterMember`, `ast::FilterMember`, distinct from the
@@ -1279,6 +1343,13 @@ pub(crate) enum ReferenceKind {
     /// `EvalNode::Invocation` (reused rather than adding a distinct variant, exactly like
     /// `Expression::TypeCheck`/`Expression::Tuple`) always folds to `EvaluatedValue::NonConstant`.
     MetaCastTarget,
+    /// The `referencedElement` of a KerML `MetadataAccessExpression` (`X.metadata`, KerML
+    /// 8.3.4.8.15): the Element its `ElementReferenceMember` names. Sourced at the minted
+    /// `KermlMetadataAccessExpression` element (which owns that membership), not at the evaluation
+    /// site, and resolved through the `DeclarationDomain::Any` lookup: the referent may be any
+    /// Element, so it is deliberately not an `ExpressionOperand` (whose `FeatureReference` role
+    /// must name a Feature) and takes no operand ordinal.
+    MetadataAccessTarget,
     /// The `target` concern reference of a `stakeholder` member found in a requirement/viewpoint
     /// def body (`StakeholderMember.target`, BNF `StakeholderMember`'s bare `stakeholder Concern;`
     /// reference form, `is_redefinition == false`), resolved through the same `DeclarationDomain::
@@ -1342,6 +1413,120 @@ pub(crate) enum ReferenceKind {
     FlowPayloadType,
 }
 
+macro_rules! reference_kinds {
+    ($($variant:ident),* $(,)?) => {
+        impl ReferenceKind {
+            /// Every kind, in declaration order. The exhaustive `match` below fails to compile
+            /// when a variant is added without being listed here.
+            pub(crate) const ALL: &'static [Self] = &[$(Self::$variant),*];
+        }
+
+        #[allow(dead_code)]
+        const fn reference_kind_list_is_exhaustive(kind: ReferenceKind) {
+            match kind {
+                $(ReferenceKind::$variant)|* => {}
+            }
+        }
+    };
+}
+
+reference_kinds![
+    ExplicitRelationshipEndpoint,
+    NamespaceImport,
+    MembershipImport,
+    FilterImport,
+    FeatureTyping,
+    TypeFeaturing,
+    FeatureChaining,
+    Subclassification,
+    Conjugation,
+    Subsetting,
+    Redefinition,
+    References,
+    Crosses,
+    FeatureInverting,
+    Intersects,
+    Unioning,
+    Intersecting,
+    Differencing,
+    Disjoining,
+    AliasBinding,
+    ConnectorEnd,
+    Succession,
+    EntryActionBinding,
+    DoActionBinding,
+    ExitActionBinding,
+    InitialState,
+    ExpressionOperand,
+    TransitionSource,
+    TransitionTarget,
+    TransitionTrigger,
+    TransitionEffect,
+    MetadataAnnotation,
+    MetadataAnnotationAbout,
+    Annotation,
+    FilterMetadataTest,
+    SatisfySource,
+    SatisfyTarget,
+    AllocateSource,
+    AllocateTarget,
+    BindSource,
+    BindTarget,
+    IncludeUseCase,
+    ViewExpose,
+    MemberAccessOperand,
+    InvocationCallee,
+    ThenTarget,
+    AcceptVia,
+    SendTarget,
+    AcceptPayloadType,
+    TerminateTarget,
+    FlowSource,
+    FlowTarget,
+    TypeCheckTarget,
+    MetaCastTarget,
+    MetadataAccessTarget,
+    StakeholderTarget,
+    PurposeTarget,
+    VerifyRequirementTarget,
+    AssignTarget,
+    DependencyClient,
+    DependencySupplier,
+    PerformParameterTarget,
+    FlowPayloadType,
+];
+
+/// Every relationship kind name the relationship channel can publish (see
+/// `render::relationship_kind`), so a consumer that maps them onto its own closed vocabulary can
+/// check that the mapping is total.
+pub fn published_relationship_kinds() -> Vec<&'static str> {
+    let mut names = ReferenceKind::ALL
+        .iter()
+        .filter_map(|kind| render::relationship_kind(*kind))
+        .collect::<Vec<_>>();
+    names.sort_unstable();
+    names.dedup();
+    names
+}
+
+impl ReferenceKind {
+    /// Whether the kind is a KerML `Specialization` subkind, i.e. one of the edges that form
+    /// `Type::ownedSpecialization` and so `Type::supertypes`: Subclassification, FeatureTyping,
+    /// Subsetting, Redefinition, ReferenceSubsetting (`References`) and CrossSubsetting
+    /// (`Crosses`). The specialization closure's scope table refines this set; it never widens it.
+    pub(crate) const fn is_specialization(self) -> bool {
+        matches!(
+            self,
+            Self::Subclassification
+                | Self::FeatureTyping
+                | Self::Subsetting
+                | Self::Redefinition
+                | Self::References
+                | Self::Crosses
+        )
+    }
+}
+
 /// The computed or explicit outcome of evaluating one supported constraint/calc expression
 /// (slice 2 of the constraint/calc expression fact family; slice 1, `4ca42166`, only resolved
 /// operand references and never evaluated anything). Only expressions within slice 1's supported
@@ -1374,9 +1559,12 @@ pub(crate) enum EvaluatedValue {
     /// fabricating a richer "physical quantity" concept the semantic model does not
     /// anticipates. `fold_literal_comparison`/`fold_arithmetic`/`fold_unary` do not special-case
     /// this variant: their generic numeric-widening fallback (`as_f64`) does not match it, so any
-    /// operation involving a `Quantity` conservatively folds to `NonConstant` rather than silently
-    /// comparing/arithmetic-ing across mismatched or unmodeled units.
+    /// Same-unit addition/subtraction and numeric scaling preserve the unit spelling. Operations
+    /// needing conversion or dimensional algebra fail explicitly instead of reporting a
+    /// constant operand as nonconstant.
     Quantity(Box<EvaluatedValue>, String),
+    /// A constant quantity operation needs unsupported conversion or dimensional algebra.
+    UnsupportedUnitOperation,
     /// Evaluation did not run for this expression. Reserved for a future evaluation-policy gate;
     /// the current pass attempts evaluation for every slice-1-supported expression whenever
     /// resolution itself converges (see `SemanticModelStorage::resolve`), so no fact currently
@@ -1421,6 +1609,7 @@ pub(crate) enum EvaluatedValue {
 
 pub(crate) mod element_kind;
 pub(crate) mod evaluation;
+pub(crate) mod metaclass;
 pub(crate) mod query;
 pub(crate) mod render;
 pub(crate) mod resolver;

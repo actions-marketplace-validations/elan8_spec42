@@ -157,6 +157,53 @@ pub(crate) fn build_workspace_snapshot(
         Err(error) => return Err(map_provider_error(error)),
         Ok(documents) => documents,
     };
+    // The provider knows host-configured roots. Per-project installed roots are admitted here,
+    // after the same manifest/lock validation used by the editor registry.
+    if admission.selected_candidate_roots.iter().any(|root| {
+        !catalog.package_roots.iter().any(|configured| {
+            configured
+                .canonicalize()
+                .unwrap_or_else(|_| configured.clone())
+                == *root
+        })
+    }) {
+        let workspace = documents
+            .iter()
+            .filter(|document| !document.kind().is_library())
+            .map(|document| engine.services().syntax.parse(document))
+            .collect::<Vec<_>>();
+        let roots = admission
+            .library_roots
+            .iter()
+            .map(|path| sysml_query::library::LibraryRoot {
+                path: path.clone(),
+                kind: if admission.standard_library_roots.contains(path) {
+                    sysml_query::source::SourceKind::StandardLibrary
+                } else {
+                    sysml_query::source::SourceKind::Library
+                },
+            })
+            .collect::<Vec<_>>();
+        let closure = engine
+            .services()
+            .library
+            .resolve(&workspace, &roots, &Default::default())
+            .map_err(map_provider_error)?;
+        for document in closure.documents {
+            if let Some(existing) = documents
+                .iter()
+                .find(|existing| existing.uri() == document.uri())
+            {
+                if existing.digest() != document.digest() {
+                    return Err(WorkspaceError::unresolved_library_environment(
+                        "Dependency changed while the project was loading",
+                    ));
+                }
+            } else {
+                documents.push(document);
+            }
+        }
+    }
     if admission.manifest_present {
         documents.retain(|document| {
             if !document.kind().is_library() {
@@ -178,6 +225,10 @@ pub(crate) fn build_workspace_snapshot(
     context.check_continue(HostPipelinePhase::LoadingDocuments)?;
 
     let target_files = discover_target_files(&request.targets)?;
+    let reported_documents = target_files
+        .iter()
+        .map(|path| path_to_file_url(path).map(|uri| Box::<str>::from(uri.as_str())))
+        .collect::<WorkspaceResult<Vec<_>>>()?;
 
     let library_paths = admission.library_roots;
     let library_urls = library_paths
@@ -190,7 +241,11 @@ pub(crate) fn build_workspace_snapshot(
     let published_model = engine
         .services()
         .publication
-        .publish_with_standard_library_availability(&documents, standard_library_availability, [])
+        .publish_with_standard_library_availability(
+            &documents,
+            standard_library_availability,
+            reported_documents,
+        )
         .map_err(|error| WorkspaceError::internal_invariant_failure(error.to_string()))?;
 
     context.check_continue(HostPipelinePhase::CollectingValidation)?;

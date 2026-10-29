@@ -34,18 +34,6 @@ package ItemTest {
 (fixture-diagnostics
   (document "memory://snapshot/item_test.md"
     (diagnostics
-      (diagnostic
-        (severity warning)
-        (code "port_owned_usage_composite")
-        (source "semantic")
-        (range (start 18 2) (end 18 16))
-      )
-      (diagnostic
-        (severity warning)
-        (code "port_owned_usage_composite")
-        (source "semantic")
-        (range (start 19 2) (end 19 17))
-      )
     )
   )
 )
@@ -53,17 +41,18 @@ package ItemTest {
 # SMG
 ~~~sexpr
 (semantic-model
-  (publication (phase resolved) (completeness complete) (has-evaluation false) (source-digest "blake3:17aff5b295c11e4a8c2444e4e7abc4f4b80c26d1eb872ab5bb3bb67aca633c68"))
+  (publication (phase resolved) (completeness complete) (has-evaluation false) (source-digest "blake3:d00577f575a2b4d1855dc034a357f5b8725d84f76766796b15ca5fcdbce20179"))
   (declarations
     (declaration (id (node (document "memory://snapshot/item_test.md") (qualified-name "ItemTest"))) (kind package) (membership (kind owning) (visibility default)))
     (declaration (id (node (document "memory://snapshot/item_test.md") (qualified-name "ItemTest::A"))) (kind item-def) (membership (kind owning) (visibility public)))
     (declaration (id (node (document "memory://snapshot/item_test.md") (qualified-name "ItemTest::A::b"))) (kind item) (membership (kind feature) (visibility default)) (authored (membership (kind feature) (visibility default)) (relationships (featureTyping (reference "B")))))
-    (declaration (id (node (document "memory://snapshot/item_test.md") (qualified-name "ItemTest::A::c"))) (kind ref) (membership (kind feature) (visibility protected)) (authored (membership (kind feature) (visibility protected)) (relationships (featureTyping (reference "C")))))
+    (declaration (id (node (document "memory://snapshot/item_test.md") (qualified-name "ItemTest::A::c"))) (kind part) (membership (kind feature) (visibility protected)) (facts (modifiers reference)) (authored (membership (kind feature) (visibility protected)) (relationships (featureTyping (reference "C")))))
     (declaration (id (node (document "memory://snapshot/item_test.md") (qualified-name "ItemTest::B"))) (kind item-def) (membership (kind owning) (visibility default)))
     (declaration (id (node (document "memory://snapshot/item_test.md") (qualified-name "ItemTest::B::a"))) (kind part) (membership (kind feature) (visibility public)) (facts (modifiers abstract)) (authored (membership (kind feature) (visibility public)) (relationships (featureTyping (reference "A")))))
     (declaration (id (node (document "memory://snapshot/item_test.md") (qualified-name "ItemTest::C"))) (kind part-def) (membership (kind owning) (visibility private)))
     (declaration (id (node (document "memory://snapshot/item_test.md") (qualified-name "ItemTest::C::y"))) (kind ref) (membership (kind feature) (visibility private)) (facts (direction in)) (authored (membership (kind feature) (visibility private)) (relationships (featureTyping (reference "A")) (featureTyping (reference "B")))))
     (declaration (id (node (document "memory://snapshot/item_test.md") (qualified-name "ItemTest::P"))) (kind port-def) (membership (kind owning) (visibility default)))
+    (declaration (id (node (document "memory://snapshot/item_test.md") (path (named (kind package) (name "ItemTest")) (named (kind port-def) (name "P")) (anonymous (kind conjugated-port-def) (ordinal 0))))) (kind conjugated-port-def) (membership (kind owning) (visibility default)) (effective-identification (name "~P") (short-name absent) (provenance original-port-definition)))
     (declaration (id (node (document "memory://snapshot/item_test.md") (qualified-name "ItemTest::P::a1"))) (kind item) (membership (kind feature) (visibility default)) (facts (direction in)) (authored (membership (kind feature) (visibility default)) (relationships (featureTyping (reference "A")))))
     (declaration (id (node (document "memory://snapshot/item_test.md") (qualified-name "ItemTest::P::a2"))) (kind item) (membership (kind feature) (visibility default)) (facts (direction out)) (authored (membership (kind feature) (visibility default)) (relationships (featureTyping (reference "A")))))
     (declaration (id (node (document "memory://snapshot/item_test.md") (qualified-name "ItemTest::f"))) (kind item) (membership (kind feature) (visibility default)) (authored (membership (kind feature) (visibility default)) (relationships (featureTyping (reference "A")))))
@@ -107,6 +96,7 @@ package ItemTest {
     (relationship (kind typeFeaturing) (source (node (document "memory://snapshot/item_test.md") (qualified-name "ItemTest::A::c"))) (target (node (document "memory://snapshot/item_test.md") (qualified-name "ItemTest::A"))) (provenance implied))
     (relationship (kind typeFeaturing) (source (node (document "memory://snapshot/item_test.md") (qualified-name "ItemTest::B::a"))) (target (node (document "memory://snapshot/item_test.md") (qualified-name "ItemTest::B"))) (provenance implied))
     (relationship (kind typeFeaturing) (source (node (document "memory://snapshot/item_test.md") (qualified-name "ItemTest::C::y"))) (target (node (document "memory://snapshot/item_test.md") (qualified-name "ItemTest::C"))) (provenance implied))
+    (relationship (kind conjugation) (source (node (document "memory://snapshot/item_test.md") (path (named (kind package) (name "ItemTest")) (named (kind port-def) (name "P")) (anonymous (kind conjugated-port-def) (ordinal 0))))) (target (node (document "memory://snapshot/item_test.md") (qualified-name "ItemTest::P"))) (provenance implied))
     (relationship (kind typeFeaturing) (source (node (document "memory://snapshot/item_test.md") (qualified-name "ItemTest::P::a1"))) (target (node (document "memory://snapshot/item_test.md") (qualified-name "ItemTest::P"))) (provenance implied))
     (relationship (kind typeFeaturing) (source (node (document "memory://snapshot/item_test.md") (qualified-name "ItemTest::P::a2"))) (target (node (document "memory://snapshot/item_test.md") (qualified-name "ItemTest::P"))) (provenance implied))
   )

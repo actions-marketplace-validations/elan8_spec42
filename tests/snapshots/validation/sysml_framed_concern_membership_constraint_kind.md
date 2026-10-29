@@ -22,7 +22,7 @@ package Roles {
     part def Component;
     concern def Safety;
     requirement def Limited {
-        subject item : Component;
+        subject 'item' : Component;
         frame concern safety : Safety;
     }
 }
@@ -48,22 +48,26 @@ package Roles {
 # SMG
 ~~~sexpr
 (semantic-model
-  (publication (phase resolved) (completeness complete) (has-evaluation false) (source-digest "blake3:a40f509eb20e1dd92d4e35e261e0b9af87c97abb8e543693477475a34d1975d7"))
+  (publication (phase resolved) (completeness complete) (has-evaluation false) (source-digest "blake3:66f847fb7090dfbbdba2d0d1ae3200a1bb960f2cbdfa0e2cd0d39855fb125dd0"))
   (declarations
     (declaration (id (node (document "memory://snapshot/sysml_framed_concern_membership_constraint_kind.md") (qualified-name "Roles"))) (kind package) (membership (kind owning) (visibility default)))
     (declaration (id (node (document "memory://snapshot/sysml_framed_concern_membership_constraint_kind.md") (qualified-name "Roles::Component"))) (kind part-def) (membership (kind owning) (visibility default)))
     (declaration (id (node (document "memory://snapshot/sysml_framed_concern_membership_constraint_kind.md") (qualified-name "Roles::Limited"))) (kind requirement-def) (membership (kind owning) (visibility default)))
     (declaration (id (node (document "memory://snapshot/sysml_framed_concern_membership_constraint_kind.md") (qualified-name "Roles::Limited::item"))) (kind subject) (membership (kind feature) (visibility default)) (authored (membership (kind feature) (visibility default)) (relationships (featureTyping (reference "Component")))))
-    (declaration (id (node (document "memory://snapshot/sysml_framed_concern_membership_constraint_kind.md") (qualified-name "Roles::Limited::safety"))) (kind frame) (membership (kind feature) (visibility default)))
+    (declaration (id (node (document "memory://snapshot/sysml_framed_concern_membership_constraint_kind.md") (qualified-name "Roles::Limited::safety"))) (kind frame) (membership (kind feature) (visibility default)) (authored (membership (kind feature) (visibility default)) (relationships (featureTyping (reference "Safety")))))
     (declaration (id (node (document "memory://snapshot/sysml_framed_concern_membership_constraint_kind.md") (qualified-name "Roles::Safety"))) (kind concern-def) (membership (kind owning) (visibility default)))
   )
   (references
     (reference (id (source (node (document "memory://snapshot/sysml_framed_concern_membership_constraint_kind.md") (qualified-name "Roles::Limited::item"))) (kind featureTyping) (ordinal 0))
       (authored-target "Component")
       (outcome (status resolved) (target (node (document "memory://snapshot/sysml_framed_concern_membership_constraint_kind.md") (qualified-name "Roles::Component")))))
+    (reference (id (source (node (document "memory://snapshot/sysml_framed_concern_membership_constraint_kind.md") (qualified-name "Roles::Limited::safety"))) (kind featureTyping) (ordinal 0))
+      (authored-target "Safety")
+      (outcome (status resolved) (target (node (document "memory://snapshot/sysml_framed_concern_membership_constraint_kind.md") (qualified-name "Roles::Safety")))))
   )
   (relationships
     (relationship (kind typing) (source (node (document "memory://snapshot/sysml_framed_concern_membership_constraint_kind.md") (qualified-name "Roles::Limited::item"))) (target (node (document "memory://snapshot/sysml_framed_concern_membership_constraint_kind.md") (qualified-name "Roles::Component"))) (provenance authored) (authored-reference (source (node (document "memory://snapshot/sysml_framed_concern_membership_constraint_kind.md") (qualified-name "Roles::Limited::item"))) (kind featureTyping) (ordinal 0)))
+    (relationship (kind typing) (source (node (document "memory://snapshot/sysml_framed_concern_membership_constraint_kind.md") (qualified-name "Roles::Limited::safety"))) (target (node (document "memory://snapshot/sysml_framed_concern_membership_constraint_kind.md") (qualified-name "Roles::Safety"))) (provenance authored) (authored-reference (source (node (document "memory://snapshot/sysml_framed_concern_membership_constraint_kind.md") (qualified-name "Roles::Limited::safety"))) (kind featureTyping) (ordinal 0)))
     (relationship (kind typeFeaturing) (source (node (document "memory://snapshot/sysml_framed_concern_membership_constraint_kind.md") (qualified-name "Roles::Limited::item"))) (target (node (document "memory://snapshot/sysml_framed_concern_membership_constraint_kind.md") (qualified-name "Roles::Limited"))) (provenance implied))
     (relationship (kind typeFeaturing) (source (node (document "memory://snapshot/sysml_framed_concern_membership_constraint_kind.md") (qualified-name "Roles::Limited::safety"))) (target (node (document "memory://snapshot/sysml_framed_concern_membership_constraint_kind.md") (qualified-name "Roles::Limited"))) (provenance implied))
   )
@@ -85,15 +89,26 @@ package Roles {
     )
     (declaration (id (node (document "memory://snapshot/sysml_framed_concern_membership_constraint_kind.md") (qualified-name "Roles::Limited::safety")))
       (featured-by (node (document "memory://snapshot/sysml_framed_concern_membership_constraint_kind.md") (qualified-name "Roles::Limited")))
+      (type (node (document "memory://snapshot/sysml_framed_concern_membership_constraint_kind.md") (qualified-name "Roles::Safety")) (provenance authored))
+      (effective-type (node (document "memory://snapshot/sysml_framed_concern_membership_constraint_kind.md") (qualified-name "Roles::Safety")) (source direct))
+      (supertype (node (document "memory://snapshot/sysml_framed_concern_membership_constraint_kind.md") (qualified-name "Roles::Safety")) (scopes any))
+    )
+    (declaration (id (node (document "memory://snapshot/sysml_framed_concern_membership_constraint_kind.md") (qualified-name "Roles::Safety")))
+      (subtype (node (document "memory://snapshot/sysml_framed_concern_membership_constraint_kind.md") (qualified-name "Roles::Limited::safety")) (scopes any))
     )
 )
 ~~~
 # NAVIGATION
 ~~~sexpr
 (navigation
-  (query (document "memory://snapshot/sysml_framed_concern_membership_constraint_kind.md") (range (start 10 23) (end 10 32)) (probe (position 10 23))
+  (query (document "memory://snapshot/sysml_framed_concern_membership_constraint_kind.md") (range (start 10 25) (end 10 34)) (probe (position 10 25))
     (reference (id (source (node (document "memory://snapshot/sysml_framed_concern_membership_constraint_kind.md") (qualified-name "Roles::Limited::item"))) (kind featureTyping) (ordinal 0) (authored-target "Component")
       (outcome (status resolved) (target (node (document "memory://snapshot/sysml_framed_concern_membership_constraint_kind.md") (qualified-name "Roles::Component")))))
+    )
+  )
+  (query (document "memory://snapshot/sysml_framed_concern_membership_constraint_kind.md") (range (start 11 31) (end 11 37)) (probe (position 11 31))
+    (reference (id (source (node (document "memory://snapshot/sysml_framed_concern_membership_constraint_kind.md") (qualified-name "Roles::Limited::safety"))) (kind featureTyping) (ordinal 0) (authored-target "Safety")
+      (outcome (status resolved) (target (node (document "memory://snapshot/sysml_framed_concern_membership_constraint_kind.md") (qualified-name "Roles::Safety")))))
     )
   )
 )

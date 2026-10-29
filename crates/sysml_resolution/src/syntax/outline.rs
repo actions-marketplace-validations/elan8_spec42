@@ -6,7 +6,8 @@
 
 use sysml_v2_parser::ast::{
     PackageBody, PackageBodyElement, PartDefBody, PartDefBodyElement, PartUsageBody,
-    PartUsageBodyElement, PortDefBody, PortDefBodyElement, RootElement,
+    PartUsageBodyElement, PortDefBody, PortDefBodyElement, RootElement, ViewBody, ViewBodyElement,
+    ViewDefBody, ViewDefBodyElement,
 };
 
 fn braced_extent(range: SyntaxRange, braced: bool) -> Option<SyntaxRange> {
@@ -184,34 +185,48 @@ fn normalize_outline_symbols(symbols: &mut [SyntaxOutlineNode]) {
     }
 }
 
-/// Collects folding ranges from the AST. This reuses the document-symbol outline ranges and
-/// produces one folding range per symbol whose extent spans multiple lines.
+/// Fold every authored braced body, including anonymous bodies and declarations that do not
+/// have an editor symbol. The parser's structural visitor owns the inventory of body kinds.
 pub(super) fn folding_regions(
     document: &sysml_v2_parser::ParsedDocument,
 ) -> Vec<SyntaxFoldingRegion> {
-    let symbols = document_outline(document);
-    let mut out = Vec::new();
-
-    fn push_symbol(symbol: &SyntaxOutlineNode, out: &mut Vec<SyntaxFoldingRegion>) {
-        let start = symbol.range.start_line;
-        let end = symbol.range.end_line;
-        if end > start {
-            out.push(SyntaxFoldingRegion {
-                start_line: start,
-                end_line: end,
-                kind: Some(SyntaxFoldingKind::Region),
-            });
-        }
-        for c in &symbol.children {
-            push_symbol(c, out);
+    use sysml_v2_parser::ast::visit::Visitor;
+    struct Folds<'a> {
+        document: &'a sysml_v2_parser::ParsedDocument,
+        regions: Vec<SyntaxFoldingRegion>,
+    }
+    impl Visitor for Folds<'_> {
+        fn visit_body_braces<E>(
+            &mut self,
+            open: &sysml_v2_parser::Span,
+            _: &[sysml_v2_parser::Node<E>],
+            close: &sysml_v2_parser::Span,
+        ) {
+            // Recovery may synthesize a missing delimiter. It is not an authored folding end.
+            if open.len == 0 || close.len == 0 {
+                return;
+            }
+            let start = node_range(self.document, open).start_line;
+            let end = node_range(self.document, close).end_line;
+            if end > start {
+                self.regions.push(SyntaxFoldingRegion {
+                    start_line: start,
+                    end_line: end,
+                    kind: Some(SyntaxFoldingKind::Region),
+                });
+            }
         }
     }
-
-    for s in &symbols {
-        push_symbol(s, &mut out);
-    }
-
-    out
+    let mut folds = Folds {
+        document,
+        regions: Vec::new(),
+    };
+    folds.visit_root_namespace(document);
+    folds
+        .regions
+        .sort_by_key(|region| (region.start_line, region.end_line));
+    folds.regions.dedup();
+    folds.regions
 }
 
 /// Split a declaration's extent into its header and its braced body.
@@ -249,40 +264,71 @@ fn split_body<E>(
     }
 }
 
-fn modeled_decl_name(keyword: &str, text: &str, fallback: &str) -> String {
-    let t = text.trim().trim_end_matches(';').trim();
-    let tokens: Vec<String> = t
-        .split_whitespace()
-        .map(|s| {
-            s.trim_end_matches(';')
-                .trim_end_matches(',')
-                .trim_end_matches(')')
-                .to_string()
-        })
-        .filter(|s| !s.is_empty())
-        .collect();
-    let kw = keyword.trim();
-    if let Some(pos) = tokens.iter().position(|tok| tok.eq_ignore_ascii_case(kw)) {
-        if pos + 1 < tokens.len() {
-            let name = sanitize_identifier(&tokens[pos + 1]);
-            if !name.is_empty() && !name.eq_ignore_ascii_case("specializes") {
-                return name;
-            }
-        }
+fn outline_view_def(
+    document: &sysml_v2_parser::ParsedDocument,
+    node: &sysml_v2_parser::Node<sysml_v2_parser::ast::ViewDef>,
+) -> Option<SyntaxOutlineNode> {
+    let name = identification_name(document, &node.identification);
+    if name.is_empty() {
+        return None;
     }
-    for tok in &tokens {
-        let name = sanitize_identifier(tok);
-        if !name.is_empty() {
-            return name;
-        }
-    }
-    fallback.to_string()
+    let range = node_range(document, &node.span);
+    let children = match &node.body {
+        ViewDefBody::Brace { elements, .. } => elements
+            .iter()
+            .filter_map(|member| match &member.value {
+                ViewDefBodyElement::ViewUsage(view) => Some(outline_view_usage(document, view)),
+                _ => None,
+            })
+            .collect(),
+        ViewDefBody::Semicolon { .. } => vec![],
+    };
+    let (head_range, body_range) = split_body(document, &node.body, range);
+    Some(SyntaxOutlineNode {
+        name,
+        short_name: declaration_name_text(document, node.identification.short_name),
+        kind: SyntaxOutlineKind::ViewDef,
+        typed_by: super::closure_targets::typing_target_display(
+            document,
+            node.specializes.as_deref(),
+        ),
+        range,
+        selection_range: range,
+        head_range,
+        body_range,
+        has_case_subject: false,
+        children,
+    })
 }
 
-fn sanitize_identifier(s: &str) -> String {
-    s.chars()
-        .filter(|c| c.is_alphanumeric() || *c == '_')
-        .collect()
+fn outline_view_usage(
+    document: &sysml_v2_parser::ParsedDocument,
+    node: &sysml_v2_parser::Node<sysml_v2_parser::ast::ViewUsage>,
+) -> SyntaxOutlineNode {
+    let range = node_range(document, &node.span);
+    let children = match &node.body {
+        ViewBody::Brace { elements, .. } => elements
+            .iter()
+            .filter_map(|member| match &member.value {
+                ViewBodyElement::ViewUsage(view) => Some(outline_view_usage(document, view)),
+                _ => None,
+            })
+            .collect(),
+        ViewBody::Semicolon { .. } => vec![],
+    };
+    let (head_range, body_range) = split_body(document, &node.body, range);
+    SyntaxOutlineNode {
+        name: declaration_name_text(document, node.name).unwrap_or_default(),
+        short_name: declaration_name_text(document, node.short_name),
+        kind: SyntaxOutlineKind::ViewUsage,
+        typed_by: super::closure_targets::typing_target_display(document, node.typing.as_deref()),
+        range,
+        selection_range: range,
+        head_range,
+        body_range,
+        has_case_subject: false,
+        children,
+    }
 }
 
 fn outline_symbol_from_element(
@@ -390,7 +436,7 @@ fn outline_symbol_from_element(
         PBE::ItemUsage(p) => Some(SyntaxOutlineNode {
             name: declaration_name_text(document, p.name).unwrap_or_default(),
             kind: SyntaxOutlineKind::ItemUsage,
-            typed_by: super::closure_targets::reference_text(document, p.type_name),
+            typed_by: super::closure_targets::typing_target_display(document, p.typing.as_deref()),
             range,
             selection_range: range,
             ..SyntaxOutlineNode::bare(range)
@@ -490,42 +536,6 @@ fn outline_symbol_from_element(
                 ..SyntaxOutlineNode::bare(range)
             })
         }
-        PBE::FeatureDecl(p) => {
-            let name = modeled_decl_name(
-                document.source.slice(&p.keyword_span).unwrap_or_default(),
-                document.opaque_text(p.text).unwrap_or_default(),
-                "_feature",
-            );
-            if name.is_empty() {
-                return None;
-            }
-            Some(SyntaxOutlineNode {
-                name,
-                kind: SyntaxOutlineKind::FeatureDecl,
-                range,
-                selection_range: range,
-                children: vec![],
-                ..SyntaxOutlineNode::bare(range)
-            })
-        }
-        PBE::ClassifierDecl(p) => {
-            let name = modeled_decl_name(
-                document.source.slice(&p.keyword_span).unwrap_or_default(),
-                document.opaque_text(p.text).unwrap_or_default(),
-                "_classifier",
-            );
-            if name.is_empty() {
-                return None;
-            }
-            Some(SyntaxOutlineNode {
-                name,
-                kind: SyntaxOutlineKind::ClassifierDecl,
-                range,
-                selection_range: range,
-                children: vec![],
-                ..SyntaxOutlineNode::bare(range)
-            })
-        }
         PBE::ActionDef(p) => {
             let name = identification_name(document, &p.identification);
             if name.is_empty() {
@@ -570,7 +580,7 @@ fn outline_symbol_from_element(
         PBE::RequirementUsage(p) => Some(SyntaxOutlineNode {
             name: declaration_name_text(document, p.name).unwrap_or_default(),
             kind: SyntaxOutlineKind::RequirementUsage,
-            typed_by: super::closure_targets::reference_text(document, p.type_name),
+            typed_by: super::closure_targets::typing_target_display(document, p.typing.as_deref()),
             range,
             selection_range: range,
             ..SyntaxOutlineNode::bare(range)
@@ -590,36 +600,24 @@ fn outline_symbol_from_element(
             SyntaxOutlineKind::VerificationDef,
         ),
         PBE::AnalysisCaseUsage(p) => Some(SyntaxOutlineNode {
-            name: declaration_name_text(document, Some(p.name)).unwrap_or_default(),
+            name: declaration_name_text(document, p.name).unwrap_or_default(),
+            short_name: declaration_name_text(document, p.short_name),
             kind: SyntaxOutlineKind::AnalysisUsage,
-            typed_by: super::closure_targets::reference_text(document, p.type_name),
+            typed_by: super::closure_targets::typing_target_display(document, p.typing.as_deref()),
             range,
             selection_range: range,
             ..SyntaxOutlineNode::bare(range)
         }),
         PBE::VerificationCaseUsage(p) => Some(SyntaxOutlineNode {
-            name: declaration_name_text(document, Some(p.name)).unwrap_or_default(),
+            name: declaration_name_text(document, p.name).unwrap_or_default(),
+            short_name: declaration_name_text(document, p.short_name),
             kind: SyntaxOutlineKind::VerificationUsage,
-            typed_by: super::closure_targets::reference_text(document, p.type_name),
+            typed_by: super::closure_targets::typing_target_display(document, p.typing.as_deref()),
             range,
             selection_range: range,
             ..SyntaxOutlineNode::bare(range)
         }),
-        PBE::ViewDef(p) => {
-            let name = identification_name(document, &p.identification);
-            if name.is_empty() {
-                return None;
-            }
-            Some(SyntaxOutlineNode {
-                name,
-                short_name: declaration_name_text(document, p.identification.short_name),
-                kind: SyntaxOutlineKind::ViewDef,
-                range,
-                selection_range: range,
-                children: vec![],
-                ..SyntaxOutlineNode::bare(range)
-            })
-        }
+        PBE::ViewDef(p) => outline_view_def(document, p),
         PBE::ViewpointDef(p) => {
             let name = identification_name(document, &p.identification);
             if name.is_empty() {
@@ -650,16 +648,10 @@ fn outline_symbol_from_element(
                 ..SyntaxOutlineNode::bare(range)
             })
         }
-        PBE::ViewUsage(p) => Some(SyntaxOutlineNode {
-            name: declaration_name_text(document, p.name).unwrap_or_default(),
-            kind: SyntaxOutlineKind::ViewUsage,
-            range,
-            selection_range: range,
-            children: vec![],
-            ..SyntaxOutlineNode::bare(range)
-        }),
+        PBE::ViewUsage(p) => Some(outline_view_usage(document, p)),
         PBE::ViewpointUsage(p) => Some(SyntaxOutlineNode {
-            name: declaration_name_text(document, Some(p.name)).unwrap_or_default(),
+            name: declaration_name_text(document, p.name).unwrap_or_default(),
+            short_name: declaration_name_text(document, p.short_name),
             kind: SyntaxOutlineKind::ViewpointUsage,
             range,
             selection_range: range,
@@ -668,6 +660,7 @@ fn outline_symbol_from_element(
         }),
         PBE::RenderingUsage(p) => Some(SyntaxOutlineNode {
             name: declaration_name_text(document, p.name).unwrap_or_default(),
+            short_name: declaration_name_text(document, p.short_name),
             kind: SyntaxOutlineKind::RenderingUsage,
             range,
             selection_range: range,

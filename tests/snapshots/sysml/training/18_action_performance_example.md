@@ -48,6 +48,12 @@ package 'Action Performance Example' {
         (severity warning)
         (code "unresolved_reference")
         (source "semantic")
+        (range (start 10 14) (end 10 25))
+      )
+      (diagnostic
+        (severity warning)
+        (code "unresolved_reference")
+        (source "semantic")
         (range (start 13 11) (end 13 26))
       )
       (diagnostic
@@ -63,7 +69,7 @@ package 'Action Performance Example' {
 # SMG
 ~~~sexpr
 (semantic-model
-  (publication (phase resolved) (completeness complete) (has-evaluation false) (source-digest "blake3:4792da0794e77a0d60357e60c04671e31362262b5ed5dd78100aad24ae05af99"))
+  (publication (phase resolved) (completeness complete) (has-evaluation false) (source-digest "blake3:138db7988fa75732e59eca1e27f2f67842810986177837b9f9f18a8bc7f71d92"))
   (declarations
     (declaration (id (node (document "memory://snapshot/18_action_performance_example.md") (qualified-name "Action Performance Example"))) (kind package) (membership (kind owning) (visibility default)))
     (declaration (id (node (document "memory://snapshot/18_action_performance_example.md") (path (named (kind package) (name "Action Performance Example")) (anonymous (kind import) (ordinal 0))))) (kind import) (membership (kind import) (visibility private)) (authored (membership (kind import) (visibility private)) (relationships (namespaceImport (reference "Action Decomposition") (import (shape namespace) (recursive false))))))
@@ -72,10 +78,13 @@ package 'Action Performance Example' {
     (declaration (id (node (document "memory://snapshot/18_action_performance_example.md") (qualified-name "Action Performance Example::Imager"))) (kind part-def) (membership (kind owning) (visibility default)))
     (declaration (id (node (document "memory://snapshot/18_action_performance_example.md") (qualified-name "Action Performance Example::camera"))) (kind part) (membership (kind feature) (visibility default)) (authored (membership (kind feature) (visibility default)) (relationships (featureTyping (reference "Camera")))))
     (declaration (id (node (document "memory://snapshot/18_action_performance_example.md") (qualified-name "Action Performance Example::camera::f"))) (kind part) (membership (kind feature) (visibility default)) (authored (membership (kind feature) (visibility default)) (relationships (featureTyping (reference "AutoFocus")))))
-    (declaration (id (node (document "memory://snapshot/18_action_performance_example.md") (path (named (kind package) (name "Action Performance Example")) (named (kind part) (name "camera")) (named (kind part) (name "f")) (anonymous (kind perform-action) (ordinal 0))))) (kind perform-action) (membership (kind feature) (visibility default)) (authored (membership (kind feature) (visibility default)) (relationships (referenceSubsetting (reference "takePhoto::focus")))))
+    (declaration (id (node (document "memory://snapshot/18_action_performance_example.md") (path (named (kind package) (name "Action Performance Example")) (named (kind part) (name "camera")) (named (kind part) (name "f")) (anonymous (kind perform-action) (ordinal 0))))) (kind perform-action) (membership (kind feature) (visibility default)) (effective-identification (name unresolved) (short-name unresolved) (provenance performed-action)) (authored (membership (kind feature) (visibility default)) (relationships (referenceSubsetting (reference "takePhoto::focus")))))
     (declaration (id (node (document "memory://snapshot/18_action_performance_example.md") (qualified-name "Action Performance Example::camera::i"))) (kind part) (membership (kind feature) (visibility default)) (authored (membership (kind feature) (visibility default)) (relationships (featureTyping (reference "Imager")))))
-    (declaration (id (node (document "memory://snapshot/18_action_performance_example.md") (path (named (kind package) (name "Action Performance Example")) (named (kind part) (name "camera")) (named (kind part) (name "i")) (anonymous (kind perform-action) (ordinal 0))))) (kind perform-action) (membership (kind feature) (visibility default)) (authored (membership (kind feature) (visibility default)) (relationships (referenceSubsetting (reference "takePhoto::shoot")))))
-    (declaration (id (node (document "memory://snapshot/18_action_performance_example.md") (qualified-name "Action Performance Example::camera::takePhoto"))) (kind perform-action) (membership (kind feature) (visibility default)) (facts (multiplicity (lower unbounded) (upper unbounded))))
+    (declaration (id (node (document "memory://snapshot/18_action_performance_example.md") (path (named (kind package) (name "Action Performance Example")) (named (kind part) (name "camera")) (named (kind part) (name "i")) (anonymous (kind perform-action) (ordinal 0))))) (kind perform-action) (membership (kind feature) (visibility default)) (effective-identification (name unresolved) (short-name unresolved) (provenance performed-action)) (authored (membership (kind feature) (visibility default)) (relationships (referenceSubsetting (reference "takePhoto::shoot")))))
+    (declaration (id (node (document "memory://snapshot/18_action_performance_example.md") (qualified-name "Action Performance Example::camera::takePhoto"))) (kind perform-action) (membership (kind feature) (visibility default)) (facts (modifiers ordered) (multiplicity (lower unbounded) (upper unbounded))) (authored (membership (kind feature) (visibility default)) (relationships (referenceSubsetting (reference "takePicture")))))
+    (declaration (id (node (document "memory://snapshot/18_action_performance_example.md") (path (named (kind package) (name "Action Performance Example")) (named (kind part) (name "camera")) (named (kind perform-action) (name "takePhoto")) (anonymous (kind kerml-multiplicity-range) (ordinal 0))))) (kind kerml-multiplicity-range) (membership (kind owning) (visibility default)))
+    (declaration (id (node (document "memory://snapshot/18_action_performance_example.md") (path (named (kind package) (name "Action Performance Example")) (named (kind part) (name "camera")) (named (kind perform-action) (name "takePhoto")) (anonymous (kind kerml-multiplicity-range) (ordinal 0)) (anonymous (kind kerml-literal-infinity) (ordinal 0))))) (kind kerml-literal-infinity) (membership (kind owning) (visibility default)) (facts (expression-result (node (document "memory://snapshot/18_action_performance_example.md") (path (named (kind package) (name "Action Performance Example")) (named (kind part) (name "camera")) (named (kind perform-action) (name "takePhoto")) (anonymous (kind kerml-multiplicity-range) (ordinal 0)) (anonymous (kind kerml-literal-infinity) (ordinal 0)) (anonymous (kind kerml-feature) (ordinal 0)))))))
+    (declaration (id (node (document "memory://snapshot/18_action_performance_example.md") (path (named (kind package) (name "Action Performance Example")) (named (kind part) (name "camera")) (named (kind perform-action) (name "takePhoto")) (anonymous (kind kerml-multiplicity-range) (ordinal 0)) (anonymous (kind kerml-literal-infinity) (ordinal 0)) (anonymous (kind kerml-feature) (ordinal 0))))) (kind kerml-feature) (membership (kind feature) (visibility default)) (facts (direction out)))
   )
   (references
     (reference (id (source (node (document "memory://snapshot/18_action_performance_example.md") (path (named (kind package) (name "Action Performance Example")) (anonymous (kind import) (ordinal 0))))) (kind namespaceImport) (ordinal 0))
@@ -96,6 +105,9 @@ package 'Action Performance Example' {
     (reference (id (source (node (document "memory://snapshot/18_action_performance_example.md") (path (named (kind package) (name "Action Performance Example")) (named (kind part) (name "camera")) (named (kind part) (name "i")) (anonymous (kind perform-action) (ordinal 0))))) (kind referenceSubsetting) (ordinal 0))
       (authored-target "takePhoto::shoot")
       (outcome (status unresolved)))
+    (reference (id (source (node (document "memory://snapshot/18_action_performance_example.md") (qualified-name "Action Performance Example::camera::takePhoto"))) (kind referenceSubsetting) (ordinal 0))
+      (authored-target "takePicture")
+      (outcome (status unresolved)))
   )
   (relationships
     (relationship (kind typing) (source (node (document "memory://snapshot/18_action_performance_example.md") (qualified-name "Action Performance Example::camera"))) (target (node (document "memory://snapshot/18_action_performance_example.md") (qualified-name "Action Performance Example::Camera"))) (provenance authored) (authored-reference (source (node (document "memory://snapshot/18_action_performance_example.md") (qualified-name "Action Performance Example::camera"))) (kind featureTyping) (ordinal 0)))
@@ -106,6 +118,9 @@ package 'Action Performance Example' {
     (relationship (kind typeFeaturing) (source (node (document "memory://snapshot/18_action_performance_example.md") (qualified-name "Action Performance Example::camera::i"))) (target (node (document "memory://snapshot/18_action_performance_example.md") (qualified-name "Action Performance Example::camera"))) (provenance implied))
     (relationship (kind typeFeaturing) (source (node (document "memory://snapshot/18_action_performance_example.md") (path (named (kind package) (name "Action Performance Example")) (named (kind part) (name "camera")) (named (kind part) (name "i")) (anonymous (kind perform-action) (ordinal 0))))) (target (node (document "memory://snapshot/18_action_performance_example.md") (qualified-name "Action Performance Example::camera::i"))) (provenance implied))
     (relationship (kind typeFeaturing) (source (node (document "memory://snapshot/18_action_performance_example.md") (qualified-name "Action Performance Example::camera::takePhoto"))) (target (node (document "memory://snapshot/18_action_performance_example.md") (qualified-name "Action Performance Example::camera"))) (provenance implied))
+    (relationship (kind typeFeaturing) (source (node (document "memory://snapshot/18_action_performance_example.md") (path (named (kind package) (name "Action Performance Example")) (named (kind part) (name "camera")) (named (kind perform-action) (name "takePhoto")) (anonymous (kind kerml-multiplicity-range) (ordinal 0))))) (target (node (document "memory://snapshot/18_action_performance_example.md") (qualified-name "Action Performance Example::camera"))) (provenance implied))
+    (relationship (kind typeFeaturing) (source (node (document "memory://snapshot/18_action_performance_example.md") (path (named (kind package) (name "Action Performance Example")) (named (kind part) (name "camera")) (named (kind perform-action) (name "takePhoto")) (anonymous (kind kerml-multiplicity-range) (ordinal 0)) (anonymous (kind kerml-literal-infinity) (ordinal 0))))) (target (node (document "memory://snapshot/18_action_performance_example.md") (qualified-name "Action Performance Example::camera"))) (provenance implied))
+    (relationship (kind typeFeaturing) (source (node (document "memory://snapshot/18_action_performance_example.md") (path (named (kind package) (name "Action Performance Example")) (named (kind part) (name "camera")) (named (kind perform-action) (name "takePhoto")) (anonymous (kind kerml-multiplicity-range) (ordinal 0)) (anonymous (kind kerml-literal-infinity) (ordinal 0)) (anonymous (kind kerml-feature) (ordinal 0))))) (target (node (document "memory://snapshot/18_action_performance_example.md") (path (named (kind package) (name "Action Performance Example")) (named (kind part) (name "camera")) (named (kind perform-action) (name "takePhoto")) (anonymous (kind kerml-multiplicity-range) (ordinal 0)) (anonymous (kind kerml-literal-infinity) (ordinal 0))))) (provenance implied))
   )
   (evaluation
   )
@@ -149,6 +164,15 @@ package 'Action Performance Example' {
     (declaration (id (node (document "memory://snapshot/18_action_performance_example.md") (qualified-name "Action Performance Example::camera::takePhoto")))
       (featured-by (node (document "memory://snapshot/18_action_performance_example.md") (qualified-name "Action Performance Example::camera")))
     )
+    (declaration (id (node (document "memory://snapshot/18_action_performance_example.md") (path (named (kind package) (name "Action Performance Example")) (named (kind part) (name "camera")) (named (kind perform-action) (name "takePhoto")) (anonymous (kind kerml-multiplicity-range) (ordinal 0)))))
+      (featured-by (node (document "memory://snapshot/18_action_performance_example.md") (qualified-name "Action Performance Example::camera")))
+    )
+    (declaration (id (node (document "memory://snapshot/18_action_performance_example.md") (path (named (kind package) (name "Action Performance Example")) (named (kind part) (name "camera")) (named (kind perform-action) (name "takePhoto")) (anonymous (kind kerml-multiplicity-range) (ordinal 0)) (anonymous (kind kerml-literal-infinity) (ordinal 0)))))
+      (featured-by (node (document "memory://snapshot/18_action_performance_example.md") (qualified-name "Action Performance Example::camera")))
+    )
+    (declaration (id (node (document "memory://snapshot/18_action_performance_example.md") (path (named (kind package) (name "Action Performance Example")) (named (kind part) (name "camera")) (named (kind perform-action) (name "takePhoto")) (anonymous (kind kerml-multiplicity-range) (ordinal 0)) (anonymous (kind kerml-literal-infinity) (ordinal 0)) (anonymous (kind kerml-feature) (ordinal 0)))))
+      (featured-by (node (document "memory://snapshot/18_action_performance_example.md") (path (named (kind package) (name "Action Performance Example")) (named (kind part) (name "camera")) (named (kind perform-action) (name "takePhoto")) (anonymous (kind kerml-multiplicity-range) (ordinal 0)) (anonymous (kind kerml-literal-infinity) (ordinal 0)))))
+    )
 )
 ~~~
 # NAVIGATION
@@ -181,6 +205,11 @@ package 'Action Performance Example' {
   )
   (query (document "memory://snapshot/18_action_performance_example.md") (range (start 17 11) (end 17 26)) (probe (position 17 11))
     (reference (id (source (node (document "memory://snapshot/18_action_performance_example.md") (path (named (kind package) (name "Action Performance Example")) (named (kind part) (name "camera")) (named (kind part) (name "i")) (anonymous (kind perform-action) (ordinal 0))))) (kind referenceSubsetting) (ordinal 0) (authored-target "takePhoto::shoot")
+      (outcome (status unresolved)))
+    )
+  )
+  (query (document "memory://snapshot/18_action_performance_example.md") (range (start 10 14) (end 10 25)) (probe (position 10 14))
+    (reference (id (source (node (document "memory://snapshot/18_action_performance_example.md") (qualified-name "Action Performance Example::camera::takePhoto"))) (kind referenceSubsetting) (ordinal 0) (authored-target "takePicture")
       (outcome (status unresolved)))
     )
   )

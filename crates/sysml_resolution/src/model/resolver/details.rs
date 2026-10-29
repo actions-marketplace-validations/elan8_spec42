@@ -8,8 +8,8 @@
 
 use crate::details::{
     ConnectedElement, EffectiveTypeEntry, EffectiveTyping, ElementDetails, ElementDetailsAt,
-    InheritedFeature, ReferencedDetails, RelationshipFamily, RelationshipOutcome, ViewSelection,
-    ViewSelectionObstacle, ViewSelectionOutcome,
+    InheritedFeature, ReferencedDetails, RelationshipFamily, RelationshipOutcome, ViewRendering,
+    ViewSelection, ViewSelectionObstacle, ViewSelectionOutcome,
 };
 use crate::evaluation::{AnalysisEvaluation, EvaluatedScalar, EvaluationState};
 use crate::index::documents::leaf_ranges_containing;
@@ -66,6 +66,13 @@ impl From<bool> for PredicateTruth {
 }
 
 impl PredicateTruth {
+    pub(crate) fn not(self) -> Self {
+        match self {
+            Self::True => Self::False,
+            Self::False => Self::True,
+            Self::Indeterminate(obstacles) => Self::Indeterminate(obstacles),
+        }
+    }
     pub(crate) fn and(left: Self, right: Self) -> Self {
         match (left, right) {
             (Self::False, _) | (_, Self::False) => Self::False,
@@ -137,6 +144,94 @@ pub(crate) fn is_verdict_bearing(kind: ElementKind) -> bool {
 }
 
 impl<D> SemanticModel<D> {
+    pub(crate) fn view_rendering(&self, view: SymbolId) -> QueryOutcome<Option<ViewRendering>> {
+        let view_id = match self.single_declaration(view) {
+            Ok(id) => id,
+            Err(outcome) => return outcome,
+        };
+        if !matches!(
+            self.storage
+                .declaration(view_id)
+                .map(|declaration| declaration.kind),
+            Some(
+                crate::model::DeclarationKind::ViewDefinition
+                    | crate::model::DeclarationKind::ViewUsage
+            )
+        ) {
+            return self.query_outcome(QueryAnswer::Unsupported);
+        }
+        let members = self
+            .effective_usage_members(view_id)
+            .into_iter()
+            .filter(|member| {
+                self.effective_membership_role(*member)
+                    == Some(crate::MembershipRole::ViewRendering)
+            });
+        let mut renderings = Vec::new();
+        let mut unsettled = false;
+        let mut ambiguous = false;
+        for member in members {
+            let Some(owned_rendering) = self.symbol_id(member) else {
+                unsettled = true;
+                continue;
+            };
+            let Some(membership) = crate::MembershipId::from_index(member.index()) else {
+                unsettled = true;
+                continue;
+            };
+            let referenced = match self
+                .storage
+                .declaration_facts(member)
+                .and_then(|facts| facts.view_rendering_reference)
+            {
+                None => vec![member],
+                Some(reference) => match self.resolution.outcome(reference) {
+                    Some(ResolutionStatus::Resolved(target)) => vec![target],
+                    Some(ResolutionStatus::Ambiguous(range)) => {
+                        ambiguous = true;
+                        self.resolution.ambiguous_candidates(range).to_vec()
+                    }
+                    _ => {
+                        unsettled = true;
+                        Vec::new()
+                    }
+                },
+            };
+            for target in referenced {
+                if !self.storage.declaration(target).is_some_and(|declaration| {
+                    declaration.kind == crate::model::DeclarationKind::RenderingUsage
+                }) {
+                    unsettled = true;
+                    continue;
+                }
+                let Some(referenced_rendering) = self.symbol_id(target) else {
+                    unsettled = true;
+                    continue;
+                };
+                renderings.push(ViewRendering {
+                    membership,
+                    owned_rendering,
+                    referenced_rendering,
+                    owned_body_members: self
+                        .symbols(self.child_declarations(member).iter().copied()),
+                    body_members: self.symbols(self.child_declarations(target).iter().copied()),
+                });
+            }
+        }
+        match (renderings.len(), unsettled, ambiguous) {
+            (0, false, false) => self.resolved_outcome(None),
+            (1, false, false) => self.resolved_outcome(renderings.pop()),
+            (_, true, _) => self.query_outcome(QueryAnswer::Unresolved),
+            _ => self.query_outcome(QueryAnswer::Ambiguous(
+                renderings
+                    .into_iter()
+                    .map(Some)
+                    .collect::<Vec<_>>()
+                    .into_boxed_slice(),
+            )),
+        }
+    }
+
     pub(crate) fn view_selection(
         &self,
         view: SymbolId,
@@ -235,7 +330,12 @@ impl<D> SemanticModel<D> {
                 match reference_id.and_then(|id| self.resolution.outcome(*id)) {
                     Some(ResolutionStatus::Resolved(target)) => PredicateTruth::from(
                         metadata.contains(&target)
-                            || candidate_kind == self.standard_element_classification(target),
+                            || self.standard_element_classification(target).is_some_and(
+                                |general| {
+                                    candidate_kind
+                                        .is_some_and(|specific| specific.conforms_to(general))
+                                },
+                            ),
                     ),
                     Some(ResolutionStatus::Ambiguous(range)) => {
                         let mut candidates = self
@@ -260,6 +360,9 @@ impl<D> SemanticModel<D> {
                     ]),
                 }
             }
+            FilterPredicate::Not(operand) => self
+                .evaluate_view_predicate(owner, operand, metadata, candidate_kind)
+                .not(),
             FilterPredicate::And(left, right) => PredicateTruth::and(
                 self.evaluate_view_predicate(owner, left, metadata, candidate_kind),
                 self.evaluate_view_predicate(owner, right, metadata, candidate_kind),
@@ -386,6 +489,16 @@ impl<D> SemanticModel<D> {
             subsetting,
             redefinition,
             inspection,
+            conjugated: self.typing_is_conjugated(id),
+        })
+    }
+
+    /// `port p : ~T` carries the conjugation on the feature-typing reference. The resolved target
+    /// is still `T`.
+    fn typing_is_conjugated(&self, id: DeclarationId) -> bool {
+        self.outgoing_reference_ids(id).iter().any(|reference_id| {
+            let reference = &self.storage.references[reference_id.index()];
+            reference.kind == ReferenceKind::FeatureTyping && reference.flags.conjugated
         })
     }
 
@@ -456,19 +569,37 @@ impl<D> SemanticModel<D> {
         subsetting: &RelationshipFamily,
         redefinition: &RelationshipFamily,
     ) -> EffectiveTyping {
+        // Types reached through something the element authored: the direct types of each authored
+        // subsetting or redefinition target, and those targets' own authored-inherited types.
+        // Implied library types of the general (`Part` via `Parts::parts`) stay out, so
+        // `part engine :>> vehicle.powerplant` keeps the powerplant's authored type without
+        // re-labeling the kernel chain as authored. Provenance is decided here, not re-derived
+        // by each consumer.
+        let authored_inherited = self.authored_inherited_types(subsetting, redefinition);
+
         let mut types = self
             .types
             .effective_types(id)
             .iter()
             .filter_map(|(target, source)| {
+                let (origin, provenance) = match source {
+                    types::EffectiveTypeSource::Direct => (
+                        EffectiveTypeOrigin::Direct,
+                        RelationshipProvenance::Authored,
+                    ),
+                    types::EffectiveTypeSource::Inherited(from) => (
+                        EffectiveTypeOrigin::Inherited(self.symbol_id(*from)?),
+                        if authored_inherited.contains(target) {
+                            RelationshipProvenance::Authored
+                        } else {
+                            RelationshipProvenance::Implied
+                        },
+                    ),
+                };
                 Some(EffectiveTypeEntry {
                     element: self.symbol_entry(*target)?,
-                    origin: match source {
-                        types::EffectiveTypeSource::Direct => EffectiveTypeOrigin::Direct,
-                        types::EffectiveTypeSource::Inherited(from) => {
-                            EffectiveTypeOrigin::Inherited(self.symbol_id(*from)?)
-                        }
-                    },
+                    origin,
+                    provenance,
                 })
             })
             .collect::<Vec<_>>();
@@ -482,11 +613,12 @@ impl<D> SemanticModel<D> {
             .map(|element| EffectiveTypeEntry {
                 element,
                 origin: EffectiveTypeOrigin::Direct,
+                provenance: RelationshipProvenance::Authored,
             })
             .collect::<Vec<_>>();
         // An ambiguous subsetting or redefinition names candidate *features*, not candidate
-        // types. Translate each candidate through the already-published effective-type index and
-        // retain the feature that supplied that possible inherited path as provenance.
+        // types. Keep only the candidate's authored types (direct, then along its authored
+        // generals) so an ambiguous `:>>` does not promote the kernel chain.
         for feature in subsetting
             .candidates
             .iter()
@@ -495,13 +627,14 @@ impl<D> SemanticModel<D> {
             let Ok(feature_id) = self.single_declaration::<()>(feature.identity) else {
                 continue;
             };
-            for (target, _) in self.types.effective_types(feature_id) {
-                let Some(element) = self.symbol_entry(*target) else {
+            for type_id in self.authored_types_of(feature_id) {
+                let Some(element) = self.symbol_entry(type_id) else {
                     continue;
                 };
                 candidates.push(EffectiveTypeEntry {
                     element,
                     origin: EffectiveTypeOrigin::Inherited(feature.identity),
+                    provenance: RelationshipProvenance::Authored,
                 });
             }
         }
@@ -544,6 +677,59 @@ impl<D> SemanticModel<D> {
         }
     }
 
+    /// Direct types of each authored subsetting/redefinition general, plus those generals'
+    /// authored-inherited types. Implied library types of a general are not included.
+    fn authored_inherited_types(
+        &self,
+        subsetting: &RelationshipFamily,
+        redefinition: &RelationshipFamily,
+    ) -> std::collections::BTreeSet<DeclarationId> {
+        let mut collected = std::collections::BTreeSet::new();
+        let mut visiting = std::collections::BTreeSet::new();
+        for target in subsetting.targets.iter().chain(redefinition.targets.iter()) {
+            let Ok(target_id) = self.single_declaration::<()>(target.identity) else {
+                continue;
+            };
+            self.collect_authored_types_of(target_id, &mut collected, &mut visiting);
+        }
+        collected
+    }
+
+    /// Direct types of `feature` and types reached through its authored generals.
+    fn authored_types_of(
+        &self,
+        feature: DeclarationId,
+    ) -> std::collections::BTreeSet<DeclarationId> {
+        let mut collected = std::collections::BTreeSet::new();
+        let mut visiting = std::collections::BTreeSet::new();
+        self.collect_authored_types_of(feature, &mut collected, &mut visiting);
+        collected
+    }
+
+    fn collect_authored_types_of(
+        &self,
+        feature: DeclarationId,
+        collected: &mut std::collections::BTreeSet<DeclarationId>,
+        visiting: &mut std::collections::BTreeSet<DeclarationId>,
+    ) {
+        if !visiting.insert(feature) {
+            return;
+        }
+        for (type_id, source) in self.types.effective_types(feature) {
+            if *source == types::EffectiveTypeSource::Direct {
+                collected.insert(*type_id);
+            }
+        }
+        let subsetting = self.family(feature, Family::Subsetting);
+        let redefinition = self.family(feature, Family::Redefinition);
+        for target in subsetting.targets.iter().chain(redefinition.targets.iter()) {
+            let Ok(target_id) = self.single_declaration::<()>(target.identity) else {
+                continue;
+            };
+            self.collect_authored_types_of(target_id, collected, visiting);
+        }
+    }
+
     /// Features the element has without declaring them, with the type that declares each.
     ///
     /// Starts from what the element is typed by and what it directly specializes, then walks the
@@ -570,26 +756,22 @@ impl<D> SemanticModel<D> {
             .collect::<Vec<_>>();
         seed.sort_by_key(|target| self.symbol_id(*target));
         seed.dedup();
+        let direct_owners = seed
+            .iter()
+            .copied()
+            .collect::<std::collections::BTreeSet<_>>();
         queue.extend(seed);
+        let eligible = self
+            .inherited_feature_members(id)
+            .into_iter()
+            .collect::<std::collections::BTreeSet<_>>();
 
-        // A feature the element declares shadows an inherited one of the same name, and a feature
-        // it redefines is shadowed whatever either is called: KerML makes a redefinition *replace*
-        // the redefined feature, and an anonymous `part :>> wheel[4];` carries no name of its own
-        // to collide with.
+        // Membership eligibility above already excludes redefined targets by identity.
+        // Retain the inspector's nearest-first presentation and same-name shadowing.
         let mut shadowed = std::collections::BTreeSet::new();
-        let mut redefined = std::collections::BTreeSet::new();
         for child in self.child_declarations(id) {
             if let Some(name) = self.declaration_name(*child) {
                 shadowed.insert(name);
-            }
-            for reference_id in self.outgoing_reference_ids(*child) {
-                if self.storage.references[reference_id.index()].kind != ReferenceKind::Redefinition
-                {
-                    continue;
-                }
-                if let ReferenceOutcome::Resolved(target) = self.reference_outcome(*reference_id) {
-                    redefined.insert(target);
-                }
             }
         }
         let mut visited = std::collections::BTreeSet::new();
@@ -602,7 +784,7 @@ impl<D> SemanticModel<D> {
                 continue;
             };
             for child in self.child_declarations(owner) {
-                if self.types.featuring_type(*child) != Some(owner) || redefined.contains(child) {
+                if !eligible.contains(child) || self.types.featuring_type(*child) != Some(owner) {
                     continue;
                 }
                 let Some(name) = self.declaration_name(*child) else {
@@ -617,6 +799,7 @@ impl<D> SemanticModel<D> {
                 inherited.push(InheritedFeature {
                     feature,
                     declared_in: declared_in.clone(),
+                    is_direct: direct_owners.contains(&owner),
                 });
             }
             let mut bases = self
@@ -843,7 +1026,7 @@ impl<D> SemanticModel<D> {
     pub(crate) fn declaration_name(&self, id: DeclarationId) -> Option<Box<str>> {
         self.storage
             .declaration(id)
-            .and_then(|declaration| declaration.name)
+            .and_then(|declaration| declaration.name.resolved())
             .and_then(|name| self.storage.symbol(name))
             .filter(|name| !name.trim().is_empty())
             .map(Into::into)

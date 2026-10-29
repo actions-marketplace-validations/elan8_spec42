@@ -1,18 +1,32 @@
 //! Phase 9: the read-only query surface over a finished model.
 
+pub(crate) mod ends;
+mod redefinition;
 mod visible;
 
 pub use visible::VisibleMemberRef;
 pub use visible::VisibleMembers;
 
+use crate::connection_query::ConnectorEndpoint;
+use crate::connection_query::ConnectorKind;
+use crate::connection_query::PublishedConnectionGraph;
+use crate::connection_query::PublishedConnector;
+use crate::connection_query::PublishedConnectorEnd;
 use crate::diagnose::valid_identifier;
 use crate::index::bindings as binding;
 use crate::index::documents::leaf_ranges_containing;
 use crate::index::documents::record_visited_index_entries;
 use crate::index::types;
+use crate::lower::facts::Declaration;
+use crate::lower::facts::MetadataAnnotationForm as LoweredMetadataAnnotationForm;
+use crate::lower::facts::MetadataAnnotationRecord;
 use crate::lower::facts::ParameterDirection;
+use crate::metadata_query::MetadataAnnotationForm;
+use crate::metadata_query::MetadataAnnotationValue;
+use crate::metadata_query::PublishedMetadataAnnotation;
 use crate::model::element_kind;
 use crate::model::render as writer;
+use crate::model::resolver::PublicationPhase;
 use crate::model::resolver::ResolvedSemanticModel;
 use crate::model::resolver::SemanticModel;
 use crate::model::span::document_range;
@@ -24,9 +38,13 @@ use crate::model::MembershipKind;
 use crate::model::ReferenceKind;
 use crate::namespace_query::NamespaceDerivedElementCollection;
 use crate::namespace_query::NamespaceImportDerivedElement;
-use crate::redefinition_query::RedefinitionCheckKind;
-use crate::redefinition_query::RedefinitionCheckOutcome;
-use crate::redefinition_query::RedefinitionCheckPrerequisite;
+use crate::projection::AdmittedSourceCounts;
+use crate::projection::ProjectedElement;
+use crate::projection::ProjectionEnvelope;
+use crate::projection::ProjectionPhase;
+use crate::projection::ProjectionTruncation;
+use crate::projection::PublishedModelProjection;
+use crate::projection::MODEL_PROJECTION_SCHEMA_VERSION;
 use crate::requirement_query::RequirementDerivedFactCollection;
 use crate::requirement_query::RequirementDerivedFactOutcome;
 use crate::requirement_query::RequirementDerivedFactPrerequisite;
@@ -42,7 +60,6 @@ use crate::resolve::implied::feature_derived_relationship_rule;
 use crate::resolve::implied::lowered_redefinition_source_kind;
 use crate::resolve::implied::namespace_derived_element_rule;
 use crate::resolve::implied::namespace_import_derived_element_rule;
-use crate::resolve::implied::redefinition_check_rule;
 use crate::resolve::implied::requirement_derived_fact_rule;
 use crate::resolve::implied::specialization_check_rule;
 use crate::resolve::implied::type_derived_element_rule;
@@ -74,6 +91,7 @@ use crate::traceability::BindingEndpoint;
 use crate::traceability::SatisfyEndpoint;
 use crate::traceability::SatisfyPolarity;
 use crate::traceability::SatisfyRelationship;
+use crate::traceability::{DerivationEndpoint, DerivationRelationship};
 use crate::type_query::Conformance;
 use crate::type_query::ConformanceObstacle;
 use crate::type_query::EffectiveType;
@@ -106,12 +124,16 @@ use crate::Diagnostic;
 use crate::Documentation;
 use crate::ElementDerivedDocumentationCollection;
 use crate::ElementRelationship;
+use crate::ElementSource;
+use crate::ExpressionOutcome;
 use crate::FeatureDerivedRelationshipCollection;
 use crate::LibrarySpecializationAnchorBranch;
+use crate::MultiplicityFacts;
 use crate::NavigationTarget;
 use crate::OccurrenceRole;
 use crate::PublicationCompleteness;
 use crate::PublishedDiagnostics;
+use crate::PublishedExpression;
 use crate::QueryAnswer;
 use crate::QueryOutcome;
 use crate::RelationshipProvenance;
@@ -122,11 +144,41 @@ use crate::SymbolId;
 use crate::SymbolToken;
 use crate::TextPosition;
 use crate::TextRange;
+use crate::ViewExposedElements;
+use crate::ViewExposureObstacle;
+use crate::ViewSelectionObstacle;
+use crate::ViewSelectionOutcome;
 
+use source_identity::PublicationModelDigest;
+use source_identity::RootDigest;
 use source_identity::SourceRole;
 use spec42_constraint_manifest::ElementDerivedOwnerKind;
 use spec42_constraint_manifest::NamespaceImportDerivedElementKind;
 use sysml_contract::{DocumentId, DocumentToken};
+
+/// Disposable query state for one immutable model. The borrow covers every prerequisite of the
+/// inherited-member closure: storage, memberships, specialization and redefinition outcomes.
+/// Cyclic declarations retain the canonical exclusion-context traversal and are never memoized.
+/// An excluded ancestor could affect an acyclic entry only if a general led back to that ancestor,
+/// making the entry cyclic; the specialization graph includes typing and feature specialization.
+pub(crate) struct InheritedFeatureQueries<'m, D> {
+    model: &'m SemanticModel<D>,
+    memo: std::collections::BTreeMap<DeclarationId, Vec<DeclarationId>>,
+}
+
+impl<'m, D> InheritedFeatureQueries<'m, D> {
+    pub(crate) fn model(&self) -> &'m SemanticModel<D> {
+        self.model
+    }
+
+    pub(crate) fn members(&mut self, declaration: DeclarationId) -> Vec<DeclarationId> {
+        self.model.inherited_feature_members_excluding(
+            declaration,
+            &mut std::collections::BTreeSet::new(),
+            &mut self.memo,
+        )
+    }
+}
 
 impl<D> SemanticModel<D> {
     pub(crate) fn completeness(&self) -> PublicationCompleteness {
@@ -262,7 +314,8 @@ impl<D> SemanticModel<D> {
 
     /// The authored name of one declaration, borrowed from the symbol blob.
     pub(crate) fn authored_name(&self, id: DeclarationId) -> Option<&str> {
-        self.storage.symbol(self.storage.declaration(id)?.name?)
+        self.storage
+            .symbol(self.storage.declaration(id)?.name.resolved()?)
     }
 
     pub(crate) fn declaration_kind(&self, id: DeclarationId) -> Option<DeclarationKind> {
@@ -404,7 +457,7 @@ impl<D> SemanticModel<D> {
 
     pub(crate) fn declaration_target(&self, id: DeclarationId) -> Option<NavigationTarget> {
         let declaration = self.storage.declaration(id)?;
-        declaration.name?;
+        declaration.name.resolved()?;
         Some(NavigationTarget {
             symbol: self.symbol_id(id)?,
             location: SourceLocation {
@@ -521,6 +574,7 @@ impl<D> SemanticModel<D> {
             // honest location -- the same answer the text search used to fall back to.
             let range = match target_declaration
                 .name
+                .resolved()
                 .and_then(|name| self.documents.reference_identifier(*id, name))
             {
                 Some(range) => range,
@@ -639,6 +693,7 @@ impl<D> SemanticModel<D> {
             LookupTarget {
                 domain: DeclarationDomain::Any,
                 excluded: None,
+                excludes_anonymous_performs: false,
                 first_scope: FirstScopePolicy::OwnedThenInherited,
             },
             &mut candidates,
@@ -807,6 +862,45 @@ impl ResolvedSemanticModel {
     /// A document this publication did not admit has no diagnostics, which is a different answer
     /// from "no diagnostic was reported": the caller asked about a document that is not part of
     /// this model, and the empty slice says so alongside the publication's completeness.
+    /// The publication obstacles one document contributes: parser recovery (a parser error, not a
+    /// warning, or a recovered node) and constructs lowering does not model. Non-convergence is a property of
+    /// the whole solve and is never attributed to a document.
+    pub(crate) fn document_obstacles(
+        &self,
+        document: DocumentId,
+    ) -> impl Iterator<Item = crate::PublicationObstacle> {
+        let id = u32::try_from(document.index()).ok().map(DocumentIdx);
+        let diagnostics = id
+            .and_then(|id| self.diagnostics.by_document.get(id.index()))
+            .and_then(|(start, end)| {
+                self.diagnostics
+                    .diagnostics
+                    .get(*start as usize..*end as usize)
+            })
+            .unwrap_or_default();
+        let recovery = id.is_some_and(|id| {
+            self.storage
+                .recovery
+                .iter()
+                .any(|record| record.document == id)
+        }) || diagnostics.iter().any(|diagnostic| {
+            diagnostic.origin() == sysml_contract::DiagnosticOrigin::Parser
+                && diagnostic.severity() == crate::DiagnosticSeverity::Error
+        });
+        let unsupported = id.is_some_and(|id| {
+            self.storage
+                .unsupported
+                .iter()
+                .any(|record| record.document == id)
+        });
+        [
+            recovery.then_some(crate::PublicationObstacle::ParseRecovery),
+            unsupported.then_some(crate::PublicationObstacle::UnsupportedSyntax),
+        ]
+        .into_iter()
+        .flatten()
+    }
+
     pub(crate) fn published_document_diagnostics(
         &self,
         document: &str,
@@ -858,6 +952,36 @@ impl ResolvedSemanticModel {
     pub(crate) fn write_types_sexpr(&self, output: &mut dyn std::fmt::Write) -> std::fmt::Result {
         writer::write_types_only(self, output)
     }
+
+    pub(crate) fn write_expressions_sexpr(
+        &self,
+        output: &mut dyn std::fmt::Write,
+    ) -> std::fmt::Result {
+        writer::write_expressions_only(self, output)
+    }
+
+    pub(crate) fn write_metadata_annotations_sexpr(
+        &self,
+        output: &mut dyn std::fmt::Write,
+    ) -> std::fmt::Result {
+        writer::write_metadata_annotations_only(self, output)
+    }
+
+    pub(crate) fn write_connections_sexpr(
+        &self,
+        output: &mut dyn std::fmt::Write,
+    ) -> std::fmt::Result {
+        writer::write_connections_only(self, output)
+    }
+
+    pub(crate) fn write_projection_sexpr(
+        &self,
+        source_digest: &source_identity::RootDigest,
+        model_digest: &source_identity::PublicationModelDigest,
+        output: &mut dyn std::fmt::Write,
+    ) -> std::fmt::Result {
+        writer::write_projection_only(self, source_digest, model_digest, output)
+    }
 }
 
 impl<D> SemanticModel<D> {
@@ -891,6 +1015,19 @@ impl<D> SemanticModel<D> {
         symbols.sort();
         symbols.dedup();
         symbols.into_boxed_slice()
+    }
+
+    /// Preserve the canonical membership sequence for normative ordered collections.
+    pub(crate) fn symbols_in_order(
+        &self,
+        declarations: impl Iterator<Item = DeclarationId>,
+    ) -> Box<[SymbolId]> {
+        let mut seen = std::collections::BTreeSet::new();
+        declarations
+            .filter_map(|id| self.symbol_id(id))
+            .filter(|symbol| seen.insert(*symbol))
+            .collect::<Vec<_>>()
+            .into_boxed_slice()
     }
 
     pub(crate) fn direct_types(&self, symbol: SymbolId) -> QueryOutcome<Box<[TypeReference]>> {
@@ -945,12 +1082,17 @@ impl<D> SemanticModel<D> {
             return self.query_outcome(QueryAnswer::Unsupported);
         }
         let _rule_id = rule.rule_id;
-        self.resolved_outcome(
-            self.relationships_of_kinds(
-                declaration,
-                feature_derived_relationship_kinds(collection),
-            ),
-        )
+        let mut relationships = self
+            .relationships_of_kinds(declaration, feature_derived_relationship_kinds(collection))
+            .into_vec();
+        if matches!(
+            collection,
+            FeatureDerivedRelationshipCollection::OwnedReferenceSubsetting
+                | FeatureDerivedRelationshipCollection::OwnedCrossSubsetting
+        ) {
+            relationships.truncate(1);
+        }
+        self.resolved_outcome(relationships.into_boxed_slice())
     }
 
     /// Projects one exact KerML Type relationship collection or operand projection from the
@@ -968,6 +1110,19 @@ impl<D> SemanticModel<D> {
         let Some(rule) = type_derived_relationship_rule(collection) else {
             return self.query_outcome(QueryAnswer::Unsupported);
         };
+        if collection == TypeDerivedRelationshipCollection::OwnedSubclassification {
+            let is_classifier = self.storage.declaration(declaration).is_some_and(|source| {
+                crate::model::element_kind::element_kind(source.kind)
+                    .conforms_to(sysml_contract::ElementKind::Classifier)
+            });
+            if rule.metaclass != "Classifier" || !is_classifier {
+                return self.query_outcome(QueryAnswer::Unsupported);
+            }
+            let _rule_id = rule.rule_id;
+            return self.resolved_outcome(
+                self.relationships_of_kinds(declaration, &[ReferenceKind::Subclassification]),
+            );
+        }
         if rule.metaclass != "Type"
             || self
                 .storage
@@ -1007,17 +1162,9 @@ impl<D> SemanticModel<D> {
             return self.query_outcome(QueryAnswer::Unsupported);
         }
         let _rule_id = rule.rule_id;
-        let values = self.symbols(
-            self.storage
-                .declarations
-                .iter()
-                .enumerate()
-                .filter_map(|(index, candidate_declaration)| {
-                    let candidate = DeclarationId::from_index(index).ok()?;
-                    (candidate != declaration && candidate_declaration.owner == Some(declaration))
-                        .then_some(candidate)
-                })
-                .filter(|candidate| match collection {
+        let values = self.symbols_in_order(
+            self.child_declarations(declaration).iter().copied().filter(
+                |candidate| match collection {
                     TypeDerivedElementCollection::OwnedFeature => self
                         .memberships
                         .get(*candidate)
@@ -1031,35 +1178,50 @@ impl<D> SemanticModel<D> {
                                 .declaration_facts(*candidate)
                                 .is_some_and(|facts| facts.modifiers.end)
                     }
-                }),
+                },
+            ),
         );
         self.resolved_outcome(values)
     }
 
     /// Every feature membership one Type owns directly, in canonical declaration order.
     pub(crate) fn owned_feature_members(&self, owner: DeclarationId) -> Vec<DeclarationId> {
-        self.storage
-            .declarations
+        self.child_declarations(owner)
             .iter()
-            .enumerate()
-            .filter_map(|(index, candidate_declaration)| {
-                let candidate = DeclarationId::from_index(index).ok()?;
-                (candidate != owner
-                    && candidate_declaration.owner == Some(owner)
+            .copied()
+            .filter(|candidate| {
+                *candidate != owner
                     && self
                         .memberships
-                        .get(candidate)
-                        .is_some_and(|membership| membership.kind == MembershipKind::Feature))
-                .then_some(candidate)
+                        .get(*candidate)
+                        .is_some_and(|membership| membership.kind == MembershipKind::Feature)
             })
             .collect()
     }
 
-    /// Records every member `member` redefines, from settled `Redefinition` facts.
-    ///
-    /// Authored and implied redefinitions are read alike: an implied redefinition is a canonical
-    /// relationship of the publication, and a member it replaces is inherited no more than one a
-    /// written `:>>` replaces.
+    /// KerML `Type::featureMembership`: the owned feature memberships in order, then the
+    /// inherited ones (`inheritedMembership`, with redefinition reduction applied).
+    pub(crate) fn feature_members(&self, owner: DeclarationId) -> Vec<DeclarationId> {
+        let mut members = self.owned_feature_members(owner);
+        members.extend(self.inherited_feature_members(owner));
+        members
+    }
+
+    /// Every strict redefinition ancestor, from the canonical specialization closure.
+    fn collect_all_redefined_members(
+        &self,
+        member: DeclarationId,
+        into: &mut std::collections::BTreeSet<DeclarationId>,
+    ) {
+        into.extend(
+            self.types
+                .specialization()
+                .ancestors_in_scope(member, types::ScopeBits::Redefinition),
+        );
+    }
+
+    /// The direct Redefinition targets owned by one Feature, preserving the distinction from
+    /// its transitive redefinition ancestors used by Type::removeRedefinedFeatures.
     pub(crate) fn collect_redefined_members(
         &self,
         member: DeclarationId,
@@ -1084,33 +1246,82 @@ impl<D> SemanticModel<D> {
 
     /// The canonical inherited FeatureMembership closure of one Type.
     ///
-    /// KerML derives `inheritedMembership` from the memberships of the general types reached
-    /// through specialization, minus the ones a nearer member redefines. The closure itself is the
-    /// specialization index this resolver already owns, so a member reached through two paths is
-    /// inherited once and a cyclic hierarchy -- which has no closure -- inherits nothing.
+    /// KerML derives `inheritedMembership` from each direct general's non-private memberships,
+    /// with redefinition reduction applied at every type boundary. Flattening all ancestors would
+    /// resurrect a membership an intermediate type removed. Cycles use the normative excluded-type
+    /// set; acyclic results may be reused within this immutable query.
     pub(crate) fn inherited_feature_members(
         &self,
         declaration: DeclarationId,
     ) -> Vec<DeclarationId> {
-        let ancestors = self
-            .types
-            .specialization()
-            .scoped_ancestors(declaration)
-            .map(|(ancestor, _)| ancestor)
-            .collect::<Vec<_>>();
-        if ancestors.is_empty() {
-            return Vec::new();
+        self.inherited_feature_queries().members(declaration)
+    }
+
+    pub(crate) fn inherited_feature_queries(&self) -> InheritedFeatureQueries<'_, D> {
+        InheritedFeatureQueries {
+            model: self,
+            memo: std::collections::BTreeMap::new(),
         }
+    }
+
+    fn inherited_feature_members_excluding(
+        &self,
+        declaration: DeclarationId,
+        excluded: &mut std::collections::BTreeSet<DeclarationId>,
+        memo: &mut std::collections::BTreeMap<DeclarationId, Vec<DeclarationId>>,
+    ) -> Vec<DeclarationId> {
+        let cyclic = self.types.specialization().is_cyclic(declaration);
+        if !cyclic {
+            if let Some(members) = memo.get(&declaration) {
+                return members.clone();
+            }
+        }
+        excluded.insert(declaration);
         let mut candidates = Vec::new();
-        for ancestor in ancestors {
-            candidates.extend(self.owned_feature_members(ancestor));
+        for general in self.types.ordered_generals(declaration) {
+            if excluded.contains(general) {
+                continue;
+            }
+            candidates.extend(
+                self.owned_feature_members(*general)
+                    .into_iter()
+                    .filter(|member| {
+                        self.memberships.get(*member).is_some_and(|membership| {
+                            membership.visibility
+                                != crate::resolve::names::EffectiveVisibility::Private
+                        })
+                    }),
+            );
+            candidates.extend(self.inherited_feature_members_excluding(*general, excluded, memo));
         }
+        excluded.remove(&declaration);
+        let mut seen = std::collections::BTreeSet::new();
+        candidates.retain(|candidate| seen.insert(*candidate));
         let owned = self.owned_feature_members(declaration);
-        let mut redefined = std::collections::BTreeSet::new();
-        for member in owned.iter().chain(candidates.iter()) {
-            self.collect_redefined_members(*member, &mut redefined);
+        let mut owned_targets = std::collections::BTreeSet::new();
+        for member in &owned {
+            self.collect_redefined_members(*member, &mut owned_targets);
         }
-        candidates.retain(|candidate| !redefined.contains(candidate));
+        let mut redefined = std::collections::BTreeSet::new();
+        for member in &candidates {
+            self.collect_all_redefined_members(*member, &mut redefined);
+        }
+        // KerML Type::removeRedefinedFeatures has two conditions: remove a member redefined
+        // by another inherited member, and remove one whose redefinition chain contains a
+        // directly redefined target of an owned feature. The second condition also handles an
+        // explicit redefinition that names a grandparent rather than its nearest redefiner.
+        candidates.retain(|candidate| {
+            !redefined.contains(candidate)
+                && !owned_targets.contains(candidate)
+                && !self
+                    .types
+                    .specialization()
+                    .ancestors_in_scope(*candidate, types::ScopeBits::Redefinition)
+                    .any(|ancestor| owned_targets.contains(&ancestor))
+        });
+        if !cyclic {
+            memo.insert(declaration, candidates.clone());
+        }
         candidates
     }
 
@@ -1139,10 +1350,10 @@ impl<D> SemanticModel<D> {
     ) -> bool {
         let facts = self.storage.declaration_facts(member);
         match collection {
-            TypeDerivedFactCollection::OwnedFeatureMembership
-            | TypeDerivedFactCollection::Multiplicity
+            TypeDerivedFactCollection::Multiplicity
             | TypeDerivedFactCollection::OwnedConjugator => false,
-            TypeDerivedFactCollection::FeatureMembership
+            TypeDerivedFactCollection::OwnedFeatureMembership
+            | TypeDerivedFactCollection::FeatureMembership
             | TypeDerivedFactCollection::Feature
             | TypeDerivedFactCollection::InheritedMembership
             | TypeDerivedFactCollection::InheritedFeature => true,
@@ -1192,23 +1403,23 @@ impl<D> SemanticModel<D> {
             return self.query_outcome(QueryAnswer::Unsupported);
         }
         let _rule_id = rule.rule_id;
-        let unavailable = match collection {
-            TypeDerivedFactCollection::OwnedFeatureMembership => {
-                Some(TypeDerivedFactPrerequisite::FeatureMembershipIdentity)
-            }
-            TypeDerivedFactCollection::Multiplicity => {
-                Some(TypeDerivedFactPrerequisite::MultiplicityIdentity)
-            }
-            _ => None,
-        };
-        if let Some(prerequisite) = unavailable {
-            return self.resolved_outcome(TypeDerivedFactOutcome::Unsupported { prerequisite });
+        if collection == TypeDerivedFactCollection::Multiplicity {
+            let values = self
+                .storage
+                .type_multiplicity(declaration)
+                .and_then(|element| self.symbol_id(element))
+                .map(|element| TypeDerivedFactValue::Multiplicity { element })
+                .into_iter()
+                .collect::<Vec<_>>();
+            return self
+                .resolved_outcome(TypeDerivedFactOutcome::Values(values.into_boxed_slice()));
         }
         if collection == TypeDerivedFactCollection::OwnedConjugator {
-            // `ownedConjugator` is the one `Conjugation` a type owns (KerML 8.3.3.1.10); the
-            // lowering sources it at the conjugated type, so the authored reference *is* the
-            // owned relationship and its settled target is `originalType`.
-            let values = self
+            // `ownedConjugator` is the one `Conjugation` a type owns (KerML 8.3.3.1.10). An
+            // authored `conjugates` is sourced at the conjugated type, so the authored reference
+            // *is* the owned relationship and its settled target is `originalType`; a minted
+            // `ConjugatedPortDefinition` owns an implied `PortConjugation` instead.
+            let mut values = self
                 .storage
                 .references
                 .iter()
@@ -1228,41 +1439,61 @@ impl<D> SemanticModel<D> {
                     }
                 })
                 .collect::<Vec<_>>();
+            values.extend(
+                self.outgoing_implied_indices(declaration)
+                    .iter()
+                    .map(|index| &self.resolution.implied_relationships[*index as usize])
+                    .filter(|implied| implied.kind == ReferenceKind::Conjugation)
+                    .filter_map(|implied| {
+                        Some(TypeDerivedFactValue::Conjugator {
+                            original_type: self.symbol_id(implied.target)?,
+                        })
+                    }),
+            );
             return self
                 .resolved_outcome(TypeDerivedFactOutcome::Values(values.into_boxed_slice()));
         }
-        let inherited = self.inherited_feature_members(declaration);
         let members = match collection {
+            TypeDerivedFactCollection::OwnedFeatureMembership => {
+                self.owned_feature_members(declaration)
+            }
             TypeDerivedFactCollection::InheritedMembership
-            | TypeDerivedFactCollection::InheritedFeature => inherited,
+            | TypeDerivedFactCollection::InheritedFeature => {
+                self.inherited_feature_members(declaration)
+            }
             _ => self
                 .owned_feature_members(declaration)
                 .into_iter()
-                .chain(inherited)
+                .chain(self.inherited_feature_members(declaration))
                 .collect(),
         };
-        // `FeatureMembership`-valued collections still name their member element, never a
-        // fabricated Membership relationship identity: that identity remains unpublished, and its
-        // own derivation stays explicitly unsupported above.
+        // `FeatureMembership`-valued collections publish the canonical Membership relationship
+        // identity of each member's owning membership, alongside the member it owns.
         let membership_valued = matches!(
             collection,
-            TypeDerivedFactCollection::InheritedMembership
+            TypeDerivedFactCollection::OwnedFeatureMembership
+                | TypeDerivedFactCollection::InheritedMembership
                 | TypeDerivedFactCollection::FeatureMembership
         );
-        let values = self
-            .symbols(
-                members
-                    .into_iter()
-                    .filter(|member| self.type_derived_fact_selects(collection, *member)),
-            )
-            .into_vec()
+        // Keep the owner-defined membership order, with one value per member.
+        let mut seen = std::collections::BTreeSet::new();
+        let selected = members
             .into_iter()
-            .map(|member| {
-                if membership_valued {
-                    TypeDerivedFactValue::FeatureMembership { member }
+            .filter(|member| self.type_derived_fact_selects(collection, *member))
+            .filter_map(|member| Some((self.symbol_id(member)?, member)))
+            .filter(|(symbol, _)| seen.insert(*symbol))
+            .collect::<Vec<_>>();
+        let values = selected
+            .into_iter()
+            .filter_map(|(symbol, member)| {
+                Some(if membership_valued {
+                    TypeDerivedFactValue::FeatureMembership {
+                        membership: crate::MembershipId::from_index(member.index())?,
+                        member: symbol,
+                    }
                 } else {
-                    TypeDerivedFactValue::Feature(member)
-                }
+                    TypeDerivedFactValue::Feature(symbol)
+                })
             })
             .collect::<Vec<_>>();
         self.resolved_outcome(TypeDerivedFactOutcome::Values(values.into_boxed_slice()))
@@ -1310,7 +1541,7 @@ impl<D> SemanticModel<D> {
                     DefinitionUsageDerivedKind::DefinitionDirectedUsage
                         | DefinitionUsageDerivedKind::UsageDirectedUsage
                 );
-                let values = self.symbols(
+                let values = self.symbols_in_order(
                     self.effective_usage_members(declaration)
                         .into_iter()
                         .filter(|member| {
@@ -1325,17 +1556,19 @@ impl<D> SemanticModel<D> {
             }
             DefinitionUsageDerivedKind::DefinitionVariant
             | DefinitionUsageDerivedKind::UsageVariant => {
-                let values =
-                    self.symbols(self.child_declarations(declaration).iter().copied().filter(
-                        |candidate| {
+                let values = self.symbols_in_order(
+                    self.child_declarations(declaration)
+                        .iter()
+                        .copied()
+                        .filter(|candidate| {
                             self.effective_membership_role(*candidate)
                                 == Some(crate::MembershipRole::Variant)
                                 && self
                                     .storage
                                     .declaration(*candidate)
                                     .is_some_and(|member| is_usage_declaration(member.kind))
-                        },
-                    ));
+                        }),
+                );
                 self.resolved_outcome(DefinitionUsageDerivedOutcome::Elements(values))
             }
             DefinitionUsageDerivedKind::DefinitionVariantMembership
@@ -1383,22 +1616,21 @@ impl<D> SemanticModel<D> {
                 // The members of one element, from the settled owner->member index: a query about
                 // one declaration's features costs its features, not the corpus.
                 let values =
-                    self.symbols(self.child_declarations(declaration).iter().copied().filter(
-                        |candidate_id| {
-                            *candidate_id != declaration
-                                && self
-                                    .memberships
-                                    .get(*candidate_id)
-                                    .is_some_and(|membership| {
-                                        membership.kind == MembershipKind::Feature
-                                    })
-                                && self.storage.declaration(*candidate_id).is_some_and(
-                                    |candidate| {
-                                        definition_usage_candidate_matches(kind, candidate.kind)
-                                    },
-                                )
-                        },
-                    ));
+                    self.symbols_in_order(
+                        self.child_declarations(declaration).iter().copied().filter(
+                            |candidate_id| {
+                                *candidate_id != declaration
+                                    && self.memberships.get(*candidate_id).is_some_and(
+                                        |membership| membership.kind == MembershipKind::Feature,
+                                    )
+                                    && self.storage.declaration(*candidate_id).is_some_and(
+                                        |candidate| {
+                                            definition_usage_candidate_matches(kind, candidate.kind)
+                                        },
+                                    )
+                            },
+                        ),
+                    );
                 self.resolved_outcome(DefinitionUsageDerivedOutcome::Elements(values))
             }
         }
@@ -1444,21 +1676,459 @@ impl<D> SemanticModel<D> {
                 prerequisite: RequirementDerivedFactPrerequisite::CanonicalMembershipRole,
             });
         };
-        // Owner-scoped from the settled index rather than a corpus scan.
-        let values = self.symbols(self.child_declarations(declaration).iter().copied().filter(
-            |candidate_id| {
-                self.memberships
-                    .get(*candidate_id)
-                    .is_some_and(|membership| membership.kind == MembershipKind::Feature)
-                    && self
-                        .storage
-                        .declaration(*candidate_id)
-                        .is_some_and(|candidate| {
-                            element_kind::membership_role(candidate.kind) == Some(role)
-                        })
-            },
-        ));
+        // The derivations select from `featureMembership`, which includes inherited memberships
+        // (SysML 8.3.20, 8.3.21). A subject parameter and an objective requirement are singular:
+        // the pinned bodies keep only the first SubjectMembership or ObjectiveMembership.
+        let first_only = matches!(
+            collection,
+            RequirementDerivedFactCollection::CaseDefinitionObjectiveRequirement
+                | RequirementDerivedFactCollection::CaseUsageObjectiveRequirement
+                | RequirementDerivedFactCollection::DefinitionSubjectParameter
+                | RequirementDerivedFactCollection::UsageSubjectParameter
+                | RequirementDerivedFactCollection::CaseDefinitionSubjectParameter
+                | RequirementDerivedFactCollection::CaseUsageSubjectParameter
+        );
+        let matched = self
+            .feature_members(declaration)
+            .into_iter()
+            .filter(|candidate_id| {
+                self.storage
+                    .declaration(*candidate_id)
+                    .is_some_and(|candidate| {
+                        element_kind::membership_role(candidate.kind) == Some(role)
+                    })
+            });
+        let values = if first_only {
+            self.symbols_in_order(matched.take(1))
+        } else {
+            self.symbols(matched)
+        };
         self.resolved_outcome(RequirementDerivedFactOutcome::Elements(values))
+    }
+
+    fn composite_viewpoint_usages(&self, owner: DeclarationId) -> Box<[SymbolId]> {
+        self.symbols(
+            self.child_declarations(owner)
+                .iter()
+                .copied()
+                .filter(|member| {
+                    self.storage
+                        .declaration(*member)
+                        .is_some_and(|candidate| candidate.kind == DeclarationKind::ViewpointUsage)
+                        && self.types.usage_is_reference(&self.storage, *member) == Some(false)
+                }),
+        )
+    }
+
+    /// First `ReturnParameterMembership` parameter of `featureMemberships`, in membership order.
+    ///
+    /// KerML `Function::result` and `Expression::result` take "its parameter owned (possibly in a
+    /// supertype) via a ReturnParameterMembership" (deriveFunctionResult, deriveExpressionResult),
+    /// so an inherited result counts, and the owner's own result comes first.
+    fn first_return_parameter(&self, owner: DeclarationId) -> Box<[SymbolId]> {
+        let mut values = self
+            .symbols_in_order(self.feature_members(owner).into_iter().filter(|member| {
+                self.effective_membership_role(*member)
+                    == Some(crate::MembershipRole::ReturnParameter)
+            }))
+            .into_vec();
+        values.truncate(1);
+        values.into_boxed_slice()
+    }
+
+    /// `viewRendering` as a derived-fact value: the `referencedRendering` of the view's
+    /// ViewRenderingMembership (deriveViewDefinitionViewRendering, deriveViewUsageViewRendering),
+    /// from the `view_rendering` query, which settles both the inline and the `render target;`
+    /// forms. Unresolved and ambiguous renderings stay unresolved and ambiguous.
+    fn view_rendering_fact(&self, view: SymbolId) -> QueryOutcome<ActionDerivedFactOutcome> {
+        match self.view_rendering(view).answer {
+            QueryAnswer::Resolved(rendering) => {
+                self.resolved_outcome(ActionDerivedFactOutcome::Values(
+                    rendering
+                        .map(|rendering| Box::from([rendering.referenced_rendering]))
+                        .unwrap_or_default(),
+                ))
+            }
+            QueryAnswer::Ambiguous(_) => self.query_outcome(QueryAnswer::Ambiguous(Box::new([]))),
+            QueryAnswer::Unsupported => self.query_outcome(QueryAnswer::Unsupported),
+            QueryAnswer::Unresolved => self.query_outcome(QueryAnswer::Unresolved),
+            QueryAnswer::Recovery => self.query_outcome(QueryAnswer::Recovery),
+            QueryAnswer::Incomplete => self.query_outcome(QueryAnswer::Incomplete),
+        }
+    }
+
+    /// Owned members that conform to `Expression`, in membership order.
+    ///
+    /// `MultiplicityRange` bounds are these expressions: a single authored bound is only the
+    /// upper expression, and `[m..n]` owns the lower expression first.
+    fn owned_expression_members(&self, owner: DeclarationId) -> Box<[SymbolId]> {
+        self.symbols_in_order(
+            self.child_declarations(owner)
+                .iter()
+                .copied()
+                .filter(|member| {
+                    self.storage.declaration(*member).is_some_and(|candidate| {
+                        element_kind::element_kind(candidate.kind)
+                            .conforms_to(sysml_contract::ElementKind::Expression)
+                    })
+                }),
+        )
+    }
+
+    /// Whether the declaration's metaclass conforms to `kind`.
+    fn declaration_conforms(
+        &self,
+        declaration: DeclarationId,
+        kind: sysml_contract::ElementKind,
+    ) -> bool {
+        self.storage
+            .declaration(declaration)
+            .is_some_and(|candidate| element_kind::element_kind(candidate.kind).conforms_to(kind))
+    }
+
+    /// The usage's definitions of metaclass `kind`: its most specific effective types, those no
+    /// other effective type specializes (KerML `Feature::type`, SysML `Usage::definition`).
+    fn usage_definitions(
+        &self,
+        declaration: DeclarationId,
+        kind: sysml_contract::ElementKind,
+    ) -> Vec<DeclarationId> {
+        self.types
+            .feature_types(declaration)
+            .into_iter()
+            .filter(|definition| self.declaration_conforms(*definition, kind))
+            .collect()
+    }
+
+    /// `if referencedFeatureTarget() = null then self else ... endif`: the target of the
+    /// usage's owned ReferenceSubsetting when it is of metaclass `kind`, nothing when it is not,
+    /// and the usage itself when it references nothing.
+    fn referenced_feature_target_or_self(
+        &self,
+        declaration: DeclarationId,
+        kind: sysml_contract::ElementKind,
+    ) -> Box<[SymbolId]> {
+        let references = self.relationships_of_kinds(declaration, &[ReferenceKind::References]);
+        match references.first().map(|relationship| &relationship.target) {
+            None => self.symbols(std::iter::once(declaration)),
+            Some(RelationshipTarget::Resolved(target)) => {
+                let conforms = self
+                    .declaration_of(*target)
+                    .is_some_and(|target| self.declaration_conforms(target, kind));
+                if conforms {
+                    Box::new([*target])
+                } else {
+                    Box::new([])
+                }
+            }
+            Some(_) => Box::new([]),
+        }
+    }
+
+    /// `objectiveRequirement.featureMembership->selectByKind(RequirementVerificationMembership)
+    /// .verifiedRequirement`: each `verify` member of the case's objective, as its referenced
+    /// requirement or, declared inline, itself.
+    fn verified_requirements(&self, case: DeclarationId) -> Box<[SymbolId]> {
+        let Some(objective) = self.feature_members(case).into_iter().find(|member| {
+            self.storage
+                .declaration(*member)
+                .is_some_and(|member| member.kind == DeclarationKind::ObjectiveRequirement)
+        }) else {
+            return Box::new([]);
+        };
+        let mut values = Vec::new();
+        for member in self.feature_members(objective) {
+            if self.storage.declaration(member).map(|member| member.kind)
+                != Some(DeclarationKind::VerifyRequirement)
+            {
+                continue;
+            }
+            let targets =
+                self.relationships_of_kinds(member, &[ReferenceKind::VerifyRequirementTarget]);
+            match targets.first().map(|relationship| &relationship.target) {
+                None => values.extend(self.symbol_id(member)),
+                Some(RelationshipTarget::Resolved(target)) => values.push(*target),
+                Some(_) => {}
+            }
+        }
+        values.dedup();
+        values.into_boxed_slice()
+    }
+
+    /// `ownedUseCase->selectByKind(IncludeUseCaseUsage).useCaseIncluded`: each `include` of the
+    /// use case, as the use case it references or, declared inline, itself.
+    fn included_use_cases(&self, use_case: DeclarationId) -> Box<[SymbolId]> {
+        let mut values = self
+            .relationships_of_kinds(use_case, &[ReferenceKind::IncludeUseCase])
+            .iter()
+            .filter_map(|relationship| match relationship.target {
+                RelationshipTarget::Resolved(target) => Some(target),
+                _ => None,
+            })
+            .collect::<Vec<_>>();
+        values.extend(
+            self.child_declarations(use_case)
+                .iter()
+                .copied()
+                .filter(|member| {
+                    self.storage
+                        .declaration_facts(*member)
+                        .is_some_and(|facts| facts.is_included_use_case)
+                })
+                .filter_map(|member| self.symbol_id(member)),
+        );
+        values.into_boxed_slice()
+    }
+
+    /// The `filter` conditions an owner declares, in authored order
+    /// (`ownedMembership->selectByKind(ElementFilterMembership).condition`).
+    fn filter_conditions(
+        &self,
+        owner: SymbolId,
+        declaration: DeclarationId,
+    ) -> Box<[crate::action_query::FilterConditionId]> {
+        self.storage
+            .filter_conditions
+            .iter()
+            .filter(|condition| condition.owner == declaration)
+            .zip(1u32..)
+            .map(|(_, position)| crate::action_query::FilterConditionId { owner, position })
+            .collect()
+    }
+
+    /// A KerML AnnotatingElement declaration: a comment, documentation or textual
+    /// representation.
+    fn is_annotating_kind(kind: Option<DeclarationKind>) -> bool {
+        matches!(
+            kind,
+            Some(
+                DeclarationKind::Comment
+                    | DeclarationKind::Documentation
+                    | DeclarationKind::TextualRepresentation
+            )
+        )
+    }
+
+    fn is_owned_annotation(&self, declaration: DeclarationId) -> bool {
+        self.storage
+            .declaration_facts(declaration)
+            .is_some_and(|facts| facts.is_owned_annotation)
+    }
+
+    /// Whether the element is owned through an OwningMembership of its owner.
+    fn is_owned_member(&self, declaration: DeclarationId) -> bool {
+        !self.is_owned_annotation(declaration)
+            && self.memberships.get(declaration).is_some_and(|membership| {
+                matches!(
+                    membership.kind,
+                    MembershipKind::Owning | MembershipKind::Feature
+                )
+            })
+    }
+
+    /// The annotating elements an element owns through Annotations.
+    fn owned_annotating_elements(&self, declaration: DeclarationId) -> Vec<DeclarationId> {
+        self.child_declarations(declaration)
+            .iter()
+            .copied()
+            .filter(|member| self.is_owned_annotation(*member))
+            .collect()
+    }
+
+    /// The elements an annotating element's owned Annotations (`about`) annotate.
+    fn annotation_targets(&self, declaration: DeclarationId) -> Vec<SymbolId> {
+        self.relationships_of_kinds(declaration, &[ReferenceKind::Annotation])
+            .iter()
+            .filter_map(|relationship| match relationship.target {
+                RelationshipTarget::Resolved(target) => Some(target),
+                _ => None,
+            })
+            .collect()
+    }
+
+    /// The member elements of a namespace's owned Memberships: its owned members, and the
+    /// element each owned alias names.
+    fn owned_membership_elements(&self, namespace: DeclarationId) -> Vec<DeclarationId> {
+        let mut members = Vec::new();
+        for member in self.child_declarations(namespace).iter().copied() {
+            let Some(candidate) = self.storage.declaration(member) else {
+                continue;
+            };
+            if candidate.kind == DeclarationKind::Alias {
+                members.extend(
+                    self.relationships_of_kinds(member, &[ReferenceKind::AliasBinding])
+                        .iter()
+                        .filter_map(|relationship| match relationship.target {
+                            RelationshipTarget::Resolved(target) => self.declaration_of(target),
+                            _ => None,
+                        }),
+                );
+            } else if self.is_owned_member(member) {
+                members.push(member);
+            }
+        }
+        members
+    }
+
+    /// The member elements of a namespace's imported Memberships.
+    fn imported_members(&self, namespace: DeclarationId) -> Vec<DeclarationId> {
+        self.effective_imports
+            .entries_for_owner(Some(namespace))
+            .flat_map(|(_, candidates)| candidates.iter().copied())
+            .collect()
+    }
+
+    /// KerML `effectiveName()`.
+    fn effective_name(&self, declaration: DeclarationId) -> Option<&str> {
+        match self
+            .resolution
+            .effective_names
+            .get(declaration.index())?
+            .name
+        {
+            crate::resolve::results::EffectiveNameOutcome::Resolved(name) => {
+                self.storage.symbol(name)
+            }
+            _ => None,
+        }
+    }
+
+    /// KerML `effectiveShortName()`.
+    fn effective_short_name(&self, declaration: DeclarationId) -> Option<&str> {
+        match self
+            .resolution
+            .effective_names
+            .get(declaration.index())?
+            .short_name
+        {
+            crate::resolve::results::EffectiveNameOutcome::Resolved(name) => {
+                self.storage.symbol(name)
+            }
+            _ => None,
+        }
+    }
+
+    /// KerML `escapedName()`: the effective name, or the short name when there is none, quoted
+    /// unless it is a basic name.
+    fn escaped_name(&self, declaration: DeclarationId) -> Option<String> {
+        let name = self
+            .effective_name(declaration)
+            .or_else(|| self.effective_short_name(declaration))?;
+        if valid_identifier(name) {
+            return Some(name.to_owned());
+        }
+        let mut quoted = String::with_capacity(name.len() + 2);
+        quoted.push('\'');
+        for character in name.chars() {
+            if matches!(character, '\'' | '\\') {
+                quoted.push('\\');
+            }
+            quoted.push(character);
+        }
+        quoted.push('\'');
+        Some(quoted)
+    }
+
+    /// KerML `deriveElementQualifiedName`. A top-level element is a member of its document's
+    /// root namespace, which has no owner.
+    fn normative_qualified_name(&self, declaration: DeclarationId, depth: usize) -> Option<String> {
+        if depth > self.storage.declarations.len() || !self.is_owned_member(declaration) {
+            return None;
+        }
+        let candidate = self.storage.declaration(declaration)?;
+        // A name that an earlier owned member of the same namespace also has is not unique.
+        if let Some(name) = self.effective_name(declaration) {
+            let siblings = match candidate.owner {
+                Some(owner) => self.child_declarations(owner).to_vec(),
+                None => self
+                    .documents
+                    .document_declarations(candidate.document)
+                    .iter()
+                    .copied()
+                    .filter(|other| {
+                        self.storage
+                            .declaration(*other)
+                            .is_some_and(|other| other.owner.is_none())
+                    })
+                    .collect(),
+            };
+            let first = siblings
+                .into_iter()
+                .filter(|other| self.is_owned_member(*other))
+                .find(|other| self.effective_name(*other) == Some(name));
+            if first != Some(declaration) {
+                return None;
+            }
+        }
+        let escaped = self.escaped_name(declaration)?;
+        match candidate.owner {
+            None => Some(escaped),
+            Some(owner) => {
+                let qualified = self.normative_qualified_name(owner, depth + 1)?;
+                Some(format!("{qualified}::{escaped}"))
+            }
+        }
+    }
+
+    /// `connectorEnd.ownedReferenceSubsetting->select(s | s <> null).subsettedFeature`, in end
+    /// order. A dotted end subsets a feature chain that is not lowered as its own Feature.
+    fn connector_related_features(
+        &self,
+        connector: DeclarationId,
+    ) -> Result<Vec<DeclarationId>, ActionDerivedFactPrerequisite> {
+        let mut related = Vec::new();
+        for end in self.connector_ends(connector).iter() {
+            match &end.endpoint {
+                ConnectorEndpoint::Feature(RelationshipTarget::Resolved(target)) => {
+                    related.extend(self.declaration_of(*target));
+                }
+                ConnectorEndpoint::FeatureChain { .. } => {
+                    return Err(ActionDerivedFactPrerequisite::UnloweredFeatureChain);
+                }
+                ConnectorEndpoint::Feature(_) | ConnectorEndpoint::Unconnected => {}
+            }
+        }
+        Ok(related)
+    }
+
+    /// `deriveConnectorDefaultFeaturingType`: of the featuring types (transitively) of the
+    /// related features within which every related feature is featured, the first that no other
+    /// such type is featured within.
+    fn nearest_common_featuring_type(&self, related: &[DeclarationId]) -> Option<DeclarationId> {
+        let closure = |feature: DeclarationId| {
+            let mut seen = Vec::new();
+            let mut pending = vec![feature];
+            while let Some(current) = pending.pop() {
+                for (featuring, _) in self.types.featuring_types(current).iter() {
+                    if !seen.contains(featuring) {
+                        seen.push(*featuring);
+                        pending.push(*featuring);
+                    }
+                }
+            }
+            seen
+        };
+        let featured_within = |feature: DeclarationId, featuring: DeclarationId| {
+            let types = closure(feature);
+            types.is_empty() || types.contains(&featuring)
+        };
+        let mut common = Vec::new();
+        for feature in related {
+            for featuring in closure(*feature) {
+                if !common.contains(&featuring)
+                    && related
+                        .iter()
+                        .all(|other| featured_within(*other, featuring))
+                {
+                    common.push(featuring);
+                }
+            }
+        }
+        common.iter().copied().find(|candidate| {
+            !common
+                .iter()
+                .any(|other| other != candidate && closure(*other).contains(candidate))
+        })
     }
 
     /// The exact Actions derivation boundary. Canonical effective usages and the ordered argument
@@ -1540,6 +2210,15 @@ impl<D> SemanticModel<D> {
             ))
         };
         match (collection, source_kind) {
+            (
+                ActionDerivedFactCollection::UntilArgument,
+                Some(DeclarationKind::While | DeclarationKind::Loop),
+            ) => {
+                if !action_parameter(3).is_empty() {
+                    return expression_parameter(3);
+                }
+                return self.resolved_outcome(ActionDerivedFactOutcome::Arguments(Box::new([])));
+            }
             (
                 ActionDerivedFactCollection::TerminateOccurrenceArgument,
                 Some(DeclarationKind::TerminateActionUsage),
@@ -1693,7 +2372,8 @@ impl<D> SemanticModel<D> {
                 .get(target)
                 .is_some_and(|membership| membership.kind == MembershipKind::Feature)
                 && self.storage.declaration(target).is_some_and(|target| {
-                    element_kind::element_kind(target.kind) != crate::ElementKind::MetadataUsage
+                    !element_kind::element_kind(target.kind)
+                        .conforms_to(crate::ElementKind::MetadataFeature)
                 });
             let values = selects_referent
                 .then(|| {
@@ -1730,7 +2410,936 @@ impl<D> SemanticModel<D> {
             ));
             return self.resolved_outcome(ActionDerivedFactOutcome::Values(values));
         }
+        let state_subaction = |kind: DeclarationKind| {
+            self.symbols_in_order(
+                self.child_declarations(declaration)
+                    .iter()
+                    .copied()
+                    .filter(|member| {
+                        self.storage
+                            .declaration(*member)
+                            .is_some_and(|member| member.kind == kind)
+                    })
+                    .take(1),
+            )
+        };
+        let usage_projection = |kinds: &[DeclarationKind]| {
+            self.symbols(
+                self.effective_usage_members(declaration)
+                    .into_iter()
+                    .filter(|member| {
+                        self.storage
+                            .declaration(*member)
+                            .is_some_and(|member| kinds.contains(&member.kind))
+                    }),
+            )
+        };
         match collection {
+            ActionDerivedFactCollection::StateDefinitionEntryAction
+                if source_kind == Some(DeclarationKind::StateDefinition) =>
+            {
+                self.resolved_outcome(ActionDerivedFactOutcome::Values(state_subaction(
+                    DeclarationKind::EntryActionBinding,
+                )))
+            }
+            ActionDerivedFactCollection::StateDefinitionDoAction
+                if source_kind == Some(DeclarationKind::StateDefinition) =>
+            {
+                self.resolved_outcome(ActionDerivedFactOutcome::Values(state_subaction(
+                    DeclarationKind::DoActionBinding,
+                )))
+            }
+            ActionDerivedFactCollection::StateDefinitionExitAction
+                if source_kind == Some(DeclarationKind::StateDefinition) =>
+            {
+                self.resolved_outcome(ActionDerivedFactOutcome::Values(state_subaction(
+                    DeclarationKind::ExitActionBinding,
+                )))
+            }
+            ActionDerivedFactCollection::StateUsageEntryAction
+                if matches!(
+                    source_kind,
+                    Some(DeclarationKind::StateUsage | DeclarationKind::ExhibitStateUsage)
+                ) =>
+            {
+                self.resolved_outcome(ActionDerivedFactOutcome::Values(state_subaction(
+                    DeclarationKind::EntryActionBinding,
+                )))
+            }
+            ActionDerivedFactCollection::StateUsageDoAction
+                if matches!(
+                    source_kind,
+                    Some(DeclarationKind::StateUsage | DeclarationKind::ExhibitStateUsage)
+                ) =>
+            {
+                self.resolved_outcome(ActionDerivedFactOutcome::Values(state_subaction(
+                    DeclarationKind::DoActionBinding,
+                )))
+            }
+            ActionDerivedFactCollection::StateUsageExitAction
+                if matches!(
+                    source_kind,
+                    Some(DeclarationKind::StateUsage | DeclarationKind::ExhibitStateUsage)
+                ) =>
+            {
+                self.resolved_outcome(ActionDerivedFactOutcome::Values(state_subaction(
+                    DeclarationKind::ExitActionBinding,
+                )))
+            }
+            ActionDerivedFactCollection::StateDefinitionState
+                if source_kind == Some(DeclarationKind::StateDefinition) =>
+            {
+                self.resolved_outcome(ActionDerivedFactOutcome::Values(usage_projection(&[
+                    DeclarationKind::StateUsage,
+                    DeclarationKind::ExhibitStateUsage,
+                    DeclarationKind::FinalState,
+                ])))
+            }
+            ActionDerivedFactCollection::CalculationDefinitionCalculation
+                if source_kind == Some(DeclarationKind::CalcDefinition) =>
+            {
+                // `calculation = action->selectByKind(CalculationUsage)`: case, analysis,
+                // verification and use-case usages are CalculationUsages too.
+                self.resolved_outcome(ActionDerivedFactOutcome::Values(
+                    self.symbols(
+                        self.effective_usage_members(declaration)
+                            .into_iter()
+                            .filter(|member| {
+                                self.storage.declaration(*member).is_some_and(|member| {
+                                    element_kind::element_kind(member.kind)
+                                        .conforms_to(sysml_contract::ElementKind::CalculationUsage)
+                                })
+                            }),
+                    ),
+                ))
+            }
+            ActionDerivedFactCollection::AllocationDefinitionAllocation
+                if source_kind == Some(DeclarationKind::AllocationDefinition) =>
+            {
+                self.resolved_outcome(ActionDerivedFactOutcome::Values(usage_projection(&[
+                    DeclarationKind::Allocate,
+                ])))
+            }
+            ActionDerivedFactCollection::RenderingDefinitionRendering
+                if source_kind == Some(DeclarationKind::RenderingDefinition) =>
+            {
+                self.resolved_outcome(ActionDerivedFactOutcome::Values(usage_projection(&[
+                    DeclarationKind::RenderingUsage,
+                ])))
+            }
+            ActionDerivedFactCollection::ViewDefinitionView
+                if source_kind == Some(DeclarationKind::ViewDefinition) =>
+            {
+                self.resolved_outcome(ActionDerivedFactOutcome::Values(usage_projection(&[
+                    DeclarationKind::ViewUsage,
+                ])))
+            }
+            ActionDerivedFactCollection::ViewDefinitionViewRendering
+                if source_kind == Some(DeclarationKind::ViewDefinition) =>
+            {
+                self.view_rendering_fact(symbol)
+            }
+            ActionDerivedFactCollection::ViewUsageViewRendering
+                if source_kind == Some(DeclarationKind::ViewUsage) =>
+            {
+                self.view_rendering_fact(symbol)
+            }
+            ActionDerivedFactCollection::ViewDefinitionSatisfiedViewpoint
+                if source_kind == Some(DeclarationKind::ViewDefinition) =>
+            {
+                self.resolved_outcome(ActionDerivedFactOutcome::Values(
+                    self.composite_viewpoint_usages(declaration),
+                ))
+            }
+            ActionDerivedFactCollection::ViewUsageSatisfiedViewpoint
+                if source_kind == Some(DeclarationKind::ViewUsage) =>
+            {
+                self.resolved_outcome(ActionDerivedFactOutcome::Values(
+                    self.composite_viewpoint_usages(declaration),
+                ))
+            }
+            ActionDerivedFactCollection::PortDefinitionConjugatedPortDefinition
+                if source_kind == Some(DeclarationKind::PortDefinition) =>
+            {
+                self.resolved_outcome(ActionDerivedFactOutcome::Values(state_subaction(
+                    DeclarationKind::ConjugatedPortDefinition,
+                )))
+            }
+            ActionDerivedFactCollection::FeatureCrossFeature
+                if self
+                    .memberships
+                    .get(declaration)
+                    .is_some_and(|membership| membership.kind == MembershipKind::Feature) =>
+            {
+                match crate::resolve::end_features::cross_feature_of(
+                    &self.storage,
+                    &self.resolution.member_access_paths,
+                    declaration,
+                ) {
+                    Ok(crate::resolve::end_features::CrossFeature::Resolved(target)) => {
+                        let values = self.symbol_id(target).into_iter().collect::<Vec<_>>();
+                        self.resolved_outcome(ActionDerivedFactOutcome::Values(
+                            values.into_boxed_slice(),
+                        ))
+                    }
+                    Ok(crate::resolve::end_features::CrossFeature::Absent) => {
+                        self.resolved_outcome(ActionDerivedFactOutcome::Values(Box::new([])))
+                    }
+                    Ok(crate::resolve::end_features::CrossFeature::Unpublished) | Err(_) => {
+                        self.query_outcome(QueryAnswer::Unresolved)
+                    }
+                }
+            }
+            ActionDerivedFactCollection::FeatureFeatureTarget
+                if self
+                    .memberships
+                    .get(declaration)
+                    .is_some_and(|membership| membership.kind == MembershipKind::Feature) =>
+            {
+                let chaining =
+                    self.relationships_of_kinds(declaration, &[ReferenceKind::FeatureChaining]);
+                match chaining.last().map(|relationship| &relationship.target) {
+                    None => {
+                        let values = self.symbol_id(declaration).into_iter().collect::<Vec<_>>();
+                        self.resolved_outcome(ActionDerivedFactOutcome::Values(
+                            values.into_boxed_slice(),
+                        ))
+                    }
+                    Some(RelationshipTarget::Resolved(target)) => {
+                        self.resolved_outcome(ActionDerivedFactOutcome::Values(Box::new([*target])))
+                    }
+                    Some(
+                        RelationshipTarget::Unresolved
+                        | RelationshipTarget::Ambiguous(_)
+                        | RelationshipTarget::Unsupported,
+                    ) => self.query_outcome(QueryAnswer::Unresolved),
+                }
+            }
+            ActionDerivedFactCollection::FunctionResult
+                if source_kind.is_some_and(|kind| {
+                    element_kind::element_kind(kind)
+                        .conforms_to(sysml_contract::ElementKind::Function)
+                }) =>
+            {
+                self.resolved_outcome(ActionDerivedFactOutcome::Values(
+                    self.first_return_parameter(declaration),
+                ))
+            }
+            ActionDerivedFactCollection::ExpressionResult
+                if source_kind.is_some_and(|kind| {
+                    element_kind::element_kind(kind)
+                        .conforms_to(sysml_contract::ElementKind::Expression)
+                }) =>
+            {
+                self.resolved_outcome(ActionDerivedFactOutcome::Values(
+                    self.first_return_parameter(declaration),
+                ))
+            }
+            ActionDerivedFactCollection::BehaviorStep
+                if source_kind.is_some_and(|kind| {
+                    element_kind::element_kind(kind)
+                        .conforms_to(sysml_contract::ElementKind::Behavior)
+                }) =>
+            {
+                let members = self
+                    .owned_feature_members(declaration)
+                    .into_iter()
+                    .chain(self.inherited_feature_members(declaration))
+                    .filter(|member| {
+                        self.storage.declaration(*member).is_some_and(|candidate| {
+                            element_kind::element_kind(candidate.kind)
+                                .conforms_to(sysml_contract::ElementKind::Step)
+                        })
+                    });
+                self.resolved_outcome(ActionDerivedFactOutcome::Values(self.symbols(members)))
+            }
+            ActionDerivedFactCollection::MultiplicityRangeLowerBound
+                if source_kind.is_some_and(|kind| {
+                    element_kind::element_kind(kind)
+                        .conforms_to(sysml_contract::ElementKind::MultiplicityRange)
+                }) =>
+            {
+                let expressions = self.owned_expression_members(declaration);
+                let values = if expressions.len() < 2 {
+                    Vec::new()
+                } else {
+                    vec![expressions[0]]
+                };
+                self.resolved_outcome(ActionDerivedFactOutcome::Values(values.into_boxed_slice()))
+            }
+            ActionDerivedFactCollection::MultiplicityRangeUpperBound
+                if source_kind.is_some_and(|kind| {
+                    element_kind::element_kind(kind)
+                        .conforms_to(sysml_contract::ElementKind::MultiplicityRange)
+                }) =>
+            {
+                let expressions = self.owned_expression_members(declaration);
+                let values = match expressions.as_ref() {
+                    [] => Vec::new(),
+                    [only] | [_, only, ..] => vec![*only],
+                };
+                self.resolved_outcome(ActionDerivedFactOutcome::Values(values.into_boxed_slice()))
+            }
+            ActionDerivedFactCollection::MultiplicityRangeBound
+                if source_kind.is_some_and(|kind| {
+                    element_kind::element_kind(kind)
+                        .conforms_to(sysml_contract::ElementKind::MultiplicityRange)
+                }) =>
+            {
+                let expressions = self.owned_expression_members(declaration);
+                let values = match expressions.as_ref() {
+                    [] => Vec::new(),
+                    [upper] => vec![*upper],
+                    [lower, upper, ..] => vec![*lower, *upper],
+                };
+                self.resolved_outcome(ActionDerivedFactOutcome::Values(values.into_boxed_slice()))
+            }
+            ActionDerivedFactCollection::ItemUsageItemDefinition
+                if self
+                    .declaration_conforms(declaration, sysml_contract::ElementKind::ItemUsage) =>
+            {
+                // `itemDefinition = occurrenceDefinition->selectByKind(Structure)`.
+                self.resolved_outcome(ActionDerivedFactOutcome::Values(
+                    self.symbols(
+                        self.usage_definitions(declaration, sysml_contract::ElementKind::Structure)
+                            .into_iter(),
+                    ),
+                ))
+            }
+            ActionDerivedFactCollection::PartUsagePartDefinition
+                if self
+                    .declaration_conforms(declaration, sysml_contract::ElementKind::PartUsage) =>
+            {
+                // `itemDefinition->selectByKind(PartDefinition)`.
+                self.resolved_outcome(ActionDerivedFactOutcome::Values(
+                    self.symbols(
+                        self.usage_definitions(
+                            declaration,
+                            sysml_contract::ElementKind::PartDefinition,
+                        )
+                        .into_iter(),
+                    ),
+                ))
+            }
+            ActionDerivedFactCollection::OccurrenceUsageIndividualDefinition
+                if self.declaration_conforms(
+                    declaration,
+                    sysml_contract::ElementKind::OccurrenceUsage,
+                ) =>
+            {
+                // The first occurrence definition that is `individual`.
+                let first = self
+                    .usage_definitions(
+                        declaration,
+                        sysml_contract::ElementKind::OccurrenceDefinition,
+                    )
+                    .into_iter()
+                    .find(|definition| {
+                        self.storage
+                            .declaration_facts(*definition)
+                            .is_some_and(|facts| facts.modifiers.individual)
+                    });
+                self.resolved_outcome(ActionDerivedFactOutcome::Values(
+                    self.symbols(first.into_iter()),
+                ))
+            }
+            ActionDerivedFactCollection::ConjugatedPortTypingPortDefinition
+                if source_kind == Some(DeclarationKind::PortUsage) =>
+            {
+                // The ConjugatedPortTyping a port usage owns (`port p : ~P`) is authored as a
+                // conjugated FeatureTyping of the original port definition, which is
+                // `conjugatedPortDefinition.originalPortDefinition`.
+                let originals = self
+                    .storage
+                    .references
+                    .iter()
+                    .enumerate()
+                    .filter(|(_, reference)| {
+                        reference.source == declaration
+                            && reference.kind == ReferenceKind::FeatureTyping
+                            && reference.flags.conjugated
+                    })
+                    .filter_map(|(index, _)| {
+                        let reference = AuthoredReferenceId::from_index(index).ok()?;
+                        match self.resolution.outcome(reference)? {
+                            ResolutionStatus::Resolved(original) => Some(original),
+                            _ => None,
+                        }
+                    })
+                    .collect::<Vec<_>>();
+                self.resolved_outcome(ActionDerivedFactOutcome::Values(
+                    self.symbols(originals.into_iter()),
+                ))
+            }
+            ActionDerivedFactCollection::TransitionUsageSuccession
+                if source_kind == Some(DeclarationKind::Transition) =>
+            {
+                // `ownedMember->selectByKind(Succession)->at(1)`.
+                let first = self
+                    .child_declarations(declaration)
+                    .iter()
+                    .copied()
+                    .find(|member| {
+                        self.storage.declaration(*member).is_some_and(|member| {
+                            element_kind::element_kind(member.kind)
+                                .conforms_to(sysml_contract::ElementKind::Succession)
+                        })
+                    });
+                self.resolved_outcome(ActionDerivedFactOutcome::Values(
+                    self.symbols(first.into_iter()),
+                ))
+            }
+            ActionDerivedFactCollection::TransitionUsageTarget
+                if source_kind == Some(DeclarationKind::Transition) =>
+            {
+                // The succession's first target feature, when it is an ActionUsage. The
+                // transition's `then` end is that target.
+                let targets = self
+                    .relationships_of_kinds(declaration, &[ReferenceKind::TransitionTarget])
+                    .iter()
+                    .filter_map(|relationship| match relationship.target {
+                        RelationshipTarget::Resolved(target) => Some(target),
+                        _ => None,
+                    })
+                    .take(1)
+                    .filter(|target| {
+                        self.declaration_of(*target).is_some_and(|target| {
+                            self.declaration_conforms(
+                                target,
+                                sysml_contract::ElementKind::ActionUsage,
+                            )
+                        })
+                    })
+                    .collect::<Vec<_>>();
+                self.resolved_outcome(ActionDerivedFactOutcome::Values(targets.into_boxed_slice()))
+            }
+            ActionDerivedFactCollection::TransitionUsageTriggerAction
+                if source_kind == Some(DeclarationKind::Transition) =>
+            {
+                // The AcceptActionUsages owned through a `trigger` TransitionFeatureMembership.
+                let triggers = self
+                    .child_declarations(declaration)
+                    .iter()
+                    .copied()
+                    .filter(|member| {
+                        self.storage.declaration(*member).is_some_and(|candidate| {
+                            element_kind::membership_role_with_trigger(
+                                candidate.kind,
+                                self.storage
+                                    .declaration_facts(*member)
+                                    .and_then(|facts| facts.is_trigger_action),
+                            ) == Some(sysml_contract::MembershipRole::TransitionTriggerAction)
+                        })
+                    })
+                    .collect::<Vec<_>>();
+                self.resolved_outcome(ActionDerivedFactOutcome::Values(
+                    self.symbols_in_order(triggers.into_iter()),
+                ))
+            }
+            ActionDerivedFactCollection::AssertConstraintUsageAssertedConstraint
+                if source_kind == Some(DeclarationKind::AssertConstraintUsage) =>
+            {
+                // The referenced ConstraintUsage, or the usage itself when it references none.
+                self.resolved_outcome(ActionDerivedFactOutcome::Values(
+                    self.referenced_feature_target_or_self(
+                        declaration,
+                        sysml_contract::ElementKind::ConstraintUsage,
+                    ),
+                ))
+            }
+            ActionDerivedFactCollection::EventOccurrenceUsageEventOccurrence
+                if source_kind == Some(DeclarationKind::OccurrenceUsage)
+                    && self
+                        .storage
+                        .declaration_facts(declaration)
+                        .is_some_and(|facts| facts.modifiers.event) =>
+            {
+                // The referenced OccurrenceUsage, or the usage itself when it references none.
+                self.resolved_outcome(ActionDerivedFactOutcome::Values(
+                    self.referenced_feature_target_or_self(
+                        declaration,
+                        sysml_contract::ElementKind::OccurrenceUsage,
+                    ),
+                ))
+            }
+            ActionDerivedFactCollection::VerificationCaseDefinitionVerifiedRequirement
+                if source_kind == Some(DeclarationKind::VerificationCaseDefinition) =>
+            {
+                self.resolved_outcome(ActionDerivedFactOutcome::Values(
+                    self.verified_requirements(declaration),
+                ))
+            }
+            ActionDerivedFactCollection::VerificationCaseUsageVerifiedRequirement
+                if source_kind == Some(DeclarationKind::VerificationCaseUsage) =>
+            {
+                self.resolved_outcome(ActionDerivedFactOutcome::Values(
+                    self.verified_requirements(declaration),
+                ))
+            }
+            ActionDerivedFactCollection::UseCaseDefinitionIncludedUseCase
+                if source_kind == Some(DeclarationKind::UseCaseDefinition) =>
+            {
+                self.resolved_outcome(ActionDerivedFactOutcome::Values(
+                    self.included_use_cases(declaration),
+                ))
+            }
+            ActionDerivedFactCollection::UseCaseUsageIncludedUseCase
+                if source_kind == Some(DeclarationKind::UseCaseUsage) =>
+            {
+                self.resolved_outcome(ActionDerivedFactOutcome::Values(
+                    self.included_use_cases(declaration),
+                ))
+            }
+            ActionDerivedFactCollection::ViewDefinitionViewCondition
+                if source_kind == Some(DeclarationKind::ViewDefinition) =>
+            {
+                self.resolved_outcome(ActionDerivedFactOutcome::FilterConditions(
+                    self.filter_conditions(symbol, declaration),
+                ))
+            }
+            ActionDerivedFactCollection::ViewUsageViewCondition
+                if source_kind == Some(DeclarationKind::ViewUsage) =>
+            {
+                self.resolved_outcome(ActionDerivedFactOutcome::FilterConditions(
+                    self.filter_conditions(symbol, declaration),
+                ))
+            }
+            ActionDerivedFactCollection::ElementIsLibraryElement => {
+                // `libraryNamespace() <> null`: the element is, or is owned within, a library
+                // package.
+                let mut current = Some(declaration);
+                let mut is_library = false;
+                while let Some(id) = current {
+                    let Some(candidate) = self.storage.declaration(id) else {
+                        break;
+                    };
+                    if candidate.kind == DeclarationKind::LibraryPackage {
+                        is_library = true;
+                        break;
+                    }
+                    current = candidate.owner;
+                }
+                self.resolved_outcome(ActionDerivedFactOutcome::Flag(is_library))
+            }
+            ActionDerivedFactCollection::ElementName
+            | ActionDerivedFactCollection::OwningMembershipOwnedMemberName
+                if collection == ActionDerivedFactCollection::ElementName
+                    || self.is_owned_member(declaration) =>
+            {
+                self.resolved_outcome(ActionDerivedFactOutcome::Text(
+                    self.effective_name(declaration).map(Into::into),
+                ))
+            }
+            ActionDerivedFactCollection::ElementShortName
+            | ActionDerivedFactCollection::OwningMembershipOwnedMemberShortName
+                if collection == ActionDerivedFactCollection::ElementShortName
+                    || self.is_owned_member(declaration) =>
+            {
+                self.resolved_outcome(ActionDerivedFactOutcome::Text(
+                    self.effective_short_name(declaration).map(Into::into),
+                ))
+            }
+            ActionDerivedFactCollection::ElementQualifiedName => {
+                self.resolved_outcome(ActionDerivedFactOutcome::Text(
+                    self.normative_qualified_name(declaration, 0)
+                        .map(String::into_boxed_str),
+                ))
+            }
+            ActionDerivedFactCollection::ElementOwnedElement => {
+                // `ownedRelationship.ownedRelatedElement`, in ownership order.
+                self.resolved_outcome(ActionDerivedFactOutcome::Values(
+                    self.symbols_in_order(self.child_declarations(declaration).iter().copied()),
+                ))
+            }
+            ActionDerivedFactCollection::ElementOwnedAnnotation => {
+                // The Annotations the element owns that annotate it, each identified by the
+                // annotating element it owns: only a relationship body owns such Annotations.
+                self.resolved_outcome(ActionDerivedFactOutcome::Values(
+                    self.symbols_in_order(self.owned_annotating_elements(declaration).into_iter()),
+                ))
+            }
+            ActionDerivedFactCollection::ElementOwningNamespace => {
+                let owner = self
+                    .storage
+                    .declaration(declaration)
+                    .and_then(|candidate| candidate.owner)
+                    .filter(|_| self.is_owned_member(declaration));
+                self.resolved_outcome(ActionDerivedFactOutcome::Values(
+                    self.symbols(owner.into_iter()),
+                ))
+            }
+            ActionDerivedFactCollection::RelationshipRelatedElement
+                if source_kind == Some(DeclarationKind::Dependency) =>
+            {
+                // `source->union(target)`: a Dependency's clients, then its suppliers.
+                let values = self
+                    .relationships_of_kinds(
+                        declaration,
+                        &[
+                            ReferenceKind::DependencyClient,
+                            ReferenceKind::DependencySupplier,
+                        ],
+                    )
+                    .iter()
+                    .filter_map(|relationship| match relationship.target {
+                        RelationshipTarget::Resolved(target) => Some(target),
+                        _ => None,
+                    })
+                    .collect::<Vec<_>>();
+                self.resolved_outcome(ActionDerivedFactOutcome::Values(values.into_boxed_slice()))
+            }
+            ActionDerivedFactCollection::AnnotatingElementAnnotatedElement
+                if Self::is_annotating_kind(source_kind) =>
+            {
+                // The annotated elements of its Annotations, else its owning namespace.
+                let mut values = self.annotation_targets(declaration);
+                if values.is_empty() {
+                    values.extend(
+                        self.storage
+                            .declaration(declaration)
+                            .and_then(|candidate| candidate.owner)
+                            .and_then(|owner| self.symbol_id(owner)),
+                    );
+                }
+                self.resolved_outcome(ActionDerivedFactOutcome::Values(values.into_boxed_slice()))
+            }
+            ActionDerivedFactCollection::AnnotatingElementAnnotation
+                if Self::is_annotating_kind(source_kind) =>
+            {
+                // Its owning Annotation, then the Annotations it owns, each identified by the
+                // element it annotates.
+                let mut values = Vec::new();
+                if self.is_owned_annotation(declaration) {
+                    values.extend(
+                        self.storage
+                            .declaration(declaration)
+                            .and_then(|candidate| candidate.owner)
+                            .and_then(|owner| self.symbol_id(owner)),
+                    );
+                }
+                values.extend(self.annotation_targets(declaration));
+                self.resolved_outcome(ActionDerivedFactOutcome::Values(values.into_boxed_slice()))
+            }
+            ActionDerivedFactCollection::AnnotatingElementOwnedAnnotatingRelationship
+                if Self::is_annotating_kind(source_kind) =>
+            {
+                // The Annotations it owns (`about`), each identified by the element it annotates.
+                self.resolved_outcome(ActionDerivedFactOutcome::Values(
+                    self.annotation_targets(declaration).into_boxed_slice(),
+                ))
+            }
+            ActionDerivedFactCollection::AnnotationOwnedAnnotatingElement
+                if Self::is_annotating_kind(source_kind) =>
+            {
+                // The source identifies the Annotation that owns it, if any: that Annotation's
+                // owned annotating element is the source itself.
+                let values = self
+                    .is_owned_annotation(declaration)
+                    .then_some(declaration)
+                    .into_iter();
+                self.resolved_outcome(ActionDerivedFactOutcome::Values(self.symbols(values)))
+            }
+            ActionDerivedFactCollection::MembershipImportImportedElement
+                if source_kind == Some(DeclarationKind::Import) =>
+            {
+                let values = self
+                    .relationships_of_kinds(declaration, &[ReferenceKind::MembershipImport])
+                    .iter()
+                    .filter_map(|relationship| match relationship.target {
+                        RelationshipTarget::Resolved(target) => Some(target),
+                        _ => None,
+                    })
+                    .collect::<Vec<_>>();
+                self.resolved_outcome(ActionDerivedFactOutcome::Values(values.into_boxed_slice()))
+            }
+            ActionDerivedFactCollection::NamespaceImportedMembership
+                if source_kind.is_some_and(|kind| DeclarationDomain::Namespace.accepts(kind)) =>
+            {
+                self.resolved_outcome(ActionDerivedFactOutcome::Values(
+                    self.symbols(self.imported_members(declaration).into_iter()),
+                ))
+            }
+            ActionDerivedFactCollection::NamespaceOwnedMembership
+                if source_kind.is_some_and(|kind| DeclarationDomain::Namespace.accepts(kind)) =>
+            {
+                self.resolved_outcome(ActionDerivedFactOutcome::Values(
+                    self.symbols(self.owned_membership_elements(declaration).into_iter()),
+                ))
+            }
+            ActionDerivedFactCollection::NamespaceMember
+                if source_kind.is_some_and(|kind| DeclarationDomain::Namespace.accepts(kind)) =>
+            {
+                // `membership.memberElement`: owned, imported and, for a Type, inherited members.
+                let mut members = self.owned_membership_elements(declaration);
+                members.extend(self.imported_members(declaration));
+                members.extend(self.inherited_feature_members(declaration));
+                self.resolved_outcome(ActionDerivedFactOutcome::Values(
+                    self.symbols(members.into_iter()),
+                ))
+            }
+            ActionDerivedFactCollection::PackageFilterCondition
+                if matches!(
+                    source_kind,
+                    Some(DeclarationKind::Package | DeclarationKind::LibraryPackage)
+                ) =>
+            {
+                self.resolved_outcome(ActionDerivedFactOutcome::FilterConditions(
+                    self.filter_conditions(symbol, declaration),
+                ))
+            }
+            ActionDerivedFactCollection::FeatureFeaturingType
+                if self.declaration_conforms(declaration, sysml_contract::ElementKind::Feature) =>
+            {
+                // `featuring.type`, with the featuring types of a chain's first chaining
+                // feature, as the canonical TypeFeaturing/FeatureChaining facts settle them.
+                if self.types.featuring_requires_snapshots(declaration) {
+                    return self.query_outcome(QueryAnswer::Unsupported);
+                }
+                self.resolved_outcome(ActionDerivedFactOutcome::Values(
+                    self.symbols_in_order(
+                        self.types
+                            .featuring_types(declaration)
+                            .iter()
+                            .map(|(featuring, _)| *featuring),
+                    ),
+                ))
+            }
+            ActionDerivedFactCollection::AssociationRelatedType
+            | ActionDerivedFactCollection::AssociationSourceType
+            | ActionDerivedFactCollection::AssociationTargetType
+                if self.declaration_conforms(
+                    declaration,
+                    sysml_contract::ElementKind::Association,
+                ) =>
+            {
+                // `associationEnd.type`: the most specific types of each end, in end order.
+                let related = self
+                    .feature_members(declaration)
+                    .into_iter()
+                    .filter(|member| self.is_end_feature(*member))
+                    .flat_map(|end| self.usage_definitions(end, sysml_contract::ElementKind::Type))
+                    .collect::<Vec<_>>();
+                let values = match collection {
+                    ActionDerivedFactCollection::AssociationSourceType => {
+                        related.into_iter().take(1).collect()
+                    }
+                    ActionDerivedFactCollection::AssociationTargetType => {
+                        related.into_iter().skip(1).collect()
+                    }
+                    _ => related,
+                };
+                self.resolved_outcome(ActionDerivedFactOutcome::Values(
+                    self.symbols_in_order(values.into_iter()),
+                ))
+            }
+            ActionDerivedFactCollection::ConnectorRelatedFeature
+            | ActionDerivedFactCollection::ConnectorSourceFeature
+            | ActionDerivedFactCollection::ConnectorTargetFeature
+            | ActionDerivedFactCollection::ConnectorDefaultFeaturingType
+                if self
+                    .declaration_conforms(declaration, sysml_contract::ElementKind::Connector) =>
+            {
+                let related = match self.connector_related_features(declaration) {
+                    Ok(related) => related,
+                    Err(prerequisite) => {
+                        return self.resolved_outcome(ActionDerivedFactOutcome::Unsupported {
+                            prerequisite,
+                        })
+                    }
+                };
+                let values = match collection {
+                    ActionDerivedFactCollection::ConnectorSourceFeature => {
+                        related.into_iter().take(1).collect()
+                    }
+                    ActionDerivedFactCollection::ConnectorTargetFeature => {
+                        related.into_iter().skip(1).collect()
+                    }
+                    ActionDerivedFactCollection::ConnectorDefaultFeaturingType => self
+                        .nearest_common_featuring_type(&related)
+                        .into_iter()
+                        .collect(),
+                    _ => related,
+                };
+                self.resolved_outcome(ActionDerivedFactOutcome::Values(
+                    self.symbols_in_order(values.into_iter()),
+                ))
+            }
+            ActionDerivedFactCollection::StepBehavior
+                if self.declaration_conforms(declaration, sysml_contract::ElementKind::Step) =>
+            {
+                // `type->selectByKind(Behavior)`.
+                self.resolved_outcome(ActionDerivedFactOutcome::Values(
+                    self.symbols_in_order(
+                        self.usage_definitions(declaration, sysml_contract::ElementKind::Behavior)
+                            .into_iter(),
+                    ),
+                ))
+            }
+            ActionDerivedFactCollection::LiteralExpressionIsModelLevelEvaluable
+                if self.declaration_conforms(
+                    declaration,
+                    sysml_contract::ElementKind::LiteralExpression,
+                ) =>
+            {
+                self.resolved_outcome(ActionDerivedFactOutcome::Flag(true))
+            }
+            ActionDerivedFactCollection::MetadataAccessExpressionReferencedElement
+                if source_kind == Some(DeclarationKind::KermlMetadataAccessExpression) =>
+            {
+                // The member element of its first non-FeatureMembership membership: the element
+                // its ElementReferenceMember names.
+                let values = self
+                    .relationships_of_kinds(declaration, &[ReferenceKind::MetadataAccessTarget])
+                    .iter()
+                    .filter_map(|relationship| match relationship.target {
+                        RelationshipTarget::Resolved(target) => Some(target),
+                        _ => None,
+                    })
+                    .take(1)
+                    .collect::<Vec<_>>();
+                self.resolved_outcome(ActionDerivedFactOutcome::Values(values.into_boxed_slice()))
+            }
+            ActionDerivedFactCollection::FeatureChainExpressionTargetFeature => {
+                let values = self
+                    .resolution
+                    .feature_chain_expression_projections
+                    .iter()
+                    .filter(|projection| projection.expression == declaration)
+                    .map(|projection| projection.target_feature);
+                self.resolved_outcome(ActionDerivedFactOutcome::Values(self.symbols(values)))
+            }
+            ActionDerivedFactCollection::FeatureReferenceExpressionReferent => {
+                let values = self
+                    .resolution
+                    .feature_reference_expression_projections
+                    .iter()
+                    .filter(|projection| projection.expression == declaration)
+                    .map(|projection| projection.referent);
+                self.resolved_outcome(ActionDerivedFactOutcome::Values(self.symbols(values)))
+            }
+            ActionDerivedFactCollection::InstantiationExpressionInstantiatedType => {
+                // `instantiatedType()`: the Type a constructor or invocation instantiates.
+                let constructed = self
+                    .resolution
+                    .constructor_expression_projections
+                    .iter()
+                    .filter(|projection| projection.expression == declaration)
+                    .map(|projection| projection.instantiated_type);
+                let invoked = self
+                    .resolution
+                    .invocation_expression_projections
+                    .iter()
+                    .filter(|projection| projection.expression == declaration)
+                    .map(|projection| projection.instantiated_type);
+                self.resolved_outcome(ActionDerivedFactOutcome::Values(
+                    self.symbols(constructed.chain(invoked)),
+                ))
+            }
+            ActionDerivedFactCollection::FlowFlowEnd
+            | ActionDerivedFactCollection::FlowSourceOutputFeature
+            | ActionDerivedFactCollection::FlowTargetInputFeature
+                if matches!(
+                    source_kind,
+                    Some(DeclarationKind::Flow | DeclarationKind::SuccessionFlow)
+                ) =>
+            {
+                let ends = self
+                    .child_declarations(declaration)
+                    .iter()
+                    .copied()
+                    .filter(|member| {
+                        self.storage
+                            .declaration(*member)
+                            .is_some_and(|member| member.kind == DeclarationKind::FlowEnd)
+                    })
+                    .collect::<Vec<_>>();
+                // The first owned feature of the first or the second connector end.
+                let end_feature = |position: usize| {
+                    ends.get(position)
+                        .and_then(|end| self.child_declarations(*end).first().copied())
+                };
+                let values = match collection {
+                    ActionDerivedFactCollection::FlowSourceOutputFeature => {
+                        end_feature(0).into_iter().collect()
+                    }
+                    ActionDerivedFactCollection::FlowTargetInputFeature => {
+                        end_feature(1).into_iter().collect()
+                    }
+                    _ => ends,
+                };
+                self.resolved_outcome(ActionDerivedFactOutcome::Values(
+                    self.symbols_in_order(values.into_iter()),
+                ))
+            }
+            ActionDerivedFactCollection::StateDefinitionEntryAction
+            | ActionDerivedFactCollection::StateDefinitionDoAction
+            | ActionDerivedFactCollection::StateDefinitionExitAction
+            | ActionDerivedFactCollection::StateUsageEntryAction
+            | ActionDerivedFactCollection::StateUsageDoAction
+            | ActionDerivedFactCollection::StateUsageExitAction
+            | ActionDerivedFactCollection::StateDefinitionState
+            | ActionDerivedFactCollection::CalculationDefinitionCalculation
+            | ActionDerivedFactCollection::AllocationDefinitionAllocation
+            | ActionDerivedFactCollection::RenderingDefinitionRendering
+            | ActionDerivedFactCollection::ViewDefinitionView
+            | ActionDerivedFactCollection::ViewDefinitionViewRendering
+            | ActionDerivedFactCollection::ViewUsageViewRendering
+            | ActionDerivedFactCollection::ViewDefinitionSatisfiedViewpoint
+            | ActionDerivedFactCollection::ViewUsageSatisfiedViewpoint
+            | ActionDerivedFactCollection::PortDefinitionConjugatedPortDefinition
+            | ActionDerivedFactCollection::FeatureCrossFeature
+            | ActionDerivedFactCollection::FeatureFeatureTarget
+            | ActionDerivedFactCollection::FunctionResult
+            | ActionDerivedFactCollection::ExpressionResult
+            | ActionDerivedFactCollection::BehaviorStep
+            | ActionDerivedFactCollection::MultiplicityRangeLowerBound
+            | ActionDerivedFactCollection::MultiplicityRangeUpperBound
+            | ActionDerivedFactCollection::MultiplicityRangeBound
+            | ActionDerivedFactCollection::ItemUsageItemDefinition
+            | ActionDerivedFactCollection::PartUsagePartDefinition
+            | ActionDerivedFactCollection::OccurrenceUsageIndividualDefinition
+            | ActionDerivedFactCollection::ConjugatedPortTypingPortDefinition
+            | ActionDerivedFactCollection::TransitionUsageSuccession
+            | ActionDerivedFactCollection::TransitionUsageTarget
+            | ActionDerivedFactCollection::TransitionUsageTriggerAction
+            | ActionDerivedFactCollection::AssertConstraintUsageAssertedConstraint
+            | ActionDerivedFactCollection::EventOccurrenceUsageEventOccurrence
+            | ActionDerivedFactCollection::VerificationCaseDefinitionVerifiedRequirement
+            | ActionDerivedFactCollection::VerificationCaseUsageVerifiedRequirement
+            | ActionDerivedFactCollection::UseCaseDefinitionIncludedUseCase
+            | ActionDerivedFactCollection::UseCaseUsageIncludedUseCase
+            | ActionDerivedFactCollection::ViewDefinitionViewCondition
+            | ActionDerivedFactCollection::ViewUsageViewCondition
+            | ActionDerivedFactCollection::ElementName
+            | ActionDerivedFactCollection::ElementShortName
+            | ActionDerivedFactCollection::RelationshipRelatedElement
+            | ActionDerivedFactCollection::AnnotatingElementAnnotatedElement
+            | ActionDerivedFactCollection::AnnotatingElementAnnotation
+            | ActionDerivedFactCollection::AnnotatingElementOwnedAnnotatingRelationship
+            | ActionDerivedFactCollection::AnnotationOwnedAnnotatingElement
+            | ActionDerivedFactCollection::MembershipImportImportedElement
+            | ActionDerivedFactCollection::NamespaceImportedMembership
+            | ActionDerivedFactCollection::NamespaceMember
+            | ActionDerivedFactCollection::NamespaceOwnedMembership
+            | ActionDerivedFactCollection::OwningMembershipOwnedMemberName
+            | ActionDerivedFactCollection::OwningMembershipOwnedMemberShortName
+            | ActionDerivedFactCollection::PackageFilterCondition
+            | ActionDerivedFactCollection::FeatureFeaturingType
+            | ActionDerivedFactCollection::AssociationRelatedType
+            | ActionDerivedFactCollection::AssociationSourceType
+            | ActionDerivedFactCollection::AssociationTargetType
+            | ActionDerivedFactCollection::ConnectorRelatedFeature
+            | ActionDerivedFactCollection::ConnectorSourceFeature
+            | ActionDerivedFactCollection::ConnectorTargetFeature
+            | ActionDerivedFactCollection::ConnectorDefaultFeaturingType
+            | ActionDerivedFactCollection::StepBehavior
+            | ActionDerivedFactCollection::LiteralExpressionIsModelLevelEvaluable
+            | ActionDerivedFactCollection::MetadataAccessExpressionReferencedElement
+            | ActionDerivedFactCollection::FlowFlowEnd
+            | ActionDerivedFactCollection::FlowSourceOutputFeature
+            | ActionDerivedFactCollection::FlowTargetInputFeature => {
+                self.resolved_outcome(ActionDerivedFactOutcome::Values(Box::new([])))
+            }
             ActionDerivedFactCollection::TerminateOccurrenceArgument
             | ActionDerivedFactCollection::SendSenderArgument
             | ActionDerivedFactCollection::SendReceiverArgument
@@ -1808,70 +3417,6 @@ impl<D> SemanticModel<D> {
         self.resolved_outcome(outcome)
     }
 
-    /// Returns the first missing canonical prerequisite for one exact redefinition check.
-    ///
-    /// Authored and implied redefinition edges are already settled in this publication. None of
-    /// these predicates is reducible to merely having an edge: each selects a particular endpoint
-    /// through a metamodel role (for example an end position, state subaction kind, or constructor
-    /// result). Those role facts are not yet published as canonical query inputs, so this method
-    /// deliberately does not walk source syntax, inspect names, or turn an arbitrary redefinition
-    /// into a satisfied result.
-    pub(crate) fn redefinition_check(
-        &self,
-        kind: RedefinitionCheckKind,
-    ) -> QueryOutcome<RedefinitionCheckOutcome> {
-        let Some(rule) = redefinition_check_rule(kind) else {
-            return self.resolved_outcome(RedefinitionCheckOutcome::Unsupported {
-                prerequisite: RedefinitionCheckPrerequisite::RuleNotPublished,
-            });
-        };
-        let _normative_rule = (rule.rule_id, rule.metaclass);
-        let prerequisite = match kind {
-            RedefinitionCheckKind::FeatureEnd => {
-                RedefinitionCheckPrerequisite::EndFeaturePositionAndInheritedEnds
-            }
-            RedefinitionCheckKind::FeatureFlowFeature => {
-                RedefinitionCheckPrerequisite::FlowEndOrdinalAndLibraryAnchors
-            }
-            RedefinitionCheckKind::FeatureOwnedCrossFeatureSpecialization => {
-                RedefinitionCheckPrerequisite::CrossFeatureAndSubsettingEndpoints
-            }
-            RedefinitionCheckKind::FeatureParameter => {
-                RedefinitionCheckPrerequisite::ParameterDirectionAndInheritedPosition
-            }
-            RedefinitionCheckKind::FeatureResult => {
-                RedefinitionCheckPrerequisite::FunctionOrExpressionResult
-            }
-            RedefinitionCheckKind::ConstructorExpressionResultFeature => {
-                RedefinitionCheckPrerequisite::ConstructorResultAndInstantiatedTypeFeatures
-            }
-            RedefinitionCheckKind::FeatureChainExpressionSourceTarget => {
-                RedefinitionCheckPrerequisite::FeatureChainSourceTarget
-            }
-            RedefinitionCheckKind::FeatureChainExpressionTarget => {
-                RedefinitionCheckPrerequisite::FeatureChainSourceTargetAndLibraryAnchor
-            }
-            RedefinitionCheckKind::ActionUsageStateAction => {
-                RedefinitionCheckPrerequisite::StateSubactionMembershipAndKind
-            }
-            RedefinitionCheckKind::AssignmentActionUsageAccessedFeature
-            | RedefinitionCheckKind::AssignmentActionUsageReferent
-            | RedefinitionCheckKind::AssignmentActionUsageStartingAt => {
-                RedefinitionCheckPrerequisite::AssignmentActionInputParameterEndpoints
-            }
-            RedefinitionCheckKind::ForLoopActionUsageVar => {
-                RedefinitionCheckPrerequisite::ForLoopVariableProjection
-            }
-            RedefinitionCheckKind::RequirementUsageObjective => {
-                RedefinitionCheckPrerequisite::ObjectiveMembershipAndCaseObjective
-            }
-            RedefinitionCheckKind::RenderingUsage => {
-                RedefinitionCheckPrerequisite::ViewRenderingMembership
-            }
-        };
-        self.resolved_outcome(RedefinitionCheckOutcome::Unsupported { prerequisite })
-    }
-
     /// Returns the first unpublished canonical input for one exact specialization predicate.
     ///
     /// The resolver owns generic authored and implied specialization facts, but no predicate in
@@ -1887,6 +3432,54 @@ impl<D> SemanticModel<D> {
             });
         };
         let _normative_rule = (rule.rule_id, rule.metaclass);
+        if kind == SpecializationCheckKind::OccurrenceDefinitionMultiplicity {
+            let mut violated = false;
+            let mut unresolved = false;
+            for (index, (declaration, facts)) in self
+                .storage
+                .declarations
+                .iter()
+                .zip(self.storage.declaration_facts.iter())
+                .enumerate()
+            {
+                if !crate::model::metaclass::is_occurrence_definition(declaration.kind)
+                    || !facts.modifiers.individual
+                {
+                    continue;
+                }
+                let Some(multiplicity) = self
+                    .storage
+                    .individual_multiplicity(DeclarationId(index as u32))
+                else {
+                    violated = true;
+                    continue;
+                };
+                let Some(crate::resolve::implied::LibrarySpecializationAnchor::Resolved(anchor)) =
+                    self.resolution
+                        .library_specialization_anchors
+                        .outcome(rule.rule_id)
+                else {
+                    unresolved = true;
+                    continue;
+                };
+                match self.conformance(
+                    multiplicity,
+                    *anchor,
+                    SpecializationScope::AnySpecialization,
+                ) {
+                    Conformance::Conforms => {}
+                    Conformance::DoesNotConform => violated = true,
+                    Conformance::Indeterminate(_) => unresolved = true,
+                }
+            }
+            return self.resolved_outcome(if violated {
+                SpecializationCheckOutcome::Violated
+            } else if unresolved {
+                SpecializationCheckOutcome::Unresolved
+            } else {
+                SpecializationCheckOutcome::Satisfied
+            });
+        }
         if kind == SpecializationCheckKind::FeatureCrossing {
             let outcome = if self
                 .storage
@@ -2475,18 +4068,76 @@ impl<D> SemanticModel<D> {
             }
             return self.resolved_outcome(outcome);
         }
+        if matches!(
+            kind,
+            SpecializationCheckKind::StateUsageExclusiveState
+                | SpecializationCheckKind::StateUsageSubstate
+                | SpecializationCheckKind::TransitionUsageAction
+                | SpecializationCheckKind::TransitionUsageState
+                | SpecializationCheckKind::FeatureSuboccurrence
+                | SpecializationCheckKind::FeaturePortion
+                | SpecializationCheckKind::FeatureSubobject
+                | SpecializationCheckKind::OccurrenceUsageSuboccurrence
+        ) {
+            return self.resolved_outcome(self.library_role_specialization_check(kind));
+        }
+        if matches!(
+            kind,
+            SpecializationCheckKind::UsageVariationDefinition
+                | SpecializationCheckKind::UsageVariationUsage
+        ) {
+            let owner_is_usage = kind == SpecializationCheckKind::UsageVariationUsage;
+            let mut outcome = SpecializationCheckOutcome::Satisfied;
+            for (index, declaration) in self.storage.declarations.iter().enumerate() {
+                if !is_usage_declaration(declaration.kind) {
+                    continue;
+                }
+                let Ok(usage) = DeclarationId::from_index(index) else {
+                    return self.resolved_outcome(SpecializationCheckOutcome::Unresolved);
+                };
+                if self.effective_membership_role(usage) != Some(crate::MembershipRole::Variant) {
+                    continue;
+                }
+                let Some(owner) = declaration.owner else {
+                    outcome = SpecializationCheckOutcome::Unresolved;
+                    break;
+                };
+                let Some(owner_declaration) = self.storage.declaration(owner) else {
+                    outcome = SpecializationCheckOutcome::Unresolved;
+                    break;
+                };
+                if is_usage_declaration(owner_declaration.kind) != owner_is_usage
+                    || !self.is_variation(owner)
+                {
+                    continue;
+                }
+                match self.conformance(usage, owner, SpecializationScope::AnySpecialization) {
+                    Conformance::Conforms => {}
+                    Conformance::DoesNotConform => {
+                        outcome = if self.specialization_hierarchy_is_unsettled(usage) {
+                            SpecializationCheckOutcome::Unresolved
+                        } else {
+                            SpecializationCheckOutcome::Violated
+                        };
+                        break;
+                    }
+                    Conformance::Indeterminate(_) => {
+                        outcome = SpecializationCheckOutcome::Unresolved;
+                        break;
+                    }
+                }
+            }
+            return self.resolved_outcome(outcome);
+        }
         let prerequisite = match kind {
             SpecializationCheckKind::FeatureCrossing => unreachable!("handled above"),
             SpecializationCheckKind::FeatureOwnedCrossFeature => unreachable!("handled above"),
             SpecializationCheckKind::FeaturePortion
             | SpecializationCheckKind::FeatureSubobject
-            | SpecializationCheckKind::FeatureSuboccurrence => {
-                SpecializationCheckPrerequisite::FeatureModifiersOwnerTypingAndLibraryAnchor
-            }
+            | SpecializationCheckKind::FeatureSuboccurrence => unreachable!("handled above"),
             SpecializationCheckKind::FeatureValuation => unreachable!("handled above"),
             SpecializationCheckKind::MetadataFeatureSemantic => unreachable!("handled above"),
-            SpecializationCheckKind::ConnectorBinaryObject
-            | SpecializationCheckKind::ConnectorObject => {
+            SpecializationCheckKind::ConnectorObject => {
                 SpecializationCheckPrerequisite::ConnectorAssociationProjectionAndLibraryAnchor
             }
             SpecializationCheckKind::StepOwnedPerformance
@@ -2512,13 +4163,9 @@ impl<D> SemanticModel<D> {
                 unreachable!("handled above")
             }
             SpecializationCheckKind::StateUsageExclusiveState
-            | SpecializationCheckKind::StateUsageSubstate => {
-                SpecializationCheckPrerequisite::StateSubactionKindAndLibraryAnchor
-            }
-            SpecializationCheckKind::TransitionUsageAction
-            | SpecializationCheckKind::TransitionUsageState => {
-                SpecializationCheckPrerequisite::TransitionOwnerSourceAndLibraryAnchor
-            }
+            | SpecializationCheckKind::StateUsageSubstate
+            | SpecializationCheckKind::TransitionUsageAction
+            | SpecializationCheckKind::TransitionUsageState => unreachable!("handled above"),
             SpecializationCheckKind::TransitionUsagePayload => unreachable!("handled above"),
             SpecializationCheckKind::TransitionUsageSuccessionSource => {
                 unreachable!("handled above")
@@ -2530,17 +4177,76 @@ impl<D> SemanticModel<D> {
                 SpecializationCheckPrerequisite::UseCaseOwnerAndLibraryAnchor
             }
             SpecializationCheckKind::UsageVariationDefinition
-            | SpecializationCheckKind::UsageVariationUsage => {
-                SpecializationCheckPrerequisite::UsageVariationOwner
-            }
-            SpecializationCheckKind::OccurrenceDefinitionMultiplicity => {
-                SpecializationCheckPrerequisite::IndividualMultiplicityAndLibraryAnchor
-            }
-            SpecializationCheckKind::OccurrenceUsageSuboccurrence => {
-                SpecializationCheckPrerequisite::OccurrenceOwnerTypingAndLibraryAnchor
+            | SpecializationCheckKind::UsageVariationUsage => unreachable!("handled above"),
+            SpecializationCheckKind::OccurrenceDefinitionMultiplicity
+            | SpecializationCheckKind::OccurrenceUsageSuboccurrence => {
+                unreachable!("handled above")
             }
         };
         self.resolved_outcome(SpecializationCheckOutcome::Unsupported { prerequisite })
+    }
+
+    /// `specializesFromLibrary(anchor)` for every occupant of the roles `kind` constrains, read
+    /// from the same occupant derivation that synthesized the implied edges.
+    fn library_role_specialization_check(
+        &self,
+        kind: SpecializationCheckKind,
+    ) -> SpecializationCheckOutcome {
+        use crate::resolve::role_specializations::library_specialization_role_occupants;
+
+        let Ok(occupants) =
+            library_specialization_role_occupants(&self.storage, &self.resolution.outcomes)
+        else {
+            return SpecializationCheckOutcome::Unresolved;
+        };
+        if occupants.transitions_unsettled
+            && matches!(
+                kind,
+                SpecializationCheckKind::TransitionUsageAction
+                    | SpecializationCheckKind::TransitionUsageState
+            )
+        {
+            return SpecializationCheckOutcome::Unresolved;
+        }
+        if occupants.features_unsettled
+            && matches!(
+                kind,
+                SpecializationCheckKind::FeatureSuboccurrence
+                    | SpecializationCheckKind::FeaturePortion
+                    | SpecializationCheckKind::FeatureSubobject
+                    | SpecializationCheckKind::OccurrenceUsageSuboccurrence
+            )
+        {
+            return SpecializationCheckOutcome::Unresolved;
+        }
+        let anchors = &self
+            .resolution
+            .library_specialization_anchors
+            .specialization_roles;
+        let mut outcome = SpecializationCheckOutcome::Satisfied;
+        for occupant in occupants
+            .occupants
+            .iter()
+            .filter(|occupant| occupant.role.check() == kind)
+        {
+            let LibrarySpecializationAnchor::Resolved(anchor) = anchors.anchor(occupant.role)
+            else {
+                return SpecializationCheckOutcome::Unresolved;
+            };
+            if occupant.source == *anchor {
+                continue;
+            }
+            match self.conformance(
+                occupant.source,
+                *anchor,
+                SpecializationScope::FeatureSpecialization,
+            ) {
+                Conformance::Conforms => {}
+                Conformance::DoesNotConform => outcome = SpecializationCheckOutcome::Violated,
+                Conformance::Indeterminate(_) => return SpecializationCheckOutcome::Unresolved,
+            }
+        }
+        outcome
     }
 
     /// Projects the exact `deriveElementOwner` result from the canonical declaration ownership
@@ -2653,6 +4359,200 @@ impl<D> SemanticModel<D> {
         self.resolved_outcome(values)
     }
 
+    /// Projects `ViewUsage::exposedElement` from owned expose members and effective filters.
+    /// Namespace exposes expand their importable members; the target namespace itself is not an
+    /// exposed element merely because it is the reference's resolution target.
+    pub(crate) fn view_exposed_elements(
+        &self,
+        symbol: SymbolId,
+    ) -> QueryOutcome<ViewExposedElements> {
+        let view = match self.single_declaration(symbol) {
+            Ok(declaration) => declaration,
+            Err(outcome) => return outcome,
+        };
+        if self
+            .storage
+            .declaration(view)
+            .is_none_or(|value| value.kind != DeclarationKind::ViewUsage)
+        {
+            return self.query_outcome(QueryAnswer::Unsupported);
+        }
+
+        let mut candidates = std::collections::BTreeSet::new();
+        let mut obstacles = std::collections::BTreeSet::new();
+        for exposure in self
+            .child_declarations(view)
+            .iter()
+            .copied()
+            .filter(|candidate| {
+                self.storage
+                    .declaration(*candidate)
+                    .is_some_and(|value| value.kind == DeclarationKind::Expose)
+            })
+        {
+            let Some(exposure_symbol) = self.symbol_id(exposure) else {
+                return self.query_outcome(QueryAnswer::Unsupported);
+            };
+            let references = self
+                .outgoing_reference_ids(exposure)
+                .iter()
+                .copied()
+                .filter(|reference| {
+                    self.storage.references[reference.index()].kind == ReferenceKind::ViewExpose
+                })
+                .collect::<Vec<_>>();
+            let [reference_id] = references.as_slice() else {
+                obstacles.insert(ViewExposureObstacle::ExposureUnsupported {
+                    exposure: exposure_symbol,
+                });
+                continue;
+            };
+            let reference = &self.storage.references[reference_id.index()];
+            if reference.flags.filtered {
+                obstacles.insert(ViewExposureObstacle::ExposureUnsupported {
+                    exposure: exposure_symbol,
+                });
+                continue;
+            }
+            match self.resolution.outcome(*reference_id) {
+                // Every Type is a Namespace, so `vehicle::*` on a part usage exposes its members
+                // just as `Catalog::*` does on a package. An alias target is not expanded here.
+                Some(ResolutionStatus::Resolved(target))
+                    if self
+                        .storage
+                        .declaration(target)
+                        .is_none_or(|value| value.kind == DeclarationKind::Alias)
+                        && (reference.flags.wildcard || reference.flags.recursive) =>
+                {
+                    obstacles.insert(ViewExposureObstacle::ExposureUnsupported {
+                        exposure: exposure_symbol,
+                    });
+                }
+                Some(ResolutionStatus::Resolved(target)) if reference.flags.wildcard => {
+                    self.collect_exposed_namespace_members(
+                        target,
+                        reference.flags.recursive,
+                        &mut candidates,
+                    );
+                }
+                Some(ResolutionStatus::Resolved(target)) => {
+                    candidates.insert(target);
+                    if reference.flags.recursive {
+                        self.collect_exposed_namespace_members(target, true, &mut candidates);
+                    }
+                }
+                Some(ResolutionStatus::Ambiguous(range)) => {
+                    let values = range
+                        .slice(&self.resolution.ambiguous_candidates)
+                        .unwrap_or_default()
+                        .iter()
+                        .filter_map(|candidate| self.symbol_id(*candidate))
+                        .collect::<Vec<_>>()
+                        .into_boxed_slice();
+                    obstacles.insert(ViewExposureObstacle::ExposureAmbiguous {
+                        exposure: exposure_symbol,
+                        candidates: values,
+                    });
+                }
+                Some(ResolutionStatus::Unresolved) => {
+                    obstacles.insert(ViewExposureObstacle::ExposureUnresolved {
+                        exposure: exposure_symbol,
+                    });
+                }
+                Some(ResolutionStatus::Unsupported | ResolutionStatus::NonConverged) | None => {
+                    obstacles.insert(ViewExposureObstacle::ExposureUnsupported {
+                        exposure: exposure_symbol,
+                    });
+                }
+            }
+        }
+
+        let mut elements = Vec::new();
+        for candidate in candidates {
+            let Some(candidate_symbol) = self.symbol_id(candidate) else {
+                continue;
+            };
+            match self.view_selection(symbol, candidate_symbol).answer {
+                QueryAnswer::Resolved(selection) => match selection.outcome {
+                    ViewSelectionOutcome::Included => elements.push(candidate_symbol),
+                    ViewSelectionOutcome::Excluded => {}
+                    ViewSelectionOutcome::Indeterminate(selection_obstacles) => {
+                        for obstacle in selection_obstacles {
+                            obstacles.insert(match obstacle {
+                                ViewSelectionObstacle::UnresolvedPredicate => {
+                                    ViewExposureObstacle::FilterUnresolved {
+                                        candidate: candidate_symbol,
+                                    }
+                                }
+                                ViewSelectionObstacle::AmbiguousPredicate(predicates) => {
+                                    ViewExposureObstacle::FilterAmbiguous {
+                                        candidate: candidate_symbol,
+                                        predicates,
+                                    }
+                                }
+                                ViewSelectionObstacle::UnsupportedPredicate => {
+                                    ViewExposureObstacle::FilterUnsupported {
+                                        candidate: candidate_symbol,
+                                    }
+                                }
+                            });
+                        }
+                    }
+                },
+                QueryAnswer::Unresolved => {
+                    obstacles.insert(ViewExposureObstacle::FilterUnresolved {
+                        candidate: candidate_symbol,
+                    });
+                }
+                QueryAnswer::Ambiguous(_)
+                | QueryAnswer::Unsupported
+                | QueryAnswer::Recovery
+                | QueryAnswer::Incomplete => {
+                    obstacles.insert(ViewExposureObstacle::FilterUnsupported {
+                        candidate: candidate_symbol,
+                    });
+                }
+            }
+        }
+        self.resolved_outcome(ViewExposedElements {
+            view: symbol,
+            elements: elements.into_boxed_slice(),
+            obstacles: obstacles.into_iter().collect::<Vec<_>>().into_boxed_slice(),
+        })
+    }
+
+    /// The visible members of a Namespace: its public owned members (an unauthored visibility is
+    /// public), plus its public imports. Every Type is a Namespace, so this covers
+    /// `vehicle::*` on a part usage as well as `Catalog::*` on a package. A recursive expose
+    /// descends into each such member. Inherited memberships are not expanded: through the
+    /// library specialization chain they would expose every standard feature of `Part`.
+    fn collect_exposed_namespace_members(
+        &self,
+        target: DeclarationId,
+        recursive: bool,
+        into: &mut std::collections::BTreeSet<DeclarationId>,
+    ) {
+        let exposable = |member: DeclarationId| self.memberships.is_public(member);
+        let mut pending = vec![target];
+        let mut visited = std::collections::BTreeSet::new();
+        while let Some(namespace) = pending.pop() {
+            if !visited.insert(namespace) {
+                continue;
+            }
+            for (_, imported) in self.exported_imports.entries_for_owner(Some(namespace)) {
+                into.extend(imported.iter().copied());
+            }
+            for (_, named) in self.direct_names.entries_for_owner(Some(namespace)) {
+                for member in named.iter().copied().filter(|member| exposable(*member)) {
+                    into.insert(member);
+                    if recursive {
+                        pending.push(member);
+                    }
+                }
+            }
+        }
+    }
+
     /// Projects `deriveNamespaceImportImportedElement` for every direct authored NamespaceImport
     /// owned by a Namespace. The concrete grammar gives an import no authorable name, so the
     /// owner-scoped result carries its canonical identity rather than asking callers to infer one
@@ -2715,11 +4615,12 @@ impl<D> SemanticModel<D> {
             Ok(declaration) => declaration,
             Err(outcome) => return outcome,
         };
-        if self
-            .storage
-            .declaration(declaration)
-            .is_none_or(|value| value.kind != DeclarationKind::RequirementUsage)
-        {
+        if self.storage.declaration(declaration).is_none_or(|value| {
+            !matches!(
+                value.kind,
+                DeclarationKind::RequirementUsage | DeclarationKind::ObjectiveRequirement
+            )
+        }) {
             return self.query_outcome(QueryAnswer::Unsupported);
         }
         let relationships = self.relationships(declaration);
@@ -2765,7 +4666,29 @@ impl<D> SemanticModel<D> {
     }
 
     pub(crate) fn satisfy_relationships(&self) -> QueryOutcome<Box<[SatisfyRelationship]>> {
-        let endpoint = |reference: Option<AuthoredReferenceId>| match reference
+        // A dotted operand (`by a.b`) is walked hop by hop; with every hop resolved it is
+        // published as the chain, otherwise it reports the chain's status like a plain reference.
+        let feature_chain = |reference: AuthoredReferenceId| -> Option<SatisfyEndpoint> {
+            let authored = self.storage.references.get(reference.index())?;
+            if !authored.flags.dotted {
+                return None;
+            }
+            let path = self
+                .resolution
+                .member_access_paths
+                .get(&reference)?
+                .iter()
+                .map(|status| match status {
+                    ResolutionStatus::Resolved(target) => self.symbol_id(*target),
+                    _ => None,
+                })
+                .collect::<Option<Box<[SymbolId]>>>()?;
+            (!path.is_empty()).then(|| SatisfyEndpoint::FeatureChain {
+                path,
+                authored: self.authored_path(authored.path).into(),
+            })
+        };
+        let plain_endpoint = |reference: Option<AuthoredReferenceId>| match reference
             .as_ref()
             .and_then(|reference| self.resolution.outcome(*reference))
         {
@@ -2785,6 +4708,12 @@ impl<D> SemanticModel<D> {
                 SatisfyEndpoint::Unresolved
             }
             None => SatisfyEndpoint::Unsupported,
+        };
+        let endpoint = |reference: Option<AuthoredReferenceId>| {
+            if let Some(chain) = reference.and_then(feature_chain) {
+                return chain;
+            }
+            plain_endpoint(reference)
         };
         let mut values = self
             .storage
@@ -2818,9 +4747,16 @@ impl<D> SemanticModel<D> {
                     })
                     .and_then(|(index, _)| AuthoredReferenceId::from_index(index).ok());
                 let facts = self.storage.declaration_facts(id)?;
+                let identity = self.symbol_id(id)?;
                 Some(SatisfyRelationship {
-                    identity: self.symbol_id(id)?,
-                    requirement: endpoint(requirement),
+                    identity,
+                    // Only the declaration form (`satisfy requirement r : R by x`) has no
+                    // `SatisfySource`: the reference form always names one. There the satisfy
+                    // usage is itself the satisfied requirement usage (8.4.17.3).
+                    requirement: match requirement {
+                        Some(_) => endpoint(requirement),
+                        None => SatisfyEndpoint::Resolved(identity),
+                    },
                     satisfying_element: endpoint(satisfying),
                     polarity: if facts.negated.unwrap_or(false) {
                         SatisfyPolarity::NotSatisfied
@@ -2829,6 +4765,108 @@ impl<D> SemanticModel<D> {
                     },
                     provenance: RelationshipProvenance::Authored,
                     location: self.source_location(id)?,
+                })
+            })
+            .collect::<Vec<_>>();
+        values.sort_by(|left, right| {
+            self.document_order(left.location.document, right.location.document)
+                .then_with(|| left.location.range.cmp(&right.location.range))
+                .then_with(|| left.identity.cmp(&right.identity))
+        });
+        self.resolved_outcome(values.into_boxed_slice())
+    }
+
+    /// Every workspace requirement derivation (the `RequirementDerivation` domain library): a
+    /// connection usage conforming to `DerivationConnections::Derivation` -- by `#derivation`
+    /// metadata (its `SemanticMetadata` `baseType`) or by typing -- with its ends classified by
+    /// what they specialize. Without the library in the publication there are no derivations.
+    pub(crate) fn derivation_relationships(&self) -> QueryOutcome<Box<[DerivationRelationship]>> {
+        let anchor = |name: &str| -> Option<DeclarationId> {
+            match self.resolve_qualifier_scopes(None, name).ok()?.as_slice() {
+                [declaration] => Some(*declaration),
+                _ => None,
+            }
+        };
+        let (Some(derivation), Some(original), Some(derived)) = (
+            anchor("DerivationConnections::Derivation"),
+            anchor("DerivationConnections::originalRequirements"),
+            anchor("DerivationConnections::derivedRequirements"),
+        ) else {
+            return self.resolved_outcome(Box::default());
+        };
+        let conforms = |specific: DeclarationId, general: DeclarationId| {
+            self.conformance(specific, general, SpecializationScope::AnySpecialization)
+                == Conformance::Conforms
+        };
+        let target = |target: &RelationshipTarget| match target {
+            RelationshipTarget::Resolved(symbol) => DerivationEndpoint::Resolved(*symbol),
+            RelationshipTarget::Ambiguous(candidates) => {
+                DerivationEndpoint::Ambiguous(candidates.clone())
+            }
+            RelationshipTarget::Unresolved => DerivationEndpoint::Unresolved,
+            RelationshipTarget::Unsupported => DerivationEndpoint::Unsupported,
+        };
+        let endpoint = |endpoint: &ConnectorEndpoint| match endpoint {
+            ConnectorEndpoint::Feature(value) => target(value),
+            ConnectorEndpoint::FeatureChain {
+                terminal,
+                authored,
+                path,
+                ..
+            } => path
+                .iter()
+                .map(|hop| match hop {
+                    RelationshipTarget::Resolved(symbol) => Some(*symbol),
+                    _ => None,
+                })
+                .collect::<Option<Box<[SymbolId]>>>()
+                .filter(|path| !path.is_empty())
+                .map(|path| DerivationEndpoint::FeatureChain {
+                    path,
+                    authored: authored.clone(),
+                })
+                .unwrap_or_else(|| match target(terminal) {
+                    // A chain with a failed interior hop has no settled terminal either.
+                    DerivationEndpoint::Resolved(_) => DerivationEndpoint::Unresolved,
+                    other => other,
+                }),
+            ConnectorEndpoint::Unconnected => DerivationEndpoint::Unresolved,
+        };
+        let mut values = self
+            .storage
+            .declarations
+            .iter()
+            .enumerate()
+            .filter_map(|(index, declaration)| {
+                if declaration.kind != DeclarationKind::ConnectionUsage {
+                    return None;
+                }
+                let id = DeclarationId::from_index(index).ok()?;
+                if !conforms(id, derivation) {
+                    return None;
+                }
+                let kind = connector_kind(declaration.kind)?;
+                let connector = self.project_connector(id, declaration, kind)?;
+                let (mut originals, mut deriveds, mut unclassified) =
+                    (Vec::new(), Vec::new(), Vec::new());
+                for end in connector.ends.iter() {
+                    let role = end
+                        .declaration
+                        .and_then(|symbol| self.declaration_of(symbol));
+                    let value = endpoint(&end.endpoint);
+                    match role {
+                        Some(end) if conforms(end, original) => originals.push(value),
+                        Some(end) if conforms(end, derived) => deriveds.push(value),
+                        _ => unclassified.push(value),
+                    }
+                }
+                Some(DerivationRelationship {
+                    identity: connector.identity,
+                    original: originals.into_boxed_slice(),
+                    derived: deriveds.into_boxed_slice(),
+                    unclassified: unclassified.into_boxed_slice(),
+                    provenance: RelationshipProvenance::Authored,
+                    location: connector.location,
                 })
             })
             .collect::<Vec<_>>();
@@ -2865,20 +4903,25 @@ impl<D> SemanticModel<D> {
             .facts()
             .iter()
             .filter_map(|fact| {
-                let declaration = self.storage.declaration(fact.connector)?;
+                // Implied connectors have no authored declaration; this projection lists the
+                // workspace-authored ones, and the exact rule query evaluates the implied ones.
+                let binding::BindingConnectorOrigin::Authored(connector) = fact.origin else {
+                    return None;
+                };
+                let declaration = self.storage.declaration(connector)?;
                 let document = self.storage.document(declaration.document)?;
                 if document.role != SourceRole::Workspace {
                     return None;
                 }
                 Some(BindingConnector {
-                    identity: self.symbol_id(fact.connector)?,
+                    identity: self.symbol_id(connector)?,
                     source: endpoint(&fact.source),
                     target: endpoint(&fact.target),
                     provenance: match fact.provenance {
                         types::FactProvenance::Authored => RelationshipProvenance::Authored,
                         types::FactProvenance::Implied => RelationshipProvenance::Implied,
                     },
-                    location: self.source_location(fact.connector)?,
+                    location: self.source_location(connector)?,
                 })
             })
             .collect::<Vec<_>>();
@@ -2888,6 +4931,522 @@ impl<D> SemanticModel<D> {
                 .then_with(|| left.identity.cmp(&right.identity))
         });
         self.resolved_outcome(values.into_boxed_slice())
+    }
+
+    /// Every metadata annotation bound to one element: how it was applied, the annotating
+    /// definition, its `about` targets, and the resolved values its body redefines.
+    ///
+    /// An annotation with an `about` clause binds to each listed target rather than to its
+    /// owner, so `@Tag about X, Y;` contributes one entry to `X` and one to `Y`. This projects
+    /// facts lowering and resolution already settled -- the annotation-to-definition reference,
+    /// the `about` references, and the body's redefining `AttributeUsage` members with their
+    /// value expressions -- and performs no new analysis.
+    pub(crate) fn metadata_annotation_details(
+        &self,
+        symbol: SymbolId,
+    ) -> QueryOutcome<Box<[PublishedMetadataAnnotation]>> {
+        let declaration = match self.single_declaration(symbol) {
+            Ok(declaration) => declaration,
+            Err(outcome) => return outcome,
+        };
+        let mut values = self
+            .storage
+            .metadata_annotations
+            .iter()
+            .filter_map(|record| {
+                let about_references = self.metadata_annotation_about_references(record.annotation);
+                if !self.metadata_annotation_binds_to(record, &about_references, declaration) {
+                    return None;
+                }
+                let annotation = self.symbol_id(record.annotation)?;
+                let definition_kind = Self::metadata_annotation_definition_kind(record.form);
+                let definition = self
+                    .outgoing_reference_ids(record.annotation)
+                    .iter()
+                    .find(|reference_id| {
+                        self.storage
+                            .references
+                            .get(reference_id.index())
+                            .is_some_and(|reference| reference.kind == definition_kind)
+                    })
+                    .map(|reference_id| self.settled_relationship_target(*reference_id))
+                    .unwrap_or(RelationshipTarget::Unsupported);
+                let about = about_references
+                    .iter()
+                    .map(|reference_id| self.settled_relationship_target(*reference_id))
+                    .collect();
+                Some(PublishedMetadataAnnotation {
+                    annotated_element: symbol,
+                    annotation,
+                    form: match record.form {
+                        LoweredMetadataAnnotationForm::PrefixKeyword => {
+                            MetadataAnnotationForm::PrefixKeyword
+                        }
+                        LoweredMetadataAnnotationForm::AnnotatingMember => {
+                            MetadataAnnotationForm::AnnotatingMember
+                        }
+                        LoweredMetadataAnnotationForm::Usage => MetadataAnnotationForm::Usage,
+                    },
+                    definition,
+                    about,
+                    body: self.metadata_annotation_body(record.annotation),
+                    location: self.source_location(record.annotation)?,
+                })
+            })
+            .collect::<Vec<_>>();
+        values.sort_by(|left, right| {
+            self.document_order(left.location.document, right.location.document)
+                .then_with(|| left.location.range.cmp(&right.location.range))
+                .then_with(|| left.annotation.cmp(&right.annotation))
+        });
+        self.resolved_outcome(values.into_boxed_slice())
+    }
+
+    /// The redefined feature values in one metadata annotation (or nested) body, in authored
+    /// order. Each anonymous `AttributeUsage` child that `lower_metadata_body_usage` minted
+    /// carries a `Redefinition` reference to the feature it redefines and, when a value was
+    /// written, an evaluation fact the resolved-expression index already settled.
+    fn metadata_annotation_body(&self, owner: DeclarationId) -> Box<[MetadataAnnotationValue]> {
+        self.child_declarations(owner)
+            .iter()
+            .filter_map(|child| {
+                let redefinition =
+                    self.outgoing_reference_ids(*child)
+                        .iter()
+                        .find(|reference_id| {
+                            self.storage
+                                .references
+                                .get(reference_id.index())
+                                .is_some_and(|reference| {
+                                    reference.kind == ReferenceKind::Redefinition
+                                })
+                        })?;
+                let element = self.symbol_id(*child)?;
+                let value_declaration = self.value_expression(*child).unwrap_or(*child);
+                Some(MetadataAnnotationValue {
+                    redefined_feature: self.settled_relationship_target(*redefinition),
+                    value: self
+                        .published_expression(value_declaration, element)
+                        .unwrap_or(PublishedExpression {
+                            element,
+                            outcome: ExpressionOutcome::NotApplicable,
+                            nodes: Box::default(),
+                            root: None,
+                        }),
+                    nested: self.metadata_annotation_body(*child),
+                })
+            })
+            .collect()
+    }
+
+    /// The `MetadataAnnotationAbout` references sourced at one annotation, in authored order.
+    pub(crate) fn metadata_annotation_about_references(
+        &self,
+        annotation: DeclarationId,
+    ) -> Vec<AuthoredReferenceId> {
+        self.outgoing_reference_ids(annotation)
+            .iter()
+            .copied()
+            .filter(|reference_id| {
+                self.storage
+                    .references
+                    .get(reference_id.index())
+                    .is_some_and(|reference| {
+                        reference.kind == ReferenceKind::MetadataAnnotationAbout
+                    })
+            })
+            .collect()
+    }
+
+    /// Which reference kind carries one annotation form's annotating definition: the distinct
+    /// `MetadataAnnotation` reference for the `#`/`@` forms, the usage's own `FeatureTyping` for
+    /// `metadata m : Tag;`.
+    pub(crate) fn metadata_annotation_definition_kind(
+        form: LoweredMetadataAnnotationForm,
+    ) -> ReferenceKind {
+        match form {
+            LoweredMetadataAnnotationForm::Usage => ReferenceKind::FeatureTyping,
+            _ => ReferenceKind::MetadataAnnotation,
+        }
+    }
+
+    /// Whether one lowered annotation record binds to `element`, given its already-collected
+    /// `about` references: to its owner with no `about` clause, or to each resolved `about`
+    /// target when it has one. An `about` clause where nothing resolved still binds to the
+    /// owner, so an annotation is never silently dropped from the published set.
+    pub(crate) fn metadata_annotation_binds_to(
+        &self,
+        record: &MetadataAnnotationRecord,
+        about: &[AuthoredReferenceId],
+        element: DeclarationId,
+    ) -> bool {
+        let mut any_resolved = false;
+        for reference_id in about {
+            if let Some(ResolutionStatus::Resolved(target)) = self.resolution.outcome(*reference_id)
+            {
+                any_resolved = true;
+                if target == element {
+                    return true;
+                }
+            }
+        }
+        !any_resolved && record.annotated_element == element
+    }
+
+    /// One authored reference's settled target, as the public [`RelationshipTarget`].
+    fn settled_relationship_target(&self, reference_id: AuthoredReferenceId) -> RelationshipTarget {
+        self.relationship_target_from_status(self.resolution.outcome(reference_id))
+    }
+
+    fn relationship_target_from_status(
+        &self,
+        status: Option<ResolutionStatus>,
+    ) -> RelationshipTarget {
+        match status {
+            Some(ResolutionStatus::Resolved(target)) => match self.symbol_id(target) {
+                Some(identity) => RelationshipTarget::Resolved(identity),
+                None => RelationshipTarget::Unresolved,
+            },
+            Some(ResolutionStatus::Ambiguous(candidates)) => RelationshipTarget::Ambiguous(
+                self.resolution
+                    .ambiguous_candidates(candidates)
+                    .iter()
+                    .filter_map(|candidate| self.symbol_id(*candidate))
+                    .collect(),
+            ),
+            Some(ResolutionStatus::Unsupported) => RelationshipTarget::Unsupported,
+            Some(ResolutionStatus::Unresolved) | Some(ResolutionStatus::NonConverged) | None => {
+                RelationshipTarget::Unresolved
+            }
+        }
+    }
+
+    /// The whole-workspace projection: every workspace element with its full details and composed
+    /// resolved facts, every connector, and a publication envelope.
+    ///
+    /// Adds no analysis -- it composes [`Self::all_elements`], [`Self::element_details`],
+    /// [`Self::resolved_expression`], [`Self::metadata_annotation_details`] and
+    /// [`Self::all_connectors`], each of which reads facts the publication already settled.
+    /// Per-element composition is bounded by `max_nodes`, but [`Self::all_elements`] itself
+    /// enumerates every admitted declaration (workspace and libraries) before that bound is
+    /// applied, so the cost is not proportional to a small `max_nodes` on a library-heavy
+    /// workspace.
+    pub(crate) fn model_projection(
+        &self,
+        max_nodes: usize,
+        source_digest: RootDigest,
+        model_digest: PublicationModelDigest,
+    ) -> QueryOutcome<PublishedModelProjection> {
+        let workspace_elements = match self.all_elements().answer {
+            QueryAnswer::Resolved(elements) => elements,
+            _ => return self.query_outcome(QueryAnswer::Incomplete),
+        };
+        let workspace_elements = workspace_elements
+            .iter()
+            .filter(|element| element.source == ElementSource::Workspace)
+            .collect::<Vec<_>>();
+        let elements_total = workspace_elements.len();
+
+        let mut elements = Vec::new();
+        let mut elements_incomplete = 0usize;
+        for published in workspace_elements.into_iter().take(max_nodes) {
+            let symbol = published.entry.identity;
+            let details = match self.element_details(symbol).answer {
+                QueryAnswer::Resolved(details) => details,
+                // A workspace declaration with no settled details only happens for a publication
+                // that did not converge; the outcome completeness carries that. Tracked
+                // separately from `max_nodes` truncation so a consumer does not mistake one for
+                // the other -- see `ProjectionTruncation::is_truncated`.
+                _ => {
+                    elements_incomplete += 1;
+                    continue;
+                }
+            };
+            let expression = match self.resolved_expression(symbol).answer {
+                QueryAnswer::Resolved(expression) => expression,
+                _ => PublishedExpression {
+                    element: symbol,
+                    outcome: ExpressionOutcome::NotApplicable,
+                    nodes: Box::default(),
+                    root: None,
+                },
+            };
+            let metadata_annotations = match self.metadata_annotation_details(symbol).answer {
+                QueryAnswer::Resolved(annotations) => annotations,
+                _ => Box::default(),
+            };
+            elements.push(ProjectedElement {
+                identity: symbol,
+                source: ElementSource::Workspace,
+                details,
+                expression,
+                metadata_annotations,
+            });
+        }
+        let elements_returned = elements.len();
+
+        let envelope = ProjectionEnvelope {
+            phase: match self.metadata.phase {
+                PublicationPhase::Resolved => ProjectionPhase::Resolved,
+            },
+            completeness: self.metadata.completeness,
+            has_evaluation: self.metadata.has_evaluation,
+            source_digest,
+            model_digest,
+            admitted: self.admitted_source_counts(),
+        };
+
+        self.resolved_outcome(PublishedModelProjection {
+            schema_version: MODEL_PROJECTION_SCHEMA_VERSION,
+            envelope,
+            elements: elements.into_boxed_slice(),
+            connectors: self.all_connectors(),
+            truncation: ProjectionTruncation {
+                elements_total,
+                elements_returned,
+                elements_incomplete,
+            },
+        })
+    }
+
+    /// How many admitted documents are non-workspace, by provenance. Mirrors the tally
+    /// `render::write_admitted_sources` renders for the SMG section.
+    fn admitted_source_counts(&self) -> AdmittedSourceCounts {
+        let mut counts = AdmittedSourceCounts::default();
+        for document in self.storage.documents.iter() {
+            match document.role {
+                SourceRole::Workspace => {}
+                SourceRole::StandardLibrary => counts.standard_library += 1,
+                SourceRole::Library => counts.library += 1,
+                SourceRole::External => counts.external += 1,
+            }
+        }
+        counts
+    }
+
+    /// The `connect` / `interface` topology reachable from one element: every connector it owns
+    /// (directly or transitively), each with its `:` type and resolved ends.
+    ///
+    /// Sibling of [`Self::binding_connectors`]. This projects authored connector-end references
+    /// resolution already settled -- no new analysis. A dotted end (`a.b.port`) carries the
+    /// resolved terminal feature plus the path as authored; the intermediate hops are not
+    /// resolved to identities.
+    pub(crate) fn connection_graph(
+        &self,
+        root: SymbolId,
+    ) -> QueryOutcome<PublishedConnectionGraph> {
+        let root_declaration = match self.single_declaration(root) {
+            Ok(declaration) => declaration,
+            Err(outcome) => return outcome,
+        };
+        let connectors =
+            self.projected_connectors(|id| self.is_descendant_or_self(root_declaration, id));
+        self.resolved_outcome(PublishedConnectionGraph { root, connectors })
+    }
+
+    /// Every workspace `connect` / `interface` connector in the publication, canonically ordered.
+    ///
+    /// The whole-workspace form of [`Self::connection_graph`], for the model projection. Not
+    /// root-scoped: every connector, each with the same resolved ends `connection_graph` reports.
+    pub(crate) fn all_connectors(&self) -> Box<[PublishedConnector]> {
+        self.projected_connectors(|_| true)
+    }
+
+    /// Projects every connector declaration that `keep` admits, in canonical order.
+    fn projected_connectors(
+        &self,
+        keep: impl Fn(DeclarationId) -> bool,
+    ) -> Box<[PublishedConnector]> {
+        let mut connectors = self
+            .storage
+            .declarations
+            .iter()
+            .enumerate()
+            .filter_map(|(index, declaration)| {
+                let kind = connector_kind(declaration.kind)?;
+                let id = DeclarationId::from_index(index).ok()?;
+                keep(id).then_some(())?;
+                self.project_connector(id, declaration, kind)
+            })
+            .collect::<Vec<_>>();
+        connectors.sort_by(|left, right| {
+            self.document_order(left.location.document, right.location.document)
+                .then_with(|| left.location.range.cmp(&right.location.range))
+                .then_with(|| left.identity.cmp(&right.identity))
+        });
+        connectors.into_boxed_slice()
+    }
+
+    /// One connector's type and resolved ends, or `None` for a declaration that is not a
+    /// projectable workspace connector (a named end reusing `DeclarationKind::ConnectionUsage`,
+    /// or a non-workspace document). `declaration` and `kind` are the caller's own lookup for
+    /// `id`, passed in rather than refetched.
+    fn project_connector(
+        &self,
+        id: DeclarationId,
+        declaration: &Declaration,
+        kind: ConnectorKind,
+    ) -> Option<PublishedConnector> {
+        // A named connector end reuses `DeclarationKind::ConnectionUsage`; it is not itself a
+        // connector.
+        if self
+            .storage
+            .declaration_facts(id)
+            .and_then(|facts| facts.positional_end)
+            .is_some()
+        {
+            return None;
+        }
+        if self.storage.document(declaration.document)?.role != SourceRole::Workspace {
+            return None;
+        }
+        Some(PublishedConnector {
+            identity: self.symbol_id(id)?,
+            kind,
+            declared_type: self
+                .outgoing_reference_ids(id)
+                .iter()
+                .find(|reference_id| {
+                    self.storage
+                        .references
+                        .get(reference_id.index())
+                        .is_some_and(|reference| reference.kind == ReferenceKind::FeatureTyping)
+                })
+                .map(|reference_id| self.settled_relationship_target(*reference_id))
+                .unwrap_or(RelationshipTarget::Unsupported),
+            ends: self.connector_ends(id),
+            location: self.source_location(id)?,
+        })
+    }
+
+    /// The ends of one connector, in authored order.
+    ///
+    /// Connected ends (a bare `ConnectorEnd` / `MemberAccessOperand` on the connector, or one on
+    /// a named end child) are ordered by their reference's authored position, so a connector that
+    /// mixes bare and named ends keeps authored order. A named end child that carries no such
+    /// reference is a declared-but-unwired participant slot (`connection def` body) and follows,
+    /// in declaration order.
+    fn connector_ends(&self, connector: DeclarationId) -> Box<[PublishedConnectorEnd]> {
+        let mut connected: Vec<(usize, PublishedConnectorEnd)> = Vec::new();
+        for reference_id in self.outgoing_reference_ids(connector) {
+            if self.is_connector_end_reference(*reference_id) {
+                connected.push((
+                    reference_id.index(),
+                    PublishedConnectorEnd {
+                        declaration: None,
+                        multiplicity: MultiplicityFacts::Absent,
+                        endpoint: self.connector_endpoint(*reference_id),
+                    },
+                ));
+            }
+        }
+        let mut unconnected: Vec<PublishedConnectorEnd> = Vec::new();
+        for child in self.child_declarations(connector) {
+            if self
+                .storage
+                .declaration_facts(*child)
+                .and_then(|facts| facts.positional_end)
+                .is_none()
+            {
+                continue;
+            }
+            match self.connector_end_reference(*child) {
+                Some(reference_id) => connected.push((
+                    reference_id.index(),
+                    PublishedConnectorEnd {
+                        declaration: self.symbol_id(*child),
+                        multiplicity: self.multiplicity(*child),
+                        endpoint: self.connector_endpoint(reference_id),
+                    },
+                )),
+                None => unconnected.push(PublishedConnectorEnd {
+                    declaration: self.symbol_id(*child),
+                    multiplicity: self.multiplicity(*child),
+                    endpoint: ConnectorEndpoint::Unconnected,
+                }),
+            }
+        }
+        connected.sort_by_key(|(position, _)| *position);
+        connected
+            .into_iter()
+            .map(|(_, end)| end)
+            .chain(unconnected)
+            .collect()
+    }
+
+    fn is_connector_end_reference(&self, reference_id: AuthoredReferenceId) -> bool {
+        self.storage
+            .references
+            .get(reference_id.index())
+            .is_some_and(|reference| {
+                matches!(
+                    reference.kind,
+                    ReferenceKind::ConnectorEnd | ReferenceKind::MemberAccessOperand
+                )
+            })
+    }
+
+    /// The one `ConnectorEnd` / `MemberAccessOperand` reference a named end child carries.
+    fn connector_end_reference(&self, end: DeclarationId) -> Option<AuthoredReferenceId> {
+        self.outgoing_reference_ids(end)
+            .iter()
+            .copied()
+            .find(|reference_id| self.is_connector_end_reference(*reference_id))
+    }
+
+    fn connector_endpoint(&self, reference_id: AuthoredReferenceId) -> ConnectorEndpoint {
+        let Some(reference) = self.storage.references.get(reference_id.index()) else {
+            return ConnectorEndpoint::Feature(RelationshipTarget::Unsupported);
+        };
+        let dotted = reference.kind == ReferenceKind::MemberAccessOperand || reference.flags.dotted;
+        let terminal = self.settled_relationship_target(reference_id);
+        if !dotted {
+            return ConnectorEndpoint::Feature(terminal);
+        }
+        ConnectorEndpoint::FeatureChain {
+            root: self.connector_end_root(reference_id),
+            terminal,
+            authored: self.authored_path(reference.path).into(),
+            path: self
+                .resolution
+                .member_access_paths
+                .get(&reference_id)
+                .into_iter()
+                .flat_map(|path| path.iter())
+                .map(|status| self.relationship_target_from_status(Some(*status)))
+                .collect(),
+        }
+    }
+
+    /// The resolved first segment of a dotted connector end (`component` in `component.port`).
+    fn connector_end_root(&self, reference_id: AuthoredReferenceId) -> RelationshipTarget {
+        self.relationship_target_from_status(
+            self.resolution
+                .member_access_paths
+                .get(&reference_id)
+                .and_then(|path| path.first())
+                .copied(),
+        )
+    }
+
+    /// Whether `node` is `ancestor`, or is owned by it directly or transitively.
+    fn is_descendant_or_self(&self, ancestor: DeclarationId, node: DeclarationId) -> bool {
+        let mut cursor = Some(node);
+        let mut guard = self.storage.declarations.len();
+        while let Some(current) = cursor {
+            if current == ancestor {
+                return true;
+            }
+            guard = match guard.checked_sub(1) {
+                Some(remaining) => remaining,
+                None => return false,
+            };
+            cursor = self
+                .storage
+                .declaration(current)
+                .and_then(|declaration| declaration.owner);
+        }
+        false
     }
 
     /// The explicit applicability state of one closed binding-connector validation rule.
@@ -2907,7 +5466,10 @@ impl<D> SemanticModel<D> {
         // Both fields are manifest-owned contract data. Touch them here so a generated table
         // cannot quietly become a kind-only lookalike while the query retains no rule-ID map.
         let _normative_rule = (contract.rule_id, contract.metaclass);
-        self.resolved_outcome(self.bindings.validation(rule))
+        self.resolved_outcome(
+            self.bindings
+                .validation(&self.storage, &self.resolution, rule),
+        )
     }
 
     pub(crate) fn requirement_verifications(&self) -> QueryOutcome<Box<[RequirementVerification]>> {
@@ -2960,7 +5522,7 @@ impl<D> SemanticModel<D> {
             else {
                 continue;
             };
-            if objective.kind != DeclarationKind::RequirementUsage {
+            if objective.kind != DeclarationKind::ObjectiveRequirement {
                 continue;
             }
             let Some(case_id) = objective.owner else {
@@ -3264,11 +5826,13 @@ impl<D> SemanticModel<D> {
         if specific == general {
             return Conformance::Conforms;
         }
-        // A declaration that reaches itself has a malformed hierarchy. Its closure is still
-        // complete, so an answer could be produced -- but producing one would turn a modelling
-        // error into a published semantic fact, which is exactly what the explicit-state rule
-        // exists to prevent.
-        if self.types.specialization().is_cyclic(specific) {
+        // An entirely closed cycle that omits Anything is a modelling error. Other cycles are
+        // shared extent (KerML 7.3.2.3); answering from their complete closure is the fact.
+        if self
+            .types
+            .specialization()
+            .is_invalid_closed_cycle(specific)
+        {
             return Conformance::Indeterminate(ConformanceObstacle::CyclicSpecialization);
         }
         if self
@@ -3285,6 +5849,35 @@ impl<D> SemanticModel<D> {
             return Conformance::Conforms;
         }
         Conformance::DoesNotConform
+    }
+
+    /// Whether an unresolved authored specialization edge could still change a negative
+    /// conformance answer for `specific`.
+    ///
+    /// The specialization closure intentionally contains only settled single-target edges. Exact
+    /// checks that turn a failed reachability probe into a violation use this companion query so
+    /// an unresolved, ambiguous, unsupported, or non-converged edge on the reachable hierarchy is
+    /// not mistaken for proof of non-conformance.
+    pub(crate) fn specialization_hierarchy_is_unsettled(&self, specific: DeclarationId) -> bool {
+        std::iter::once(specific)
+            .chain(
+                self.types
+                    .specialization()
+                    .scoped_ancestors(specific)
+                    .map(|(ancestor, _)| ancestor),
+            )
+            .any(|declaration| {
+                self.outgoing_reference_ids(declaration)
+                    .iter()
+                    .any(|reference_id| {
+                        let reference = &self.storage.references[reference_id.index()];
+                        types::edge_scopes(reference.kind).is_some()
+                            && !matches!(
+                                self.resolution.outcome(*reference_id),
+                                Some(ResolutionStatus::Resolved(_))
+                            )
+                    })
+            })
     }
 
     /// Whether `specific`'s instances are all `general`'s, following only entailments that are
@@ -3488,4 +6081,84 @@ pub(crate) fn internal_scope(scope: SpecializationScope) -> types::ScopeBits {
 
 pub(crate) fn range_contains(range: TextRange, position: TextPosition) -> bool {
     range.start <= position && position <= range.end
+}
+
+/// The connector family of a declaration kind, or `None` when it is not a `connect` / `interface`
+/// connector. Binding, flow, allocate and succession are deliberately excluded: `bind` has
+/// [`crate::PublishedResolution::binding_connectors`], and the others are distinct families.
+pub(crate) fn connector_kind(kind: DeclarationKind) -> Option<ConnectorKind> {
+    match kind {
+        DeclarationKind::ConnectionUsage
+        | DeclarationKind::ConnectionDefinition
+        | DeclarationKind::BareConnect
+        | DeclarationKind::KermlConnector => Some(ConnectorKind::Connection),
+        DeclarationKind::InterfaceUsage | DeclarationKind::InterfaceDefinition => {
+            Some(ConnectorKind::Interface)
+        }
+        _ => None,
+    }
+}
+
+#[cfg(test)]
+mod inherited_query_tests {
+    use super::*;
+
+    const SOURCE: &str = r#"
+        part def Root { private part hidden; part slot; }
+        part def Left :> Root { part redefines slot; }
+        part def Right :> Root;
+        part def Diamond :> Left, Right;
+        part def CycleA :> CycleB { part a; }
+        part def CycleB :> CycleA { part b; }
+        part def CycleUser :> CycleA;
+        part firstUse : Diamond;
+        part secondUse : Diamond;
+    "#;
+
+    #[test]
+    fn inherited_queries_agree_cold_warm_and_in_reverse_order_for_each_model() {
+        // These sources exercise cache mechanics, not another implementation of inheritance.
+        // The existing typed snapshot corpus owns the semantic expectations. Changing visibility
+        // while keeping declaration ordinals also catches accidental cross-model memo sharing.
+        for source in [
+            SOURCE.to_owned(),
+            SOURCE.replace("private part", "public part"),
+        ] {
+            let request = crate::BuildRequest::new(
+                vec![crate::SourceInput::new(
+                    "memory://inherited-cache.sysml",
+                    source,
+                    crate::SourceKind::Workspace,
+                )],
+                crate::ConstructionSchedule::Sequential,
+                sysml_contract::SEMANTIC_CONTRACT_VERSION.as_str(),
+            )
+            .unwrap();
+            let publication = crate::build(request).unwrap();
+            let model = &publication.model;
+            let declarations: Vec<_> = (0..model.storage.declarations.len())
+                .map(|index| DeclarationId(u32::try_from(index).unwrap()))
+                .collect();
+            let cold: Vec<_> = declarations
+                .iter()
+                .map(|declaration| model.inherited_feature_members(*declaration))
+                .collect();
+            let mut queries = model.inherited_feature_queries();
+            for declaration in declarations.iter().chain(declarations.iter().rev()) {
+                assert_eq!(queries.members(*declaration), cold[declaration.index()]);
+            }
+            assert!(!queries.memo.is_empty(), "the warm path must be exercised");
+            let cyclic: Vec<_> = declarations
+                .iter()
+                .filter(|declaration| model.types.specialization().is_cyclic(**declaration))
+                .collect();
+            assert!(
+                !cyclic.is_empty(),
+                "the cycle exclusion path must be exercised"
+            );
+            for declaration in cyclic {
+                assert!(!queries.memo.contains_key(declaration));
+            }
+        }
+    }
 }

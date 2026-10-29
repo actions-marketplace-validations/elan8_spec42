@@ -11,6 +11,7 @@
 //! is a lookup rather than a traversal, an answer cannot depend on the order queries arrive in,
 //! and the publication keeps its "the only interior mutation is source line indexing" invariant.
 
+use crate::lower::facts::OwnedEndFeature;
 use crate::lower::storage::SemanticModelStorage;
 use crate::model::AuthoredReferenceId;
 use crate::model::DeclarationId;
@@ -26,10 +27,9 @@ use crate::resolve::results::ResolutionStatus;
 /// Which specialization edges a path may use, as the bitset the closure tags each edge and path
 /// with.
 ///
-/// A closed set: each variant is a published query contract, not a caller-assembled edge filter.
-/// Named for the bits rather than for the scope so it does not shadow the contract enum
-/// `sysml_contract::SpecializationScope`, which is the same closed set as the *published* query
-/// argument; this one is the index's internal encoding of it.
+/// Published query scopes plus the internal redefinition scope used for effective bodies.
+/// Named for the bits so it does not shadow `sysml_contract::SpecializationScope`; callers
+/// cannot assemble arbitrary edge filters.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(crate) enum ScopeBits {
     /// Every `Specialization` subkind, as the Pilot's `Type::supertypes` does.
@@ -43,6 +43,8 @@ pub(crate) enum ScopeBits {
     /// typing walks. Following a `FeatureTyping` edge instead would cross from the feature to its
     /// type and start collecting the type's own supertypes as if they were the feature's types.
     FeatureSpecialization,
+    /// Redefinition alone: subsetting does not replace an inherited expression binding.
+    Redefinition,
 }
 
 impl ScopeBits {
@@ -58,6 +60,7 @@ impl ScopeBits {
             Self::AnySpecialization => 1 << 0,
             Self::Subclassification => 1 << 1,
             Self::FeatureSpecialization => 1 << 2,
+            Self::Redefinition => 1 << 3,
         }
     }
 }
@@ -69,16 +72,22 @@ impl ScopeBits {
 /// makes one tagged closure answer both readings: a path through a `Subsetting` edge stops being
 /// a subclassification path at that edge and never regains it.
 pub(crate) fn edge_scopes(kind: ReferenceKind) -> Option<u8> {
-    match kind {
-        ReferenceKind::Subclassification => {
-            Some(ScopeBits::AnySpecialization.bit() | ScopeBits::Subclassification.bit())
-        }
-        ReferenceKind::Subsetting | ReferenceKind::Redefinition => {
-            Some(ScopeBits::AnySpecialization.bit() | ScopeBits::FeatureSpecialization.bit())
-        }
-        ReferenceKind::FeatureTyping => Some(ScopeBits::AnySpecialization.bit()),
-        _ => None,
+    if !kind.is_specialization() {
+        return None;
     }
+    Some(match kind {
+        ReferenceKind::Subclassification => {
+            ScopeBits::AnySpecialization.bit() | ScopeBits::Subclassification.bit()
+        }
+        ReferenceKind::Redefinition => {
+            ScopeBits::AnySpecialization.bit()
+                | ScopeBits::FeatureSpecialization.bit()
+                | ScopeBits::Redefinition.bit()
+        }
+        ReferenceKind::FeatureTyping => ScopeBits::AnySpecialization.bit(),
+        // Subsetting, ReferenceSubsetting and CrossSubsetting.
+        _ => ScopeBits::AnySpecialization.bit() | ScopeBits::FeatureSpecialization.bit(),
+    })
 }
 
 /// Whether a fact was authored or synthesized by the resolver.
@@ -163,8 +172,13 @@ pub(crate) struct SpecializationClosure {
     /// question is a binary search rather than a scan.
     pub(crate) ancestors: Box<[(DeclarationId, u8)]>,
     /// Declarations that reach themselves through specialization. Their ancestor sets are still
-    /// published; the flag is what lets a query report the cycle rather than answer from it.
+    /// published. KerML 7.3.2.3 treats a cycle as shared extent; only an entirely closed cycle
+    /// that does not include `Base::Anything` is a modelling error (`invalid_closed_cycle`).
     pub(crate) cyclic: Box<[bool]>,
+    /// Graph-theoretic cycles that never escape their strongly connected component and do not
+    /// include `Base::Anything`. These are the only specialization cycles the diagnostic and
+    /// conformance obstacle report.
+    pub(crate) invalid_closed_cycle: Box<[bool]>,
 }
 
 impl SpecializationClosure {
@@ -211,6 +225,11 @@ impl SpecializationClosure {
             merge_scopes(row);
         }
         let closure = saturate(&direct, count)?;
+        let anything = match resolve_library_specialization_anchor(storage, "Base::Anything") {
+            LibrarySpecializationAnchor::Resolved(id) => Some(id),
+            _ => None,
+        };
+        let invalid_closed_cycle = closed_cycles_without_anything(&direct, &closure, anything)?;
 
         let mut ranges = Vec::with_capacity(count);
         let mut ancestors = Vec::new();
@@ -233,7 +252,20 @@ impl SpecializationClosure {
             ranges: ranges.into_boxed_slice(),
             ancestors: ancestors.into_boxed_slice(),
             cyclic: cyclic.into_boxed_slice(),
+            invalid_closed_cycle,
         })
+    }
+
+    /// Every strict ancestor reached within one canonical specialization scope.
+    pub(crate) fn ancestors_in_scope(
+        &self,
+        declaration: DeclarationId,
+        scope: ScopeBits,
+    ) -> impl Iterator<Item = DeclarationId> + '_ {
+        self.entries(declaration)
+            .iter()
+            .filter(move |(_, scopes)| scopes & scope.bit() != 0)
+            .map(|(ancestor, _)| *ancestor)
     }
 
     /// Every strict ancestor of `declaration` with the scopes that reach it.
@@ -270,6 +302,15 @@ impl SpecializationClosure {
             .unwrap_or(false)
     }
 
+    /// Whether `declaration` is in an entirely closed specialization cycle that does not include
+    /// `Base::Anything`. KerML 7.3.2.3 allows other cycles as shared extent.
+    pub(crate) fn is_invalid_closed_cycle(&self, declaration: DeclarationId) -> bool {
+        self.invalid_closed_cycle
+            .get(declaration.index())
+            .copied()
+            .unwrap_or(false)
+    }
+
     pub(crate) fn entries(&self, declaration: DeclarationId) -> &[(DeclarationId, u8)] {
         let Some(&(start, end)) = self.ranges.get(declaration.index()) else {
             return &[];
@@ -290,6 +331,11 @@ pub(crate) struct TypeIndex {
     /// scopes each edge belongs to. The transitive answer lives in the closure; this is the one
     /// hop a type hierarchy view expands at a time.
     pub(crate) supertypes: Rows<(DeclarationId, u8)>,
+    /// The same direct supertypes in KerML `ownedSpecialization` order (authored edges in
+    /// reference order, then implied ones), deduplicated
+    /// ([`crate::resolve::end_features::ordered_direct_generals`]). The positional derivations
+    /// (`Type::endFeature`, parameter positions) read this order; `supertypes` is identity-ordered.
+    pub(crate) ordered_generals: Box<[Box<[DeclarationId]>]>,
     /// Direct specializers per declaration: the reverse of the direct specialization edges, tagged
     /// with the scopes each edge belongs to.
     ///
@@ -330,10 +376,36 @@ pub(crate) struct TypeIndex {
     /// and the legacy check could only answer the first, which is why it fell silent whenever an
     /// ancestor declared any end at all.
     pub(crate) effective_ends: Box<[u32]>,
+    /// KerML `Type::endFeature` per declaration, each entry keyed by its position.
+    ///
+    /// Derived by [`crate::resolve::end_features::derive_end_features`] over the published direct
+    /// supertypes, visited in `ownedSpecialization` order (`ordered_generals`): the owned ends in authored order, then each direct
+    /// supertype's ends past the owned count (the owned ends redefine those at their positions,
+    /// `checkFeatureEndRedefinition`).
+    pub(crate) end_features: Rows<(u32, OwnedEndFeature)>,
+    /// The resolved `Links::BinaryLink` anchor that `validateAssociationBinarySpecialization` and
+    /// `validateConnectorBinarySpecialization` test conformance against.
+    binary_link: BinaryLinkAnchor,
+    /// `Base::Anything`, which every Type specializes (`checkTypeSpecialization`) whether or not
+    /// that implied edge is in the closure: the root metaclasses' implied specializations are
+    /// deferred.
+    anything: Option<DeclarationId>,
     /// Source-role-verified anchors used together by the exact `Usage::mayTimeVary` derivation.
     /// Keeping the family here makes every consumer use the same anchor identities and settled
     /// specialization closure rather than reinterpreting rendered names or direct edges.
     usage_time_variation_anchors: UsageTimeVariationAnchors,
+    /// Whether each declaration is owned through a VariantMembership (authored, or implied by its
+    /// metaclass as for an enumeration literal): the input of `getExpectedFeaturingTypeOf`.
+    variant_members: Box<[bool]>,
+}
+
+#[derive(Debug)]
+struct BinaryLinkAnchor(LibrarySpecializationAnchor);
+
+impl Default for BinaryLinkAnchor {
+    fn default() -> Self {
+        Self(LibrarySpecializationAnchor::Missing)
+    }
 }
 
 #[derive(Debug)]
@@ -387,6 +459,7 @@ impl TypeIndex {
         let mut direct_featuring = Vec::new();
         let mut chaining = Vec::new();
         let mut supertypes = Vec::new();
+        let mut ordered_edges = Vec::new();
         let mut subtypes = Vec::new();
         let mut edge = |source: DeclarationId,
                         target: DeclarationId,
@@ -394,6 +467,7 @@ impl TypeIndex {
                         provenance: FactProvenance| {
             if let Some(scopes) = edge_scopes(kind) {
                 supertypes.push((source, (target, scopes)));
+                ordered_edges.push((source, target));
                 subtypes.push((target, (source, scopes)));
             }
             if kind == ReferenceKind::FeatureTyping {
@@ -432,6 +506,11 @@ impl TypeIndex {
         let direct_featuring = Rows::build(count, direct_featuring)?;
         let chaining = Rows::build(count, chaining)?;
         let supertypes = Rows::build(count, supertypes)?;
+        let ordered_generals =
+            crate::resolve::end_features::ordered_direct_generals(count, ordered_edges)?
+                .into_iter()
+                .map(Vec::into_boxed_slice)
+                .collect::<Box<[_]>>();
         let subtypes = Rows::build(count, subtypes)?;
 
         // Effective typing walks the feature-specialization chain and collects what each feature
@@ -565,11 +644,15 @@ impl TypeIndex {
                 *slot = true;
             }
         }
+        let variant_members = crate::resolve::usage_composition::variant_member_flags(storage)?;
+        let end_features = derive_end_features(storage, &ordered_generals)?;
 
         Ok(Self {
+            variant_members,
             specialization,
             direct_types,
             supertypes,
+            ordered_generals,
             subtypes,
             effective_types,
             featuring,
@@ -578,6 +661,15 @@ impl TypeIndex {
             set_operands,
             authored_ends: authored_ends.into_boxed_slice(),
             effective_ends: effective_ends.into_boxed_slice(),
+            end_features,
+            anything: match resolve_library_specialization_anchor(storage, "Base::Anything") {
+                LibrarySpecializationAnchor::Resolved(anchor) => Some(anchor),
+                _ => None,
+            },
+            binary_link: BinaryLinkAnchor(resolve_library_specialization_anchor(
+                storage,
+                "Links::BinaryLink",
+            )),
             usage_time_variation_anchors: UsageTimeVariationAnchors {
                 occurrence: resolve_library_specialization_anchor(
                     storage,
@@ -603,26 +695,13 @@ impl TypeIndex {
         storage: &SemanticModelStorage,
         usage: DeclarationId,
     ) -> UsageTimeVariationOutcome {
-        let Some(declaration) = storage.declaration(usage) else {
+        if storage.declaration(usage).is_none() {
             return UsageTimeVariationOutcome::Unresolved;
-        };
-        let Some(owning_type) = declaration.owner.filter(|owner| {
-            storage.declaration(*owner).is_some_and(|owner| {
-                !matches!(
-                    owner.kind,
-                    crate::model::DeclarationKind::Namespace
-                        | crate::model::DeclarationKind::Package
-                        | crate::model::DeclarationKind::LibraryPackage
-                        | crate::model::DeclarationKind::Import
-                        | crate::model::DeclarationKind::Alias
-                )
-            })
-        }) else {
+        }
+        let Some(owning_type) = Self::owning_type(storage, usage) else {
             return UsageTimeVariationOutcome::Resolved(false);
         };
-        match self
-            .specializes_library_anchor(owning_type, &self.usage_time_variation_anchors.occurrence)
-        {
+        match self.specializes_occurrence(owning_type) {
             UsageTimeVariationOutcome::Resolved(true) => {}
             UsageTimeVariationOutcome::Resolved(false) => {
                 return UsageTimeVariationOutcome::Resolved(false)
@@ -663,23 +742,73 @@ impl TypeIndex {
         UsageTimeVariationOutcome::Resolved(true)
     }
 
-    /// The effective SysML `Usage::isReference` fact shared by its own derivation and every
-    /// predicate, such as `mayTimeVary`, that consumes the complementary `isComposite` value.
+    /// KerML `Feature::owningType`: the owner of `feature` when that owner is a Type rather than
+    /// a package-like namespace (a package-owned feature has no owning type).
+    pub(crate) fn owning_type(
+        storage: &SemanticModelStorage,
+        feature: DeclarationId,
+    ) -> Option<DeclarationId> {
+        crate::resolve::usage_composition::owning_type(storage, feature)
+    }
+
+    /// Whether `declaration` is or specializes the source-role-verified `Occurrences::Occurrence`
+    /// anchor, or why that cannot be settled.
+    pub(crate) fn specializes_occurrence(
+        &self,
+        declaration: DeclarationId,
+    ) -> UsageTimeVariationOutcome {
+        self.specializes_library_anchor(declaration, &self.usage_time_variation_anchors.occurrence)
+    }
+
+    /// KerML `Feature::isVariable` for one Feature, or `None` when the declaration is not a
+    /// Feature and the property does not apply.
+    ///
+    /// SysML `Usage::mayTimeVary` redefines `isVariable` as a derived property, so a Usage answers
+    /// through [`Self::usage_may_time_vary`]. Any other (KerML) Feature carries the authored fact:
+    /// `var` sets it, and `const` sets it too because `isConstant implies isVariable`
+    /// (`validateFeatureConstantIsVariable`; the Pilot's `FeatureAdapter.setIsVariableIfConstant`).
+    pub(crate) fn feature_is_variable(
+        &self,
+        storage: &SemanticModelStorage,
+        feature: DeclarationId,
+    ) -> Option<UsageTimeVariationOutcome> {
+        let declaration = storage.declaration(feature)?;
+        if crate::resolve::is_usage_declaration(declaration.kind) {
+            return Some(self.usage_may_time_vary(storage, feature));
+        }
+        if !crate::resolve::is_feature_declaration(declaration.kind) {
+            return None;
+        }
+        let Some(facts) = storage.declaration_facts(feature) else {
+            return Some(UsageTimeVariationOutcome::Unresolved);
+        };
+        Some(UsageTimeVariationOutcome::Resolved(
+            facts.modifiers.var || facts.modifiers.constant,
+        ))
+    }
+
+    /// The effective SysML `Usage::isReference` fact (`not isComposite`) shared by its own
+    /// derivation and every predicate, such as `mayTimeVary`, that consumes the complementary
+    /// `isComposite` value. `None` when `usage` is not a Usage.
+    ///
+    /// A Usage is composite unless one of these makes it referential, exactly as the Pilot sets
+    /// `isComposite`:
+    /// - an authored `ref` prefix;
+    /// - a metaclass that is never composite (`AttributeUsage`, `ReferenceUsage`,
+    ///   `PerformActionUsage`, `SuccessionAsUsage`, `BindingConnectorAsUsage`, and an `event`
+    ///   occurrence, whose constructors clear `isComposite`);
+    /// - SysML 8.3.6.4 `validateUsageIsReferential`, which the Pilot's `UsageAdapter.postProcess`
+    ///   satisfies by construction: a direction, an end feature, or no expected featuring type
+    ///   (`UsageUtil.getExpectedFeaturingTypeOf`: the owning type of a FeatureMembership, or, for
+    ///   a variant of a variation usage, that usage's own expected featuring type);
+    /// - `validatePortUsageIsReference`: a port usage whose expected featuring type is not a port
+    ///   definition or port usage (`PortUsageAdapter.postProcess`).
     pub(crate) fn usage_is_reference(
         &self,
         storage: &SemanticModelStorage,
         usage: DeclarationId,
     ) -> Option<bool> {
-        let declaration = storage.declaration(usage)?;
-        let facts = storage.declaration_facts(usage)?;
-        Some(
-            facts.modifiers.reference
-                || matches!(
-                    declaration.kind,
-                    crate::model::DeclarationKind::ReferenceUsage
-                        | crate::model::DeclarationKind::DefaultReferenceUsage
-                ),
-        )
+        crate::resolve::usage_composition::usage_is_reference(storage, &self.variant_members, usage)
     }
 
     fn specializes_library_anchor(
@@ -758,6 +887,15 @@ impl TypeIndex {
         self.supertypes.row(declaration)
     }
 
+    /// `declaration`'s direct supertypes in `ownedSpecialization` order; see
+    /// [`TypeIndex::ordered_generals`].
+    pub(crate) fn ordered_generals(&self, declaration: DeclarationId) -> &[DeclarationId] {
+        self.ordered_generals
+            .get(declaration.index())
+            .map(|row| &**row)
+            .unwrap_or_default()
+    }
+
     /// Declarations that directly specialize `declaration`, with the scopes of each edge.
     pub(crate) fn subtypes(&self, declaration: DeclarationId) -> &[(DeclarationId, u8)] {
         self.subtypes.row(declaration)
@@ -804,6 +942,64 @@ impl TypeIndex {
             .unwrap_or_default()
     }
 
+    /// KerML `Type::endFeature` of `declaration`: its owned ends in authored order, then the ends
+    /// it inherits unredefined. See [`TypeIndex::end_features`] for the derivation.
+    pub(crate) fn end_features(
+        &self,
+        declaration: DeclarationId,
+    ) -> impl Iterator<Item = OwnedEndFeature> + '_ {
+        self.end_features
+            .row(declaration)
+            .iter()
+            .map(|(_, end)| *end)
+    }
+
+    /// KerML `Feature::type` of `declaration`: its effective types with redundant ones removed.
+    ///
+    /// A type is redundant when another of the feature's types specializes it (the Pilot's
+    /// `FeatureAdapter.removeRedundantTypes`), so a feature typed `Thing` that also inherits
+    /// `Anything` along a library subsetting has the one type `Thing`. Types that specialize each
+    /// other through a cycle are both kept: neither is the more specific. Identity order.
+    pub(crate) fn feature_types(&self, declaration: DeclarationId) -> Vec<DeclarationId> {
+        let mut types = self
+            .effective_types(declaration)
+            .iter()
+            .map(|(target, _)| *target)
+            .collect::<Vec<_>>();
+        types.sort_unstable();
+        types.dedup();
+        let redundant = |general: DeclarationId| {
+            types.iter().any(|specific| {
+                *specific != general && Some(general) == self.anything
+                    || *specific != general
+                        && self.specialization.reaches(
+                            *specific,
+                            general,
+                            ScopeBits::AnySpecialization,
+                        )
+                        && !self.specialization.reaches(
+                            general,
+                            *specific,
+                            ScopeBits::AnySpecialization,
+                        )
+            })
+        };
+        types
+            .iter()
+            .copied()
+            .filter(|general| !redundant(*general))
+            .collect()
+    }
+
+    /// Whether `declaration` is or specializes `Links::BinaryLink`, or `None` when this
+    /// publication has no single resolved anchor to answer against.
+    pub(crate) fn specializes_binary_link(&self, declaration: DeclarationId) -> Option<bool> {
+        match self.specializes_library_anchor(declaration, &self.binary_link.0) {
+            UsageTimeVariationOutcome::Resolved(conforms) => Some(conforms),
+            UsageTimeVariationOutcome::Unresolved | UsageTimeVariationOutcome::Ambiguous => None,
+        }
+    }
+
     /// How many positional ends `declaration` has, counting those it inherits.
     pub(crate) fn effective_ends(&self, declaration: DeclarationId) -> u32 {
         self.effective_ends
@@ -811,6 +1007,36 @@ impl TypeIndex {
             .copied()
             .unwrap_or_default()
     }
+}
+
+/// Derives every declaration's KerML `Type::endFeature` row; see [`TypeIndex::end_features`].
+fn derive_end_features(
+    storage: &SemanticModelStorage,
+    ordered_generals: &[Box<[DeclarationId]>],
+) -> Result<Rows<(u32, OwnedEndFeature)>, ResolutionError> {
+    let count = storage.declarations.len();
+    let ends = crate::resolve::end_features::derive_end_features(
+        count,
+        &storage.owned_end_features,
+        |declaration| {
+            ordered_generals
+                .get(declaration.index())
+                .map(|row| &**row)
+                .unwrap_or_default()
+                .iter()
+                .copied()
+        },
+    )?;
+    let mut pairs = Vec::new();
+    for (index, row) in ends.into_iter().enumerate() {
+        let declaration =
+            DeclarationId::from_index(index).map_err(|_| ResolutionError::Capacity)?;
+        for (position, end) in row.into_iter().enumerate() {
+            let position = u32::try_from(position).map_err(|_| ResolutionError::Capacity)?;
+            pairs.push((declaration, (position, end)));
+        }
+    }
+    Rows::build(count, pairs)
 }
 
 /// The set operation one reference kind states, or `None` if it states none.
@@ -829,6 +1055,52 @@ pub(crate) fn scopes_of(bits: u8) -> impl Iterator<Item = ScopeBits> {
     ScopeBits::ALL
         .into_iter()
         .filter(move |scope| bits & scope.bit() != 0)
+}
+
+/// Marks each declaration whose strongly connected component is entirely closed and does not
+/// contain `Base::Anything`.
+///
+/// KerML 7.3.2.3: specialization cycles mean shared extent; "no cycle of valid types can be
+/// entirely closed, unless it includes the type Anything."
+fn closed_cycles_without_anything(
+    direct: &[Vec<(DeclarationId, u8)>],
+    closure: &[Vec<(DeclarationId, u8)>],
+    anything: Option<DeclarationId>,
+) -> Result<Box<[bool]>, ResolutionError> {
+    let count = closure.len();
+    let mut invalid = vec![false; count];
+    for index in 0..count {
+        let id = DeclarationId::from_index(index).map_err(|_| ResolutionError::Capacity)?;
+        if !closure[index].iter().any(|(ancestor, _)| *ancestor == id) {
+            continue;
+        }
+        let mut scc = vec![id];
+        for (ancestor, _) in &closure[index] {
+            if *ancestor == id {
+                continue;
+            }
+            if closure[ancestor.index()]
+                .iter()
+                .any(|(back, _)| *back == id)
+            {
+                scc.push(*ancestor);
+            }
+        }
+        scc.sort_unstable();
+        scc.dedup();
+        if anything.is_some_and(|anything| scc.binary_search(&anything).is_ok()) {
+            continue;
+        }
+        let escaped = scc.iter().any(|member| {
+            direct[member.index()]
+                .iter()
+                .any(|(target, _)| scc.binary_search(target).is_err())
+        });
+        if !escaped {
+            invalid[index] = true;
+        }
+    }
+    Ok(invalid.into_boxed_slice())
 }
 
 /// Saturates the direct edges into their transitive closure.
@@ -853,12 +1125,23 @@ pub(crate) fn saturate(
     count: usize,
 ) -> Result<Vec<Vec<(DeclarationId, u8)>>, ResolutionError> {
     let mut closure = direct.to_vec();
-    let mut next: Vec<Vec<(DeclarationId, u8)>> = vec![Vec::new(); count];
+    // Each pass is a Jacobi step `closure'[i] = direct[i] + closure[parents of i]`. A row whose
+    // parents' rows did not change in the previous pass would recompute to exactly its current
+    // value, so only rows with a changed parent are recomputed; updates are committed after the
+    // pass, keeping every pass identical to the full step and the result the same fixed point.
+    let mut changed = vec![true; count];
+    let mut row = Vec::new();
+    let mut updates: Vec<(usize, Vec<(DeclarationId, u8)>)> = Vec::new();
     let pass_limit = count.checked_add(1).ok_or(ResolutionError::Capacity)?;
     for _ in 0..pass_limit {
-        let mut changed = false;
+        updates.clear();
         for index in 0..count {
-            let row = &mut next[index];
+            if !direct[index]
+                .iter()
+                .any(|(parent, _)| changed[parent.index()])
+            {
+                continue;
+            }
             row.clear();
             for (parent, parent_scopes) in &direct[index] {
                 row.push((*parent, *parent_scopes));
@@ -869,14 +1152,18 @@ pub(crate) fn saturate(
                     }
                 }
             }
-            merge_scopes(row);
-            if *row != closure[index] {
-                changed = true;
+            merge_scopes(&mut row);
+            if row != closure[index] {
+                updates.push((index, row.clone()));
             }
         }
-        std::mem::swap(&mut closure, &mut next);
-        if !changed {
+        changed.fill(false);
+        if updates.is_empty() {
             break;
+        }
+        for (index, updated) in updates.drain(..) {
+            changed[index] = true;
+            closure[index] = updated;
         }
     }
     Ok(closure)
@@ -896,4 +1183,33 @@ pub(crate) fn merge_scopes(row: &mut Vec<(DeclarationId, u8)>) {
         written += 1;
     }
     row.truncate(written);
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{edge_scopes, saturate, ScopeBits};
+    use crate::model::{DeclarationId, ReferenceKind};
+
+    #[test]
+    fn transitive_redefinitions_preserve_scope_across_a_competing_typing_path() {
+        let id = |index| DeclarationId::from_index(index).unwrap();
+        let redefinition = edge_scopes(ReferenceKind::Redefinition).unwrap();
+        let typing = edge_scopes(ReferenceKind::FeatureTyping).unwrap();
+        let direct = vec![
+            vec![(id(1), redefinition), (id(5), typing)],
+            vec![(id(2), redefinition)],
+            vec![(id(3), redefinition)],
+            vec![(id(4), redefinition)],
+            vec![],
+            vec![(id(4), typing)],
+        ];
+        let closure = saturate(&direct, direct.len()).unwrap();
+        let redefined: Vec<_> = closure[0]
+            .iter()
+            .filter(|(_, scopes)| scopes & ScopeBits::Redefinition.bit() != 0)
+            .map(|(ancestor, _)| *ancestor)
+            .collect();
+        assert_eq!(redefined, vec![id(1), id(2), id(3), id(4)]);
+        assert_eq!(closure[0].last(), Some(&(id(5), typing)));
+    }
 }

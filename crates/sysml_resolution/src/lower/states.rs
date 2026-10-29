@@ -1,5 +1,6 @@
 //! Phase 2 lowering — state machines: state definitions and usages, transitions, entry/do/exit actions.
 
+use crate::lower::facts::definition_prefix_node_modifiers;
 use crate::lower::facts::direction_fact;
 use crate::lower::facts::multiplicity_facts;
 use crate::lower::facts::DeclarationFacts;
@@ -17,11 +18,14 @@ use crate::model::DocumentIdx;
 use crate::model::MembershipKind;
 use crate::model::ReferenceKind;
 use crate::model::Visibility;
+use crate::MembershipRole;
+use crate::StateSubactionKind;
 use sysml_v2_parser::ast::{
-    DoAction, EntryAction, ExhibitState as ParserExhibitState, ExitAction, Expression, FinalState,
-    MembershipKind as ParserMembershipKind, Node, QualifiedReferenceId, Span, StateBodyModifier,
-    StateDef, StateDefBody, StateDefBodyElement, StateUsage as ParserStateUsage, ThenStmt,
-    Transition, TransitionAccept, TransitionEffect,
+    ActionDefBody, DoAction, EntryAction, ExhibitState as ParserExhibitState, ExitAction,
+    Expression, FinalState, MembershipKind as ParserMembershipKind, Node, PerformActionTarget,
+    QualifiedReferenceId, Span, StateActionUsage, StateBodyModifier, StateDef, StateDefBody,
+    StateDefBodyElement, StateUsage as ParserStateUsage, ThenStmt, Transition, TransitionAccept,
+    TransitionEffect,
 };
 
 /// `StateDefinition::isParallel` / `StateUsage::isParallel` from the authored body modifier.
@@ -61,6 +65,8 @@ impl SemanticModelBuilder {
     ) -> Result<(), ConstructionError> {
         let name = self.intern_declaration_name(document, node.value.identification.name)?;
         let short_name = self.intern_short_name(document, node.identification.short_name)?;
+        let (is_abstract, variation) =
+            definition_prefix_node_modifiers(node.value.definition_prefix.as_ref());
         let declaration = self.push_typed_declaration(
             document,
             owner,
@@ -70,6 +76,8 @@ impl SemanticModelBuilder {
             DeclarationFacts {
                 short_name,
                 modifiers: DeclarationModifiers {
+                    is_abstract,
+                    variation,
                     individual: node.value.is_individual,
                     parallel: state_body_is_parallel(node.value.body_modifier.as_ref()),
                     ..DeclarationModifiers::default()
@@ -113,6 +121,12 @@ impl SemanticModelBuilder {
         };
         for element in elements {
             match &element.value {
+                StateDefBodyElement::ExtendedDefinition(node) => {
+                    self.lower_extended_definition(document, Some(owner), node)?;
+                }
+                StateDefBodyElement::ExtendedUsage(node) => {
+                    self.lower_extended_usage(document, Some(owner), node)?;
+                }
                 StateDefBodyElement::Error(error) => {
                     self.push_recovery(document, error.span);
                 }
@@ -181,13 +195,9 @@ impl SemanticModelBuilder {
                 StateDefBodyElement::ActionUsage(node) => {
                     self.lower_action_usage(document, Some(owner), node)?;
                 }
-                StateDefBodyElement::AssertConstraint(node) => self
-                    .lower_assert_constraint_member(
-                        document,
-                        owner,
-                        UnsupportedFamily::StateDefinitionMember,
-                        node,
-                    )?,
+                StateDefBodyElement::AssertConstraint(node) => {
+                    self.lower_assert_constraint_member(document, owner, node)?
+                }
                 StateDefBodyElement::SuccessionUsage(node) => self.lower_succession_usage(
                     document,
                     owner,
@@ -199,143 +209,269 @@ impl SemanticModelBuilder {
                     UnsupportedFamily::StateDefinitionMember,
                     element.span,
                 ),
+                StateDefBodyElement::VariantUsage(node) => {
+                    self.lower_variant_usage(
+                        document,
+                        owner,
+                        UnsupportedFamily::StateDefinitionMember,
+                        node,
+                    )?;
+                }
             }
         }
         Ok(())
     }
 
-    /// Lowers a state def/usage's `entry action <path> ...;` body element (BNF `EntryAction`) as
-    /// an anonymous `DeclarationKind::EntryActionBinding` feature owned by the enclosing state
-    /// `owner` declaration, mirroring `lower_first_stmt`'s nested-declaration shape so the bound
-    /// action reference resolves against the state's own scope (where sibling actions are
-    /// declared), not the state's enclosing scope. `EntryAction.action_reference` is already a
-    /// structured `QualifiedReferenceId` (not a flattened string), so it resolves through the
-    /// same shared lexical lookup as `AliasBinding`/`Succession`. A plain `entry` with no bound
-    /// action (`action_reference: None`) has no reference to lower: a bare `entry;`/empty `entry
-    /// { }` (no owned members) is a legal no-op marker with genuinely nothing to represent, so it
-    /// is silently recognized rather than reported (pervasive in the training/validation corpus,
-    /// e.g. `24_state_actions.md`'s `entry; then off;`); an inline `entry { <members> }` body with
-    /// actual owned content has no representation in this typed AST shape (no field carries it)
-    /// and stays an explicit unsupported diagnostic.
     pub(crate) fn lower_state_entry_action(
         &mut self,
         document: DocumentIdx,
         owner: DeclarationId,
         node: &Node<EntryAction>,
     ) -> Result<(), ConstructionError> {
-        let Some(target) = node.value.action_reference else {
-            if state_action_body_has_content(&node.value.body) {
-                self.push_unsupported(
-                    document,
-                    UnsupportedFamily::StateDefinitionMember,
-                    node.span,
-                );
-            }
-            return Ok(());
-        };
-        let declaration = self.push_typed_declaration(
+        self.lower_state_subaction(
             document,
-            Some(owner),
-            DeclarationKind::EntryActionBinding,
-            None,
+            owner,
+            StateSubactionKind::Entry,
+            &node.value.action,
+            &node.value.body,
             node.span,
-            // A synthesized scope for the state's entry-action binding reference.
-            DeclarationFacts::none(),
-        )?;
-        self.push_membership(
-            declaration,
-            MembershipKind::Feature,
-            Visibility::Default,
-            node.span,
-        )?;
-        self.push_action_binding_reference(
-            document,
-            declaration,
-            ReferenceKind::EntryActionBinding,
-            target,
         )
     }
 
-    /// Same as `lower_state_entry_action`, for a `do action <path> ...;` body element
-    /// (`DoAction.action_reference`).
     pub(crate) fn lower_state_do_action(
         &mut self,
         document: DocumentIdx,
         owner: DeclarationId,
         node: &Node<DoAction>,
     ) -> Result<(), ConstructionError> {
-        let Some(target) = node.value.action_reference else {
-            if state_action_body_has_content(&node.value.body) {
-                self.push_unsupported(
-                    document,
-                    UnsupportedFamily::StateDefinitionMember,
-                    node.span,
-                );
-            }
-            return Ok(());
-        };
-        let declaration = self.push_typed_declaration(
+        self.lower_state_subaction(
             document,
-            Some(owner),
-            DeclarationKind::DoActionBinding,
-            None,
+            owner,
+            StateSubactionKind::Do,
+            &node.value.action,
+            &node.value.body,
             node.span,
-            // A synthesized scope for the state's do-action binding reference.
-            DeclarationFacts::none(),
-        )?;
-        self.push_membership(
-            declaration,
-            MembershipKind::Feature,
-            Visibility::Default,
-            node.span,
-        )?;
-        self.push_action_binding_reference(
-            document,
-            declaration,
-            ReferenceKind::DoActionBinding,
-            target,
         )
     }
 
-    /// Same as `lower_state_entry_action`, for an `exit action <path> ...;` body element
-    /// (`ExitAction.action_reference`).
     pub(crate) fn lower_state_exit_action(
         &mut self,
         document: DocumentIdx,
         owner: DeclarationId,
         node: &Node<ExitAction>,
     ) -> Result<(), ConstructionError> {
-        let Some(target) = node.value.action_reference else {
-            if state_action_body_has_content(&node.value.body) {
-                self.push_unsupported(
-                    document,
-                    UnsupportedFamily::StateDefinitionMember,
-                    node.span,
-                );
-            }
-            return Ok(());
+        self.lower_state_subaction(
+            document,
+            owner,
+            StateSubactionKind::Exit,
+            &node.value.action,
+            &node.value.body,
+            node.span,
+        )
+    }
+
+    /// Lowers the StateActionUsage of one `entry`/`do`/`exit` member (SysML BNF
+    /// `StateActionUsage`) as the member of a StateSubactionMembership of `kind`, owned by the
+    /// enclosing state `owner`. State actions own the same complete declaration, value and action
+    /// body as perform members:
+    ///
+    /// - the perform forms (`entry action entryAction :>> 'entry';`, `do myAction;`) publish the
+    ///   `Entry`/`Do`/`ExitActionBinding` declaration and lower the declaration's clauses, or bind
+    ///   the referenced action through the state's own scope;
+    /// - the effect forms (`entry assign ...;`, `do send ...;`, `do action a accept S;`) publish
+    ///   the AssignmentActionUsage, SendActionUsage or AcceptActionUsage itself with its operands;
+    /// - a bare `entry;` is the `EmptyActionUsage` alternative, an anonymous ActionUsage.
+    ///
+    /// Every form publishes its occupant of the StateSubactionMembership, which
+    /// `checkActionUsageStateActionRedefinition` enumerates.
+    fn lower_state_subaction(
+        &mut self,
+        document: DocumentIdx,
+        owner: DeclarationId,
+        kind: StateSubactionKind,
+        action: &StateActionUsage,
+        body: &ActionDefBody,
+        span: Span,
+    ) -> Result<(), ConstructionError> {
+        let binding_kind = match kind {
+            StateSubactionKind::Entry => DeclarationKind::EntryActionBinding,
+            StateSubactionKind::Do => DeclarationKind::DoActionBinding,
+            StateSubactionKind::Exit => DeclarationKind::ExitActionBinding,
+        };
+        let usage = match action {
+            StateActionUsage::Empty => None,
+            StateActionUsage::Perform {
+                target: PerformActionTarget::Action(usage),
+                ..
+            } => Some(usage.as_ref()),
+            StateActionUsage::Perform {
+                target: PerformActionTarget::Reference { specialization, .. },
+                ..
+            } => specialization.as_deref(),
+            StateActionUsage::Effect { declaration, .. } => declaration
+                .as_ref()
+                .and_then(|node| node.value.declaration.as_ref()),
+        };
+        let name = self.intern_declaration_name(
+            document,
+            usage.and_then(|node| node.value.identification.name),
+        )?;
+        let short_name = self.intern_short_name(
+            document,
+            usage.and_then(|node| node.value.identification.short_name),
+        )?;
+        let declaration_kind = match action {
+            StateActionUsage::Effect { effect, .. } => match effect.as_ref() {
+                TransitionEffect::Accept { .. } => DeclarationKind::AcceptActionUsage,
+                TransitionEffect::Send { .. } => DeclarationKind::SendActionUsage,
+                TransitionEffect::Assign { .. } => DeclarationKind::Assign,
+                TransitionEffect::Perform { .. } => DeclarationKind::PerformActionUsage,
+                TransitionEffect::Expression(_) => DeclarationKind::ActionUsage,
+            },
+            _ => binding_kind,
         };
         let declaration = self.push_typed_declaration(
             document,
             Some(owner),
-            DeclarationKind::ExitActionBinding,
-            None,
-            node.span,
-            // A synthesized scope for the state's exit-action binding reference.
-            DeclarationFacts::none(),
+            declaration_kind,
+            name,
+            span,
+            DeclarationFacts {
+                short_name,
+                modifiers: DeclarationModifiers {
+                    ordered: usage
+                        .is_some_and(|node| node.value.multiplicity_modifiers.is_ordered()),
+                    nonunique: usage
+                        .is_some_and(|node| !node.value.multiplicity_modifiers.is_unique()),
+                    ..DeclarationModifiers::default()
+                },
+                multiplicity: multiplicity_facts(
+                    usage.and_then(|node| node.value.multiplicity.as_ref()),
+                ),
+                is_trigger_action: (declaration_kind == DeclarationKind::AcceptActionUsage)
+                    .then_some(false),
+                ..DeclarationFacts::none()
+            },
         )?;
-        self.push_membership(
+        self.push_role_membership(
             declaration,
             MembershipKind::Feature,
             Visibility::Default,
-            node.span,
+            MembershipRole::StateSubaction(kind),
+            span,
         )?;
-        self.push_action_binding_reference(
-            document,
-            declaration,
-            ReferenceKind::ExitActionBinding,
-            target,
-        )
+        match action {
+            StateActionUsage::Empty => {}
+            StateActionUsage::Perform { target, value } => {
+                let reference_kind = match kind {
+                    StateSubactionKind::Entry => ReferenceKind::EntryActionBinding,
+                    StateSubactionKind::Do => ReferenceKind::DoActionBinding,
+                    StateSubactionKind::Exit => ReferenceKind::ExitActionBinding,
+                };
+                self.lower_perform_target(document, declaration, target, reference_kind)?;
+                self.lower_value_assignment(
+                    document,
+                    declaration,
+                    UnsupportedFamily::StateDefinitionMember,
+                    value.as_deref(),
+                )?;
+            }
+            StateActionUsage::Effect { effect, .. } => {
+                if let Some(usage) = usage {
+                    self.lower_usage_declaration_clauses(
+                        document,
+                        declaration,
+                        &usage.value,
+                        false,
+                        None,
+                    )?;
+                }
+                self.lower_state_action_effect(document, declaration, effect)?;
+            }
+        }
+        self.lower_action_def_body(document, declaration, body)
+    }
+
+    fn lower_state_action_effect(
+        &mut self,
+        document: DocumentIdx,
+        declaration: DeclarationId,
+        effect: &TransitionEffect,
+    ) -> Result<(), ConstructionError> {
+        let family = UnsupportedFamily::StateDefinitionMember;
+        match effect {
+            TransitionEffect::Accept {
+                payload,
+                type_name,
+                via,
+                body,
+            } => {
+                self.lower_payload_type(document, declaration, *type_name)?;
+                if type_name.is_none() {
+                    self.lower_accept_payload_expression(document, declaration, family, payload)?;
+                }
+                if let Some(via) = via {
+                    self.lower_satisfy_operand(
+                        document,
+                        declaration,
+                        family,
+                        ReferenceKind::AcceptVia,
+                        via,
+                    )?;
+                }
+                if let Some(body) = body {
+                    self.lower_action_def_body(document, declaration, body)?;
+                }
+            }
+            TransitionEffect::Send {
+                payload,
+                type_name,
+                via,
+                to,
+                body,
+            } => {
+                self.lower_payload_type(document, declaration, *type_name)?;
+                if type_name.is_none() {
+                    self.lower_constraint_expression(document, declaration, family, payload)?;
+                }
+                if let Some(via) = via {
+                    self.lower_satisfy_operand(
+                        document,
+                        declaration,
+                        family,
+                        ReferenceKind::AcceptVia,
+                        via,
+                    )?;
+                }
+                if let Some(to) = to {
+                    self.lower_satisfy_operand(
+                        document,
+                        declaration,
+                        family,
+                        ReferenceKind::SendTarget,
+                        to,
+                    )?;
+                }
+                if let Some(body) = body {
+                    self.lower_action_def_body(document, declaration, body)?;
+                }
+            }
+            TransitionEffect::Assign { lhs, rhs, body } => {
+                self.lower_assignment_operands(document, declaration, family, lhs, rhs)?;
+                if let Some(body) = body {
+                    self.lower_action_def_body(document, declaration, body)?;
+                }
+            }
+            TransitionEffect::Perform { body, .. } => {
+                if let Some(body) = body {
+                    self.lower_action_def_body(document, declaration, body)?;
+                }
+            }
+            TransitionEffect::Expression(expression) => {
+                self.lower_calc_expression(document, declaration, family, expression)?;
+            }
+        }
+        Ok(())
     }
 
     /// Lowers a state def/usage's `then <target>;` initial-state body element (BNF `ThenStmt`,
@@ -449,6 +585,7 @@ impl SemanticModelBuilder {
         node: &Node<Transition>,
     ) -> Result<(), ConstructionError> {
         let name = self.intern_declaration_name(document, node.value.name)?;
+        let short_name = self.intern_short_name(document, node.value.short_name)?;
         let declaration = self.push_typed_declaration(
             document,
             Some(owner),
@@ -457,7 +594,10 @@ impl SemanticModelBuilder {
             node.span,
             // `ast::Transition` carries no modifier, multiplicity, direction, or short name; its
             // source/target/trigger/guard/effect facts are lowered as references.
-            DeclarationFacts::none(),
+            DeclarationFacts {
+                short_name,
+                ..DeclarationFacts::none()
+            },
         )?;
         self.push_membership(
             declaration,
@@ -480,7 +620,14 @@ impl SemanticModelBuilder {
             &node.value.target,
         )?;
         self.lower_transition_succession(document, declaration, node)?;
+        self.lower_transition_source_parameter(document, declaration, node.span)?;
+        self.lower_transition_link(document, declaration, node.span)?;
         if let Some(guard) = &node.value.guard {
+            // The guard as written is what a state-transition view prints in its label; the
+            // expression below is what evaluation uses.
+            self.declaration_facts[declaration.index()].succession_guard = Some(
+                crate::lower::facts::SuccessionGuard::Condition(self.guard_text(document, guard)),
+            );
             let guard_expression = self.push_typed_declaration(
                 document,
                 Some(declaration),
@@ -517,6 +664,22 @@ impl SemanticModelBuilder {
                 self.lower_transition_trigger_action(document, declaration, node.span, accept)
             })
             .transpose()?;
+        // `TransitionUsage` authors an `EmptyParameterMember` payload parameter before every
+        // `TriggerActionMember`, and the trigger's `AcceptParameterPart` always owns a payload
+        // parameter, whatever the trigger form; only the `accept x : T` form names and types them.
+        if let Some(trigger_action) = trigger_action {
+            let clause = match &node.value.accept {
+                Some(TransitionAccept::Payload(clause, _)) => Some(clause),
+                _ => None,
+            };
+            self.lower_transition_payload_chain(
+                document,
+                declaration,
+                trigger_action,
+                clause,
+                node.span,
+            )?;
+        }
         match &node.value.accept {
             None => {}
             Some(TransitionAccept::Shorthand(expression, _via)) => {
@@ -527,31 +690,23 @@ impl SemanticModelBuilder {
                     expression,
                 )?;
             }
-            Some(TransitionAccept::TimeTrigger(_kind, expression)) => {
+            Some(TransitionAccept::TimeTrigger(kind, expression))
+            | Some(TransitionAccept::NamedTimeTrigger(_, kind, expression)) => {
                 // Mirrors `lower_then_accept`'s `TimeTrigger` arm: the `at`/`when`/`after`
-                // trigger expression (e.g. `accept at vehicle.maintenanceTime`) is lowered
-                // through the general constraint-expression dispatch (`FeatureRef`/
-                // `MemberAccess`/`Invocation`/`Constructor`), the same as a `Transition`'s
-                // `guard` clause, rather than `lower_transition_end`'s narrower reference-only
-                // dispatch (which `Shorthand` above uses for a bare accepted-signal name). The
-                // `TriggerKind` (`at`/`when`/`after`) distinction is not yet represented.
-                self.lower_constraint_expression(
+                // trigger (e.g. `accept at vehicle.maintenanceTime`) is its own
+                // TriggerInvocationExpression, owned by the transition's trigger action.
+                self.lower_trigger_invocation(
                     document,
-                    declaration,
+                    trigger_action.expect("an authored accept always creates its trigger action"),
                     UnsupportedFamily::StateDefinitionMember,
+                    *kind,
                     expression,
-                )?;
-            }
-            Some(TransitionAccept::Payload(clause, via)) => {
-                let trigger_action =
-                    trigger_action.expect("an authored accept always creates its trigger action");
-                self.lower_transition_payload_chain(
-                    document,
-                    declaration,
-                    trigger_action,
-                    clause,
                     node.span,
                 )?;
+            }
+            Some(TransitionAccept::Payload(_clause, via)) => {
+                let trigger_action =
+                    trigger_action.expect("an authored accept always creates its trigger action");
                 if let Some(via) = via {
                     self.lower_satisfy_operand(
                         document,
@@ -656,6 +811,65 @@ impl SemanticModelBuilder {
         Ok(succession)
     }
 
+    /// Publishes a TransitionUsage's first input parameter.
+    ///
+    /// The transition grammar always authors an `EmptyParameterMember` after the source member
+    /// (and before the payload parameter of an accepting transition), so every TransitionUsage
+    /// owns this anonymous `in` parameter; `checkTransitionUsageSourceBindingConnector` binds it
+    /// to the transition's `source`.
+    fn lower_transition_source_parameter(
+        &mut self,
+        document: DocumentIdx,
+        transition: DeclarationId,
+        span: Span,
+    ) -> Result<DeclarationId, ConstructionError> {
+        let parameter = self.push_typed_declaration(
+            document,
+            Some(transition),
+            DeclarationKind::ParameterUsage,
+            None,
+            span,
+            DeclarationFacts {
+                direction: Some(ParameterDirection::In),
+                is_transition_source_parameter: true,
+                ..DeclarationFacts::none()
+            },
+        )?;
+        self.push_membership(
+            parameter,
+            MembershipKind::Feature,
+            Visibility::Default,
+            span,
+        )?;
+        Ok(parameter)
+    }
+
+    /// Publishes a TransitionUsage's `transitionLink` feature.
+    ///
+    /// Every TransitionUsage owns a succession, so `TransitionUsageAdapter.
+    /// computeTransitionLinkConnectors` adds this anonymous ReferenceUsage to each one;
+    /// `checkTransitionUsageSuccessionBindingConnector` binds it to that succession.
+    fn lower_transition_link(
+        &mut self,
+        document: DocumentIdx,
+        transition: DeclarationId,
+        span: Span,
+    ) -> Result<DeclarationId, ConstructionError> {
+        let link = self.push_typed_declaration(
+            document,
+            Some(transition),
+            DeclarationKind::ReferenceUsage,
+            None,
+            span,
+            DeclarationFacts {
+                is_transition_link: true,
+                ..DeclarationFacts::none()
+            },
+        )?;
+        self.push_membership(link, MembershipKind::Feature, Visibility::Default, span)?;
+        Ok(link)
+    }
+
     /// Publishes the `AcceptActionUsage` owned through a transition's typed trigger membership.
     ///
     /// The parser represents this grammar branch as `TransitionAccept` on the transition rather
@@ -673,13 +887,23 @@ impl SemanticModelBuilder {
         let (has_payload, has_receiver) = match accept {
             TransitionAccept::Payload(_, via) => (true, via.is_some()),
             TransitionAccept::Shorthand(_, via) => (false, via.is_some()),
-            TransitionAccept::TimeTrigger(_, _) => (false, false),
+            TransitionAccept::TimeTrigger(_, _) | TransitionAccept::NamedTimeTrigger(_, _, _) => {
+                (false, false)
+            }
+        };
+        let name = match accept {
+            TransitionAccept::NamedTimeTrigger(name, _, _) => {
+                self.intern_declaration_name(document, Some(*name))?
+            }
+            TransitionAccept::TimeTrigger(_, _)
+            | TransitionAccept::Shorthand(_, _)
+            | TransitionAccept::Payload(_, _) => super::facts::DeclaredName::Absent,
         };
         let declaration = self.push_typed_declaration(
             document,
             Some(transition),
             DeclarationKind::AcceptActionUsage,
-            None,
+            name,
             span,
             DeclarationFacts {
                 modifiers: DeclarationModifiers {
@@ -718,10 +942,21 @@ impl SemanticModelBuilder {
                 DeclarationKind::PerformActionUsage,
                 self.intern_declaration_name(document, *name)?,
             ),
-            TransitionEffect::Accept { .. } => (DeclarationKind::AcceptActionUsage, None),
-            TransitionEffect::Send { .. } => (DeclarationKind::SendActionUsage, None),
-            TransitionEffect::Assign { .. } => (DeclarationKind::Assign, None),
-            TransitionEffect::Expression(_) => (DeclarationKind::ActionUsage, None),
+            TransitionEffect::Accept { .. } => (
+                DeclarationKind::AcceptActionUsage,
+                super::facts::DeclaredName::Absent,
+            ),
+            TransitionEffect::Send { .. } => (
+                DeclarationKind::SendActionUsage,
+                super::facts::DeclaredName::Absent,
+            ),
+            TransitionEffect::Assign { .. } => {
+                (DeclarationKind::Assign, super::facts::DeclaredName::Absent)
+            }
+            TransitionEffect::Expression(_) => (
+                DeclarationKind::ActionUsage,
+                super::facts::DeclaredName::Absent,
+            ),
         };
         let action = self.push_typed_declaration(
             document,
@@ -743,9 +978,10 @@ impl SemanticModelBuilder {
         Ok(action)
     }
 
-    /// Lowers the two distinct parameters represented by `accept signal : Signal` on a
-    /// TransitionUsage: the trigger AcceptActionUsage's payload parameter and the transition's
-    /// second input parameter. Explicit role facts let resolution publish
+    /// Lowers the two distinct parameters every triggered TransitionUsage owns: the trigger
+    /// AcceptActionUsage's payload parameter and the transition's second input parameter
+    /// (`accept signal : Signal` names and types them; `accept when c`, `accept at t` and
+    /// `accept S` leave them anonymous and untyped). Explicit role facts let resolution publish
     /// `subsetsChain(triggerAction, triggerPayloadParameter())` without rediscovering either
     /// endpoint from syntax, names, or child order.
     fn lower_transition_payload_chain(
@@ -753,7 +989,7 @@ impl SemanticModelBuilder {
         document: DocumentIdx,
         transition: DeclarationId,
         trigger_action: DeclarationId,
-        clause: &sysml_v2_parser::ast::PayloadClause,
+        clause: Option<&sysml_v2_parser::ast::PayloadClause>,
         span: Span,
     ) -> Result<(), ConstructionError> {
         let trigger_payload_parameter = self.push_typed_declaration(
@@ -774,7 +1010,7 @@ impl SemanticModelBuilder {
             Visibility::Default,
             span,
         )?;
-        if let Some(type_name) = clause.type_name {
+        if let Some(type_name) = clause.and_then(|clause| clause.type_name) {
             let type_span = self.documents[document.index()]
                 .parsed
                 .qualified_reference(type_name)
@@ -795,7 +1031,7 @@ impl SemanticModelBuilder {
             })?;
         }
 
-        let name = self.intern_declaration_name(document, Some(clause.name))?;
+        let name = self.intern_declaration_name(document, clause.map(|clause| clause.name))?;
         let transition_payload_parameter = self.push_typed_declaration(
             document,
             Some(transition),
@@ -883,6 +1119,7 @@ impl SemanticModelBuilder {
         node: &Node<ParserStateUsage>,
     ) -> Result<(), ConstructionError> {
         let name = self.intern_declaration_name(document, node.value.name)?;
+        let short_name = self.intern_short_name(document, node.value.short_name)?;
         let declaration = self.push_typed_declaration(
             document,
             owner,
@@ -890,8 +1127,10 @@ impl SemanticModelBuilder {
             name,
             node.span,
             DeclarationFacts {
+                short_name,
                 modifiers: DeclarationModifiers {
                     is_abstract: node.value.is_abstract,
+                    variation: node.value.is_variation,
                     individual: node.value.is_individual,
                     derived: node.value.is_derived,
                     reference: node.value.is_reference,
@@ -929,10 +1168,12 @@ impl SemanticModelBuilder {
         self.lower_state_def_body(document, declaration, &node.value.body)
     }
 
-    /// Lowers the declaration-shaped `exhibit state name : Type` form using the parser's typed
-    /// state-usage facts. The reference-only `exhibit qualified::state` form denotes a distinct
-    /// exhibit relationship which this publication does not yet own, so it remains explicitly
-    /// unsupported rather than being misrepresented as feature typing.
+    /// Lowers an `exhibit` member (BNF `ExhibitStateUsage`) as an ExhibitStateUsage: the
+    /// declared `exhibit state name : Type` form with its typed state-usage facts, or the
+    /// `exhibit <path>;` form, whose exhibited state is the `OwnedReferenceSubsetting`
+    /// alternative (SysML BNF `ExhibitStateUsage`, as `perform <path>;` is for a
+    /// PerformActionUsage) and so a `::>` reference-subsetting target --
+    /// the reference `validateExhibitStateUsageReference` reads.
     pub(crate) fn lower_exhibit_state(
         &mut self,
         document: DocumentIdx,
@@ -940,23 +1181,22 @@ impl SemanticModelBuilder {
         unsupported_family: UnsupportedFamily,
         node: &Node<ParserExhibitState>,
     ) -> Result<(), ConstructionError> {
-        if node.value.state_reference.is_some() {
-            self.push_unsupported(document, unsupported_family, node.span);
-            return Ok(());
-        }
         let name = self.intern_declaration_name(document, node.value.name)?;
+        let short_name = self.intern_short_name(document, node.value.short_name)?;
         let declaration = self.push_typed_declaration(
             document,
             owner,
-            DeclarationKind::StateUsage,
+            DeclarationKind::ExhibitStateUsage,
             name,
             node.span,
             DeclarationFacts {
+                short_name,
                 modifiers: DeclarationModifiers {
                     is_abstract: node.value.is_abstract,
                     individual: node.value.is_individual,
                     derived: node.value.is_derived,
                     reference: node.value.is_reference,
+                    parallel: state_body_is_parallel(node.value.body_modifier.as_ref()),
                     ..DeclarationModifiers::default()
                 },
                 direction: direction_fact(node.value.direction.as_ref()),
@@ -964,6 +1204,11 @@ impl SemanticModelBuilder {
                 ..DeclarationFacts::none()
             },
         )?;
+        self.lower_state_body_modifier(
+            document,
+            unsupported_family,
+            node.value.body_modifier.as_ref(),
+        );
         self.push_membership(
             declaration,
             MembershipKind::Feature,
@@ -973,6 +1218,23 @@ impl SemanticModelBuilder {
             )?,
             node.value.membership.span,
         )?;
+        if let Some(state) = node.value.state_reference {
+            let span = self.documents[document.index()]
+                .parsed
+                .qualified_reference(state)
+                .ok_or(ConstructionError::InvalidParserReference)?
+                .metadata
+                .span;
+            self.push_reference(PendingReference {
+                source: declaration,
+                kind: ReferenceKind::References,
+                document,
+                local: state,
+                flags: RelationshipFlags::default(),
+                span,
+                import: None,
+            })?;
+        }
         if let Some(relationship) = &node.value.typing {
             self.lower_typing_relationship(document, declaration, relationship)?;
         }
@@ -984,15 +1246,4 @@ impl SemanticModelBuilder {
         }
         self.lower_state_def_body(document, declaration, &node.value.body)
     }
-}
-
-/// True when a state def/usage's `entry`/`do`/`exit` action body (BNF `StateDefBody`, shared by
-/// `EntryAction`/`DoAction`/`ExitAction.body`) carries actual owned members, as opposed to a bare
-/// `;` terminator or an empty `{ }` -- both of which are legal no-op markers with nothing to
-/// represent when the action also has no bound `action_reference` (see
-/// `lower_state_entry_action`'s doc comment). Used to distinguish that genuinely-empty case from
-/// an inline `entry { <members> }` anonymous action body, which does carry content this typed AST
-/// shape has no field for and so stays an explicit unsupported diagnostic.
-pub(crate) fn state_action_body_has_content(body: &StateDefBody) -> bool {
-    matches!(body, StateDefBody::Brace { elements, .. } if !elements.is_empty())
 }

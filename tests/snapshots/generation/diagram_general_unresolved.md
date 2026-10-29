@@ -3,7 +3,7 @@
 description=General view keeps unresolved exposure explicit
 type=generate
 libraries=standard
-plugin=repository:diagram
+plugin=native:diagram
 viewKind=general-view
 viewDocument=diagram_general_unresolved.md
 viewQualifiedName=GeneralNegative::selected
@@ -34,7 +34,7 @@ package GeneralNegative {
 # SMG
 ~~~sexpr
 (semantic-model
-  (publication (phase resolved) (completeness complete) (has-evaluation true) (source-digest "blake3:7c82e002d36b6a557d6cf0a1e6087cb6b4ca94433ddfaf9184e7f52fe160f521") (admitted (standard-library 94)))
+  (publication (phase resolved) (completeness complete) (has-evaluation true) (source-digest "blake3:d47d606ad8216d8d2c02367b433b50fb2ffb1fdd6ba91f539cb9cafae7758e77") (admitted (standard-library 94)))
   (declarations
     (declaration (id (node (document "memory://snapshot/diagram_general_unresolved.md") (qualified-name "GeneralNegative"))) (kind package) (membership (kind owning) (visibility default)))
     (declaration (id (node (document "memory://snapshot/diagram_general_unresolved.md") (path (named (kind package) (name "GeneralNegative")) (anonymous (kind import) (ordinal 0))))) (kind import) (membership (kind import) (visibility private)) (authored (membership (kind import) (visibility private)) (relationships (namespaceImport (reference "StandardViewDefinitions") (import (shape namespace) (recursive false))))))
@@ -135,8 +135,8 @@ package GeneralNegative {
 ## diagram.json
 ~~~json
 {
-  "schemaVersion": 5,
-  "modelDigest": "blake3:ac610e4871c1dcf9829688d24fdccba59b9bd99dda094de3c1b407ee3a37028b",
+  "schemaVersion": 10,
+  "modelDigest": "blake3:fca32d325d628351df18ef5c3481447c154f3a4e088f12255f80da023d86c0d6",
   "documents": [
     {
       "uri": "memory://snapshot/diagram_general_unresolved.md",

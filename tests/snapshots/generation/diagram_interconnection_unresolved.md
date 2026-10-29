@@ -3,7 +3,7 @@
 description=Interconnection view keeps unresolved exposure explicit
 type=generate
 libraries=standard
-plugin=repository:diagram
+plugin=native:diagram
 viewKind=interconnection-view
 viewDocument=diagram_interconnection_unresolved.md
 viewQualifiedName=InterconnectionNegative::selected
@@ -34,7 +34,7 @@ package InterconnectionNegative {
 # SMG
 ~~~sexpr
 (semantic-model
-  (publication (phase resolved) (completeness complete) (has-evaluation true) (source-digest "blake3:5103a2bdfbb2c27811fd3872ae343f79902fc2d8eb3e9400a40388debbc93123") (admitted (standard-library 94)))
+  (publication (phase resolved) (completeness complete) (has-evaluation true) (source-digest "blake3:bd0d4f7c1c9c4fa5dc5dc4ff06e79f047639cfa6dc547734da226ecad17c3d6b") (admitted (standard-library 94)))
   (declarations
     (declaration (id (node (document "memory://snapshot/diagram_interconnection_unresolved.md") (qualified-name "InterconnectionNegative"))) (kind package) (membership (kind owning) (visibility default)))
     (declaration (id (node (document "memory://snapshot/diagram_interconnection_unresolved.md") (path (named (kind package) (name "InterconnectionNegative")) (anonymous (kind import) (ordinal 0))))) (kind import) (membership (kind import) (visibility private)) (authored (membership (kind import) (visibility private)) (relationships (namespaceImport (reference "StandardViewDefinitions") (import (shape namespace) (recursive false))))))
@@ -135,8 +135,8 @@ package InterconnectionNegative {
 ## diagram.json
 ~~~json
 {
-  "schemaVersion": 5,
-  "modelDigest": "blake3:256c61a9c5082ddeeafda7d0037edde98727b4affbdd5fd0f36611b1f276a305",
+  "schemaVersion": 10,
+  "modelDigest": "blake3:77c054964fe0d86d95c1c6b12238235c167fca4540e67c0c6561d8d9e341bb21",
   "documents": [
     {
       "uri": "memory://snapshot/diagram_interconnection_unresolved.md",
@@ -199,6 +199,7 @@ package InterconnectionNegative {
     "metadata": {
       "connectors": [],
       "parts": [],
+      "portFamilies": [],
       "ports": []
     },
     "nodes": [],

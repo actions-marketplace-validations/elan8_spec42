@@ -1,15 +1,24 @@
 //! Phase 2 lowering — behaviour: action definitions and usages, control nodes, flows, performs.
 
+use crate::lower::facts::control_node_prefix_modifiers;
 use crate::lower::facts::definition_prefix_modifiers;
 use crate::lower::facts::definition_prefix_node_modifiers;
 use crate::lower::facts::direction_fact;
+use crate::lower::facts::direction_node_fact;
 use crate::lower::facts::multiplicity_facts;
+use crate::lower::facts::portion_kind_node_fact;
 use crate::lower::facts::DeclarationFacts;
 use crate::lower::facts::DeclarationModifiers;
+use crate::lower::facts::ParameterDirection;
 use crate::lower::facts::PendingReference;
 use crate::lower::facts::RelationshipFlags;
+use crate::lower::facts::SuccessionEndMultiplicities;
+use crate::lower::facts::SuccessionGuard;
+use crate::lower::facts::ThenSource;
 use crate::lower::facts::UnsupportedFamily;
+use crate::lower::kerml::kerml_bare_end_multiplicity;
 use crate::lower::SemanticModelBuilder;
+use crate::model::AuthoredReferenceId;
 use crate::model::ConstructionError;
 use crate::model::DeclarationId;
 use crate::model::DeclarationKind;
@@ -23,9 +32,9 @@ use sysml_v2_parser::ast::{
     ActionBranchBody, ActionDef, ActionDefBody, ActionDefBodyElement,
     ActionUsage as ParserActionUsage, ActionUsageBody, ActionUsageBodyElement, ActionUsageKeyword,
     AssignStmt, ControlNodeDeclaration, DefinitionBody, DefinitionBodyElement, Expression,
-    FirstMergeBody, FirstMergeBodyElement, FirstStmt, FlowDeclaration, FlowDef, FlowUsage, ForLoop,
-    GuardedSuccession, IfStmt, MembershipKind as ParserMembershipKind, Node,
-    Perform as ParserPerform, PerformActionTarget, PerformBody, PerformBodyElement,
+    FirstMergeBody, FirstMergeBodyElement, FirstStmt, FlowDeclaration, FlowDef, FlowUsage,
+    FlowUsageKind, ForLoop, GuardedSuccession, IfStmt, MembershipKind as ParserMembershipKind,
+    Node, Perform as ParserPerform, PerformActionTarget, PerformBody, PerformBodyElement,
     PerformInOutBinding, SendPayload, Span, SuccessionUsage, TerminateStmt, ThenAction, ThenTarget,
     TransitionAccept,
 };
@@ -92,30 +101,24 @@ impl SemanticModelBuilder {
             return Ok(());
         };
         for element in elements {
-            // A body-less `#tag` prefix (`#refinement dependency X to Y;`) is a standalone sibling
-            // that annotates the member immediately after it; buffer it and bind it to that
-            // member's declaration. Any other member flushes an unbound prefix as an explicit
-            // unsupported member first, so a stray `#tag` never leaks onto a later declaration.
+            // A body-less `#tag` prefix (`#refinement dependency X to Y;`, `#Tag action a;`) is a
+            // standalone sibling that annotates the member immediately after it.
             match &element.value {
                 ActionDefBodyElement::MetadataKeywordUsage(keyword)
                     if keyword.value.body.is_none() =>
                 {
-                    self.buffer_prefix_metadata_keyword(keyword);
-                }
-                ActionDefBodyElement::Dependency(node) => {
-                    let dependency = self.lower_dependency(document, Some(owner), node)?;
-                    self.bind_pending_prefix_metadata(document, dependency)?;
-                }
-                _ => {
-                    self.flush_pending_prefix_metadata(
-                        document,
+                    self.buffer_prefix_metadata_keyword(
+                        Some(owner),
                         UnsupportedFamily::ActionDefinitionMember,
+                        keyword,
                     );
-                    self.lower_action_def_body_element(document, owner, element)?;
                 }
+                _ => self.lower_prefixable_member(document, Some(owner), element.span, |this| {
+                    this.lower_action_def_body_element(document, owner, element)
+                })?,
             }
         }
-        self.flush_pending_prefix_metadata(document, UnsupportedFamily::ActionDefinitionMember);
+        self.flush_pending_prefix_metadata(document);
         Ok(())
     }
 
@@ -130,6 +133,39 @@ impl SemanticModelBuilder {
         element: &Node<ActionDefBodyElement>,
     ) -> Result<(), ConstructionError> {
         match &element.value {
+            ActionDefBodyElement::ExtendedDefinition(node) => {
+                self.lower_extended_definition(document, Some(owner), node)?;
+            }
+            ActionDefBodyElement::ExtendedUsage(node) => {
+                self.lower_extended_usage(document, Some(owner), node)?;
+            }
+            ActionDefBodyElement::PartDef(node) => {
+                self.lower_part_def(document, Some(owner), node)?;
+            }
+            ActionDefBodyElement::ItemDef(node) => {
+                self.lower_item_def(document, Some(owner), node)?;
+            }
+            ActionDefBodyElement::ViewDef(node) => {
+                self.lower_view_def(document, Some(owner), node)?;
+            }
+            ActionDefBodyElement::RenderingDef(node) => {
+                self.lower_rendering_def(document, Some(owner), node)?;
+            }
+            ActionDefBodyElement::ViewpointDef(node) => {
+                self.lower_viewpoint_def(document, Some(owner), node)?;
+            }
+            ActionDefBodyElement::CaseUsage(node) => {
+                self.lower_case_usage(document, Some(owner), node)?;
+            }
+            ActionDefBodyElement::AnalysisCaseUsage(node) => {
+                self.lower_analysis_case_usage(document, Some(owner), node)?;
+            }
+            ActionDefBodyElement::VerificationCaseUsage(node) => {
+                self.lower_verification_case_usage(document, Some(owner), node)?;
+            }
+            ActionDefBodyElement::UseCaseUsage(node) => {
+                self.lower_use_case_usage(document, Some(owner), node)?;
+            }
             ActionDefBodyElement::Error(error) => {
                 self.push_recovery(document, error.span);
             }
@@ -166,6 +202,9 @@ impl SemanticModelBuilder {
             }
             ActionDefBodyElement::OccurrenceUsage(occurrence_usage) => {
                 self.lower_occurrence_usage(document, Some(owner), occurrence_usage)?;
+            }
+            ActionDefBodyElement::ViewUsage(view) => {
+                self.lower_view_usage(document, Some(owner), view)?;
             }
             ActionDefBodyElement::PartUsage(part_usage) => {
                 self.lower_part_usage(document, Some(owner), part_usage)?;
@@ -213,12 +252,9 @@ impl SemanticModelBuilder {
                     node,
                 )?;
             }
-            ActionDefBodyElement::AssertConstraint(node) => self.lower_assert_constraint_member(
-                document,
-                owner,
-                UnsupportedFamily::ActionDefinitionMember,
-                node,
-            )?,
+            ActionDefBodyElement::AssertConstraint(node) => {
+                self.lower_assert_constraint_member(document, owner, node)?
+            }
             ActionDefBodyElement::RefDecl(node) => {
                 self.lower_ref_decl(document, Some(owner), node)?;
             }
@@ -229,6 +265,7 @@ impl SemanticModelBuilder {
                 DeclarationKind::Merge,
                 node.span,
                 &node.value.declaration,
+                &node.value.prefix,
                 &node.value.body,
             )?,
             ActionDefBodyElement::DecisionStmt(node) => self.lower_first_merge_stmt(
@@ -238,6 +275,7 @@ impl SemanticModelBuilder {
                 DeclarationKind::Decide,
                 node.span,
                 &node.value.declaration,
+                &node.value.prefix,
                 &node.value.body,
             )?,
             ActionDefBodyElement::JoinStmt(node) => self.lower_first_merge_stmt(
@@ -247,6 +285,7 @@ impl SemanticModelBuilder {
                 DeclarationKind::Join,
                 node.span,
                 &node.value.declaration,
+                &node.value.prefix,
                 &node.value.body,
             )?,
             ActionDefBodyElement::ForkStmt(node) => self.lower_first_merge_stmt(
@@ -256,6 +295,7 @@ impl SemanticModelBuilder {
                 DeclarationKind::Fork,
                 node.span,
                 &node.value.declaration,
+                &node.value.prefix,
                 &node.value.body,
             )?,
             ActionDefBodyElement::ThenAction(node) => {
@@ -291,6 +331,8 @@ impl SemanticModelBuilder {
                 node.span,
                 Some(&node.value.condition),
                 &node.value.body.body,
+                node.value.until.as_ref(),
+                &node.value.prefix,
             )?,
             ActionDefBodyElement::LoopStmt(node) => self.lower_while_or_loop_stmt(
                 document,
@@ -300,6 +342,8 @@ impl SemanticModelBuilder {
                 node.span,
                 None,
                 &node.value.body.body,
+                node.value.until.as_ref(),
+                &node.value.prefix,
             )?,
             ActionDefBodyElement::IfStmt(node) => self.lower_if_stmt(
                 document,
@@ -367,7 +411,8 @@ impl SemanticModelBuilder {
             .as_ref()
             .map(|accept| match accept {
                 TransitionAccept::Shorthand(_, via) => (true, via.is_some()),
-                TransitionAccept::TimeTrigger(_, _) => (true, false),
+                TransitionAccept::TimeTrigger(_, _)
+                | TransitionAccept::NamedTimeTrigger(_, _, _) => (true, false),
                 TransitionAccept::Payload(_, via) => (false, via.is_some()),
             })
             .map_or((None, None), |(payload, receiver)| {
@@ -392,6 +437,8 @@ impl SemanticModelBuilder {
                     variation: node.value.is_variation,
                     individual: node.value.is_individual,
                     reference: node.value.is_reference,
+                    ordered: node.value.multiplicity_modifiers.is_ordered(),
+                    nonunique: !node.value.multiplicity_modifiers.is_unique(),
                     // ActionUsage has no standalone `composite` token: its BNF's `ref action`
                     // branch is the non-composite alternative, so the parser's explicit
                     // reference fact is the authoritative source for the derived composite
@@ -426,6 +473,10 @@ impl SemanticModelBuilder {
         if let Some(relationship) = &node.value.redefines {
             self.lower_subsetting_relationship(document, declaration, relationship)?;
         }
+        // `ActionUsageDeclaration = UsageDeclaration ValuePart?`.
+        if let Some(feature_value) = &node.value.value {
+            self.record_feature_value(document, declaration, feature_value)?;
+        }
         self.lower_accept_send_clauses(document, declaration, node)?;
         // An action usage is one of the two constructs whose body may not be written at all --
         // `action a accept M via v;` ends at the statement after it -- so an absent body is a
@@ -455,7 +506,7 @@ impl SemanticModelBuilder {
     ) -> Result<(), ConstructionError> {
         let family = UnsupportedFamily::ActionUsageMember;
         if let Some(accept) = &node.value.accept {
-            self.lower_accept_trigger(document, declaration, family, accept)?;
+            self.lower_accept_trigger(document, declaration, family, accept, node.span)?;
         }
         if let Some(send) = &node.value.send {
             match send {
@@ -499,7 +550,16 @@ impl SemanticModelBuilder {
         declaration: DeclarationId,
         clause: &sysml_v2_parser::ast::PayloadClause,
     ) -> Result<(), ConstructionError> {
-        let Some(type_name) = clause.type_name else {
+        self.lower_payload_type(document, declaration, clause.type_name)
+    }
+
+    pub(crate) fn lower_payload_type(
+        &mut self,
+        document: DocumentIdx,
+        declaration: DeclarationId,
+        type_name: Option<sysml_v2_parser::QualifiedReferenceId>,
+    ) -> Result<(), ConstructionError> {
+        let Some(type_name) = type_name else {
             return Ok(());
         };
         let span = self.documents[document.index()]
@@ -553,6 +613,39 @@ impl SemanticModelBuilder {
         element: &Node<ActionUsageBodyElement>,
     ) -> Result<(), ConstructionError> {
         match &element.value {
+            ActionUsageBodyElement::ExtendedDefinition(node) => {
+                self.lower_extended_definition(document, Some(owner), node)?;
+            }
+            ActionUsageBodyElement::ExtendedUsage(node) => {
+                self.lower_extended_usage(document, Some(owner), node)?;
+            }
+            ActionUsageBodyElement::PartDef(node) => {
+                self.lower_part_def(document, Some(owner), node)?;
+            }
+            ActionUsageBodyElement::ItemDef(node) => {
+                self.lower_item_def(document, Some(owner), node)?;
+            }
+            ActionUsageBodyElement::ViewDef(node) => {
+                self.lower_view_def(document, Some(owner), node)?;
+            }
+            ActionUsageBodyElement::RenderingDef(node) => {
+                self.lower_rendering_def(document, Some(owner), node)?;
+            }
+            ActionUsageBodyElement::ViewpointDef(node) => {
+                self.lower_viewpoint_def(document, Some(owner), node)?;
+            }
+            ActionUsageBodyElement::CaseUsage(node) => {
+                self.lower_case_usage(document, Some(owner), node)?;
+            }
+            ActionUsageBodyElement::AnalysisCaseUsage(node) => {
+                self.lower_analysis_case_usage(document, Some(owner), node)?;
+            }
+            ActionUsageBodyElement::VerificationCaseUsage(node) => {
+                self.lower_verification_case_usage(document, Some(owner), node)?;
+            }
+            ActionUsageBodyElement::UseCaseUsage(node) => {
+                self.lower_use_case_usage(document, Some(owner), node)?;
+            }
             ActionUsageBodyElement::Error(error) => {
                 self.push_recovery(document, error.span);
             }
@@ -562,6 +655,11 @@ impl SemanticModelBuilder {
             }
             ActionUsageBodyElement::ActionUsage(action_usage) => {
                 self.lower_action_usage(document, Some(owner), action_usage)?;
+            }
+            // An action usage body is the same `ActionBody` as a definition body, so it owns
+            // `perform` members the same way (#256).
+            ActionUsageBodyElement::Perform(perform) => {
+                self.lower_perform(document, Some(owner), perform)?;
             }
             ActionUsageBodyElement::ItemUsage(item_usage) => {
                 self.lower_item_usage(document, Some(owner), item_usage)?;
@@ -577,6 +675,9 @@ impl SemanticModelBuilder {
             }
             ActionUsageBodyElement::OccurrenceUsage(occurrence_usage) => {
                 self.lower_occurrence_usage(document, Some(owner), occurrence_usage)?;
+            }
+            ActionUsageBodyElement::ViewUsage(view) => {
+                self.lower_view_usage(document, Some(owner), view)?;
             }
             ActionUsageBodyElement::PartUsage(part_usage) => {
                 self.lower_part_usage(document, Some(owner), part_usage)?;
@@ -616,12 +717,9 @@ impl SemanticModelBuilder {
             ActionUsageBodyElement::Bind(node) => {
                 self.lower_bind(document, owner, UnsupportedFamily::ActionUsageMember, node)?;
             }
-            ActionUsageBodyElement::AssertConstraint(node) => self.lower_assert_constraint_member(
-                document,
-                owner,
-                UnsupportedFamily::ActionUsageMember,
-                node,
-            )?,
+            ActionUsageBodyElement::AssertConstraint(node) => {
+                self.lower_assert_constraint_member(document, owner, node)?
+            }
             ActionUsageBodyElement::RefDecl(node) => {
                 self.lower_ref_decl(document, Some(owner), node)?;
             }
@@ -632,6 +730,7 @@ impl SemanticModelBuilder {
                 DeclarationKind::Merge,
                 node.span,
                 &node.value.declaration,
+                &node.value.prefix,
                 &node.value.body,
             )?,
             ActionUsageBodyElement::DecisionStmt(node) => self.lower_first_merge_stmt(
@@ -641,6 +740,7 @@ impl SemanticModelBuilder {
                 DeclarationKind::Decide,
                 node.span,
                 &node.value.declaration,
+                &node.value.prefix,
                 &node.value.body,
             )?,
             ActionUsageBodyElement::JoinStmt(node) => self.lower_first_merge_stmt(
@@ -650,6 +750,7 @@ impl SemanticModelBuilder {
                 DeclarationKind::Join,
                 node.span,
                 &node.value.declaration,
+                &node.value.prefix,
                 &node.value.body,
             )?,
             ActionUsageBodyElement::ForkStmt(node) => self.lower_first_merge_stmt(
@@ -659,6 +760,7 @@ impl SemanticModelBuilder {
                 DeclarationKind::Fork,
                 node.span,
                 &node.value.declaration,
+                &node.value.prefix,
                 &node.value.body,
             )?,
             ActionUsageBodyElement::ThenAction(node) => {
@@ -694,6 +796,8 @@ impl SemanticModelBuilder {
                 node.span,
                 Some(&node.value.condition),
                 &node.value.body.body,
+                node.value.until.as_ref(),
+                &node.value.prefix,
             )?,
             ActionUsageBodyElement::LoopStmt(node) => self.lower_while_or_loop_stmt(
                 document,
@@ -703,6 +807,8 @@ impl SemanticModelBuilder {
                 node.span,
                 None,
                 &node.value.body.body,
+                node.value.until.as_ref(),
+                &node.value.prefix,
             )?,
             ActionUsageBodyElement::IfStmt(node) => self.lower_if_stmt(
                 document,
@@ -772,6 +878,7 @@ impl SemanticModelBuilder {
         node: &Node<FirstStmt>,
     ) -> Result<(), ConstructionError> {
         let name = self.intern_declaration_name(document, node.value.succession_name)?;
+        let short_name = self.intern_short_name(document, node.value.succession_short_name)?;
         let declaration = self.push_typed_declaration(
             document,
             Some(owner),
@@ -779,10 +886,16 @@ impl SemanticModelBuilder {
             name,
             node.span,
             DeclarationFacts {
+                short_name,
                 // The succession feature's own multiplicity (`succession [n] first ... then ...`).
-                // The per-end `first_multiplicity`/`then_multiplicity` belong to the ends, which
-                // are lowered as references rather than declarations, so they are not facts here.
                 multiplicity: multiplicity_facts(node.value.succession_multiplicity.as_ref()),
+                // The per-end `first [m]`/`then [n]` multiplicities belong to the connector ends,
+                // which are lowered as references, so they are the succession's end facts.
+                succession_end_multiplicities: SuccessionEndMultiplicities::authored(
+                    multiplicity_facts(node.value.first_multiplicity.as_ref()),
+                    multiplicity_facts(node.value.then_multiplicity.as_ref()),
+                ),
+                is_initial_node_marker: node.value.then.is_none(),
                 ..DeclarationFacts::none()
             },
         )?;
@@ -854,6 +967,16 @@ impl SemanticModelBuilder {
                 multiplicity: multiplicity_facts(
                     succession.and_then(|decl| decl.declaration.value.multiplicity.as_ref()),
                 ),
+                // The `first` source of a guarded succession is a bare member reference with no
+                // multiplicity slot; only the `then` target end can author one.
+                // A `references` end owns its multiplicity on its own end feature instead.
+                succession_end_multiplicities: SuccessionEndMultiplicities::authored(
+                    None,
+                    kerml_bare_end_multiplicity(&node.value.target),
+                ),
+                succession_guard: Some(SuccessionGuard::Condition(
+                    self.guard_text(document, &node.value.guard),
+                )),
                 ..DeclarationFacts::none()
             },
         )?;
@@ -909,7 +1032,21 @@ impl SemanticModelBuilder {
         kind: ReferenceKind,
         node: &Node<Expression>,
     ) -> Result<(), ConstructionError> {
-        match &node.value {
+        self.lower_succession_end_reference(document, owner, family, kind, node)?;
+        Ok(())
+    }
+
+    /// [`Self::lower_succession_end`], returning the one reference it pushed for the end, if the
+    /// end's shape is one it resolves.
+    pub(crate) fn lower_succession_end_reference(
+        &mut self,
+        document: DocumentIdx,
+        owner: DeclarationId,
+        family: UnsupportedFamily,
+        kind: ReferenceKind,
+        node: &Node<Expression>,
+    ) -> Result<Option<AuthoredReferenceId>, ConstructionError> {
+        Ok(match &node.value {
             Expression::FeatureRef(target) => {
                 let span = self.documents[document.index()]
                     .parsed
@@ -917,7 +1054,7 @@ impl SemanticModelBuilder {
                     .ok_or(ConstructionError::InvalidParserReference)?
                     .metadata
                     .span;
-                self.push_reference(PendingReference {
+                Some(self.push_reference(PendingReference {
                     source: owner,
                     kind,
                     document,
@@ -925,19 +1062,26 @@ impl SemanticModelBuilder {
                     flags: RelationshipFlags::default(),
                     span,
                     import: None,
-                })?;
+                })?)
             }
             Expression::MemberAccess { .. } | Expression::FeatureChainRef(_) => {
-                if self
-                    .push_member_access_expression(owner, document, node)?
-                    .is_none()
-                {
+                // A dotted succession end is still a succession endpoint. Keep its role so
+                // event precedence consumes the same resolved feature path as a simple end.
+                let reference = if kind == ReferenceKind::Succession {
+                    self.push_member_access_expression_with_kind(owner, document, kind, node)?
+                } else {
+                    self.push_member_access_expression(owner, document, node)?
+                };
+                if reference.is_none() {
                     self.push_unsupported(document, family, node.span);
                 }
+                reference
             }
-            _ => self.push_unsupported(document, family, node.span),
-        }
-        Ok(())
+            _ => {
+                self.push_unsupported(document, family, node.span);
+                None
+            }
+        })
     }
 
     /// Lowers a `decide`/`merge`/`fork`/`join` control node (BNF `DecisionStmt`/`MergeStmt`/
@@ -955,6 +1099,7 @@ impl SemanticModelBuilder {
         decl_kind: DeclarationKind,
         span: Span,
         control_declaration: &ControlNodeDeclaration,
+        prefix: &sysml_v2_parser::ast::ControlNodePrefix,
         body: &FirstMergeBody,
     ) -> Result<(), ConstructionError> {
         // `ControlNodeDeclaration` is the node's own declaration, not a reference to another
@@ -979,7 +1124,12 @@ impl SemanticModelBuilder {
             decl_kind,
             name,
             span,
-            DeclarationFacts::none(),
+            DeclarationFacts {
+                modifiers: control_node_prefix_modifiers(prefix),
+                direction: direction_node_fact(prefix.ref_prefix.direction.as_ref()),
+                portion_kind: portion_kind_node_fact(prefix.portion.as_ref()),
+                ..DeclarationFacts::none()
+            },
         )?;
         self.push_membership(
             declaration,
@@ -987,6 +1137,7 @@ impl SemanticModelBuilder {
             Visibility::Default,
             span,
         )?;
+        self.lower_usage_extension_keywords(document, declaration, &prefix.extension_keywords)?;
         self.lower_first_merge_body(document, declaration, family, body)
     }
 
@@ -1059,6 +1210,7 @@ impl SemanticModelBuilder {
                         DeclarationKind::Merge,
                         node.span,
                         &node.value.declaration,
+                        &node.value.prefix,
                         &node.value.body,
                     )?,
                     ActionDefBodyElement::DecisionStmt(node) => self.lower_first_merge_stmt(
@@ -1068,6 +1220,7 @@ impl SemanticModelBuilder {
                         DeclarationKind::Decide,
                         node.span,
                         &node.value.declaration,
+                        &node.value.prefix,
                         &node.value.body,
                     )?,
                     ActionDefBodyElement::JoinStmt(node) => self.lower_first_merge_stmt(
@@ -1077,6 +1230,7 @@ impl SemanticModelBuilder {
                         DeclarationKind::Join,
                         node.span,
                         &node.value.declaration,
+                        &node.value.prefix,
                         &node.value.body,
                     )?,
                     ActionDefBodyElement::ForkStmt(node) => self.lower_first_merge_stmt(
@@ -1086,6 +1240,7 @@ impl SemanticModelBuilder {
                         DeclarationKind::Fork,
                         node.span,
                         &node.value.declaration,
+                        &node.value.prefix,
                         &node.value.body,
                     )?,
                     _ => self.push_unsupported(document, family, element.span),
@@ -1111,6 +1266,135 @@ impl SemanticModelBuilder {
         family: UnsupportedFamily,
         node: &Node<ThenAction>,
     ) -> Result<(), ConstructionError> {
+        self.lower_then_action_declared(document, owner, family, node)
+            .map(|_| ())
+    }
+
+    /// Lowers a `then` and returns what it declared: the first member it added to its body,
+    /// which is the continuation to a named feature or the node written after the keyword.
+    fn lower_then_action_declared(
+        &mut self,
+        document: DocumentIdx,
+        owner: DeclarationId,
+        family: UnsupportedFamily,
+        node: &Node<ThenAction>,
+    ) -> Result<Option<usize>, ConstructionError> {
+        let first_new = self.declarations.len();
+        let source = self.then_source(owner, first_new);
+        self.lower_then_target(document, owner, family, node)?;
+        let declared = (first_new..self.declarations.len())
+            .find(|index| self.declarations[*index].owner == Some(owner));
+        if let (Some(source), Some(declared)) = (source, declared) {
+            self.declaration_facts[declared].then_source = Some(source);
+        }
+        Ok(declared)
+    }
+
+    /// The guard of a conditional succession as it is written, with its white space collapsed.
+    pub(super) fn guard_text(&self, document: DocumentIdx, guard: &Node<Expression>) -> Box<str> {
+        let source = self.documents[document.index()].parsed.source.as_str();
+        source
+            .get(guard.span.offset..guard.span.offset + guard.span.len)
+            .unwrap_or("")
+            .split_whitespace()
+            .collect::<Vec<_>>()
+            .join(" ")
+            .into()
+    }
+
+    /// The target of a brace-less `then <feature>;` branch of an `if`, when the branch is one.
+    fn conditional_succession_branch(body: &ActionBranchBody) -> Option<&Node<ThenAction>> {
+        match body {
+            ActionBranchBody::Shorthand(element) => match &element.value {
+                ActionDefBodyElement::ThenAction(then)
+                    if matches!(then.value.target, ThenTarget::Feature(_)) =>
+                {
+                    Some(then)
+                }
+                _ => None,
+            },
+            ActionBranchBody::Braced(_) => None,
+        }
+    }
+
+    /// Lowers `if <guard> then <feature>; (else <feature>;)?` written without braces. An
+    /// `IfNode` has a braced body (SysML 8.2.2.17.3), so this text is a `GuardedTargetSuccession`
+    /// and a `DefaultTargetSuccession` (8.2.2.17.8): conditional successions in the `then`
+    /// shorthand, from the same source as a plain `then` at this place. Returns `false` when
+    /// `node` is not of that form.
+    fn lower_conditional_target_successions(
+        &mut self,
+        document: DocumentIdx,
+        owner: DeclarationId,
+        family: UnsupportedFamily,
+        node: &IfStmt,
+    ) -> Result<bool, ConstructionError> {
+        let Some(then) = Self::conditional_succession_branch(&node.then_body) else {
+            return Ok(false);
+        };
+        let otherwise = match &node.else_body {
+            None => None,
+            Some(body) => match Self::conditional_succession_branch(body) {
+                Some(otherwise) => Some(otherwise),
+                None => return Ok(false),
+            },
+        };
+        let guard = self.guard_text(document, &node.condition);
+        if let Some(declared) = self.lower_then_action_declared(document, owner, family, then)? {
+            self.declaration_facts[declared].succession_guard =
+                Some(SuccessionGuard::Condition(guard));
+        }
+        self.lower_constraint_expression(document, owner, family, &node.condition)?;
+        if let Some(otherwise) = otherwise {
+            if let Some(declared) =
+                self.lower_then_action_declared(document, owner, family, otherwise)?
+            {
+                self.declaration_facts[declared].succession_guard = Some(SuccessionGuard::Else);
+            }
+        }
+        Ok(true)
+    }
+
+    /// The source of a `then` about to be lowered into the body of `owner`, whose members so
+    /// far are the declarations before `end`. See [`ThenSource`].
+    pub(crate) fn then_source(&self, owner: DeclarationId, end: usize) -> Option<ThenSource> {
+        use crate::model::element_kind::element_kind;
+        use crate::ElementKind;
+        for index in (owner.index() + 1..end).rev() {
+            let declaration = &self.declarations[index];
+            if declaration.owner != Some(owner) {
+                continue;
+            }
+            let id = DeclarationId::from_index(index).ok()?;
+            if self.declaration_facts[index].is_initial_node_marker {
+                return Some(ThenSource::InitialNode(id));
+            }
+            // A conditional succession is a transition usage, which is an action usage; the
+            // rule skips it like any other succession.
+            if declaration.kind != DeclarationKind::Transition
+                && element_kind(declaration.kind).conforms_to(ElementKind::OccurrenceUsage)
+            {
+                return Some(ThenSource::Declaration(id));
+            }
+        }
+        // A `then` in the body of a control node continues from that node.
+        matches!(
+            self.declarations[owner.index()].kind,
+            DeclarationKind::Decide
+                | DeclarationKind::Merge
+                | DeclarationKind::Fork
+                | DeclarationKind::Join
+        )
+        .then_some(ThenSource::Declaration(owner))
+    }
+
+    fn lower_then_target(
+        &mut self,
+        document: DocumentIdx,
+        owner: DeclarationId,
+        family: UnsupportedFamily,
+        node: &Node<ThenAction>,
+    ) -> Result<(), ConstructionError> {
         match &node.value.target {
             // `then action ...;` and `then send ... to ...;` are the same `ActionUsage` shape
             // upstream -- the send form is the one carrying `send`/`via`/`to` clauses, which
@@ -1128,6 +1412,7 @@ impl SemanticModelBuilder {
                 DeclarationKind::Merge,
                 merge_stmt.span,
                 &merge_stmt.value.declaration,
+                &merge_stmt.value.prefix,
                 &merge_stmt.value.body,
             )?,
             ThenTarget::Fork(fork_stmt) => self.lower_first_merge_stmt(
@@ -1137,6 +1422,7 @@ impl SemanticModelBuilder {
                 DeclarationKind::Fork,
                 fork_stmt.span,
                 &fork_stmt.value.declaration,
+                &fork_stmt.value.prefix,
                 &fork_stmt.value.body,
             )?,
             ThenTarget::Join(join_stmt) => self.lower_first_merge_stmt(
@@ -1146,6 +1432,7 @@ impl SemanticModelBuilder {
                 DeclarationKind::Join,
                 join_stmt.span,
                 &join_stmt.value.declaration,
+                &join_stmt.value.prefix,
                 &join_stmt.value.body,
             )?,
             ThenTarget::Decide(decision_stmt) => self.lower_first_merge_stmt(
@@ -1155,12 +1442,40 @@ impl SemanticModelBuilder {
                 DeclarationKind::Decide,
                 decision_stmt.span,
                 &decision_stmt.value.declaration,
+                &decision_stmt.value.prefix,
                 &decision_stmt.value.body,
             )?,
             // `then if <condition> { ... }` -- an inline conditional action node, lowered
             // through the same owner the standalone `if` body element uses.
             ThenTarget::If(if_stmt) => {
                 self.lower_if_stmt(document, owner, family, if_stmt.span, &if_stmt.value)?
+            }
+            // `then while`, `then loop` and `then for` are the same nodes as the standalone
+            // body elements.
+            ThenTarget::While(stmt) => self.lower_while_or_loop_stmt(
+                document,
+                owner,
+                family,
+                DeclarationKind::While,
+                stmt.span,
+                Some(&stmt.value.condition),
+                &stmt.value.body.body,
+                stmt.value.until.as_ref(),
+                &stmt.value.prefix,
+            )?,
+            ThenTarget::Loop(stmt) => self.lower_while_or_loop_stmt(
+                document,
+                owner,
+                family,
+                DeclarationKind::Loop,
+                stmt.span,
+                None,
+                &stmt.value.body.body,
+                stmt.value.until.as_ref(),
+                &stmt.value.prefix,
+            )?,
+            ThenTarget::For(stmt) => {
+                self.lower_for_loop(document, owner, family, stmt.span, &stmt.value)?
             }
             ThenTarget::Feature(expression) => {
                 let declaration = self.push_typed_declaration(
@@ -1194,8 +1509,8 @@ impl SemanticModelBuilder {
     }
 
     /// Lowers an `assign <target> := <value>;` reassignment statement (BNF `AssignStmt`, `ast::
-    /// AssignStmt`; `is_then` is not modeled as a distinct fact -- both the plain and `then assign
-    /// ...;` spellings resolve identically) as its own anonymous `DeclarationKind::Assign` feature
+    /// AssignStmt`; a `then assign ...;` also carries the source of its succession, like any other
+    /// `then` node) as its own anonymous `DeclarationKind::Assign` feature
     /// owned by `owner`, mirroring `lower_bind`'s "statement, not a new named usage" shape: `lhs`
     /// is lowered as an `AssignTarget` reference through the exact `lower_succession_end` `FeatureRef`/
     /// `MemberAccess` dispatch every other paired/single-operand control-flow reference kind uses,
@@ -1210,37 +1525,155 @@ impl SemanticModelBuilder {
         span: Span,
         node: &AssignStmt,
     ) -> Result<(), ConstructionError> {
-        let declaration = self.push_typed_declaration(
+        // `then assign` is SysML's `SourceSuccessionMember ActionNodeMember` (8.2.2.17.1): a
+        // succession from the preceding member to this assignment node.
+        let then_source = node
+            .is_then
+            .then(|| self.then_source(owner, self.declarations.len()))
+            .flatten();
+        // `AssignmentNodeDeclaration = ActionNodeUsageDeclaration? 'assign' ...`: a named
+        // `action inc assign x := 1;` is one assignment node called `inc`.
+        let declaration = self.lower_structured_action_declaration(
             document,
-            Some(owner),
+            owner,
             DeclarationKind::Assign,
-            None,
             span,
-            // A synthesized scope for the assignment's target/value references.
+            &node.prefix,
+        )?;
+        self.declaration_facts[declaration.index()].then_source = then_source;
+        self.lower_assignment_operands(document, declaration, family, &node.lhs, &node.rhs)
+    }
+
+    pub(crate) fn lower_assignment_operands(
+        &mut self,
+        document: DocumentIdx,
+        declaration: DeclarationId,
+        family: UnsupportedFamily,
+        lhs: &Node<Expression>,
+        rhs: &Node<Expression>,
+    ) -> Result<(), ConstructionError> {
+        let referent = self.lower_succession_end_reference(
+            document,
+            declaration,
+            family,
+            ReferenceKind::AssignTarget,
+            lhs,
+        )?;
+        // The target parameter and the two Features it owns (`TargetParameter`/`TargetFeature`/
+        // `TargetAccessedFeatureMember`), each spanning the authored target.
+        let target_parameter = self.push_typed_declaration(
+            document,
+            Some(declaration),
+            DeclarationKind::ParameterUsage,
+            None,
+            lhs.span,
+            DeclarationFacts {
+                direction: Some(ParameterDirection::In),
+                ..DeclarationFacts::none()
+            },
+        )?;
+        self.push_membership(
+            target_parameter,
+            MembershipKind::Feature,
+            Visibility::Default,
+            lhs.span,
+        )?;
+        let starting_at = self.push_typed_declaration(
+            document,
+            Some(target_parameter),
+            DeclarationKind::KermlFeature,
+            None,
+            lhs.span,
             DeclarationFacts::none(),
         )?;
+        self.push_membership(
+            starting_at,
+            MembershipKind::Feature,
+            Visibility::Default,
+            lhs.span,
+        )?;
+        let accessed_feature = self.push_typed_declaration(
+            document,
+            Some(starting_at),
+            DeclarationKind::ReferenceUsage,
+            None,
+            lhs.span,
+            DeclarationFacts::none(),
+        )?;
+        self.push_membership(
+            accessed_feature,
+            MembershipKind::Feature,
+            Visibility::Default,
+            lhs.span,
+        )?;
+        self.assignments
+            .push(crate::lower::facts::AssignmentRecord {
+                assignment: declaration,
+                target_parameter,
+                starting_at,
+                accessed_feature,
+                referent,
+            });
+        self.push_evaluation_fact(
+            declaration,
+            self.constraint_expression_site(document, &rhs.value),
+        );
+        self.lower_constraint_expression(document, declaration, family, rhs)
+    }
+
+    /// Preserve the shared ActionNodePrefix on for/while/loop declarations, and record the node's
+    /// own feature membership.
+    fn lower_structured_action_declaration(
+        &mut self,
+        document: DocumentIdx,
+        owner: DeclarationId,
+        kind: DeclarationKind,
+        span: Span,
+        prefix: &sysml_v2_parser::ast::ActionNodePrefix,
+    ) -> Result<DeclarationId, ConstructionError> {
+        use crate::lower::facts::{occurrence_prefix_direction, occurrence_prefix_modifiers};
+        let usage = prefix
+            .action_declaration
+            .as_ref()
+            .and_then(|node| node.declaration.as_ref());
+        let name = match usage {
+            Some(usage) => self.intern_declaration_name(document, usage.identification.name)?,
+            None => None.into(),
+        };
+        let mut facts = DeclarationFacts {
+            modifiers: occurrence_prefix_modifiers(&prefix.occurrence_prefix),
+            direction: occurrence_prefix_direction(&prefix.occurrence_prefix),
+            portion_kind: portion_kind_node_fact(prefix.occurrence_prefix.portion()),
+            ..DeclarationFacts::none()
+        };
+        if let Some(usage) = usage {
+            facts.short_name = self.intern_short_name(document, usage.identification.short_name)?;
+            facts.multiplicity = multiplicity_facts(usage.multiplicity.as_ref());
+            facts.modifiers.ordered = usage.multiplicity_modifiers.is_ordered();
+            facts.modifiers.nonunique = !usage.multiplicity_modifiers.is_unique();
+        }
+        let declaration =
+            self.push_typed_declaration(document, Some(owner), kind, name, span, facts)?;
+        // The node's own membership precedes its clauses and annotations, as for every usage.
         self.push_membership(
             declaration,
             MembershipKind::Feature,
             Visibility::Default,
             span,
         )?;
-        self.lower_succession_end(
+        if let Some(usage) = usage {
+            self.lower_usage_declaration_clauses(document, declaration, usage, false, None)?;
+        }
+        self.lower_usage_extension_keywords(
             document,
             declaration,
-            family,
-            ReferenceKind::AssignTarget,
-            &node.lhs,
+            &prefix.occurrence_prefix.extension_keywords,
         )?;
-        self.push_evaluation_fact(
-            declaration,
-            self.constraint_expression_site(document, &node.rhs.value),
-        );
-        self.lower_constraint_expression(document, declaration, family, &node.rhs)
+        Ok(declaration)
     }
 
     /// Lowers a `while <condition> { ... }` (BNF `WhileStmt`) or bare `loop { ... }` (BNF
-    /// `LoopStmt`, no condition) control node as its own anonymous nested-declaration feature
+    /// `LoopStmt`, no condition) control node as its own nested-declaration feature
     /// owned by `owner`, mirroring `lower_first_merge_stmt`'s shape: an optional boolean
     /// `condition` is lowered through the same `classify_expression`/
     /// `lower_constraint_expression` machinery already used for `decide`'s branch guards/
@@ -1259,22 +1692,11 @@ impl SemanticModelBuilder {
         span: Span,
         condition: Option<&Node<Expression>>,
         body: &ActionDefBody,
+        until: Option<&sysml_v2_parser::ast::UntilParameter>,
+        prefix: &sysml_v2_parser::ast::ActionNodePrefix,
     ) -> Result<(), ConstructionError> {
-        // A synthesized control-flow scope with no authored declaration syntax of its own.
-        let declaration = self.push_typed_declaration(
-            document,
-            Some(owner),
-            decl_kind,
-            None,
-            span,
-            DeclarationFacts::none(),
-        )?;
-        self.push_membership(
-            declaration,
-            MembershipKind::Feature,
-            Visibility::Default,
-            span,
-        )?;
+        let declaration =
+            self.lower_structured_action_declaration(document, owner, decl_kind, span, prefix)?;
         if let Some(condition) = condition {
             self.push_evaluation_fact(
                 declaration,
@@ -1285,6 +1707,23 @@ impl SemanticModelBuilder {
         let body_start = self.declarations.len();
         self.lower_action_def_body(document, declaration, body)?;
         self.mark_single_action_input_parameter(declaration, body_start, 2);
+        if let Some(until) = until {
+            // The optional third input is a distinct expression. Do not replace the while
+            // condition or evaluate it at construction time as if it were the loop's result.
+            let (parameter, _) = self.mint_value_expression(
+                document,
+                declaration,
+                Some(crate::MembershipRole::Parameter),
+                &until.expression,
+            )?;
+            self.declaration_facts[parameter.index()].direction = Some(ParameterDirection::In);
+            self.declaration_facts[parameter.index()].action_input_parameter_position = Some(3);
+            self.push_evaluation_fact(
+                parameter,
+                self.constraint_expression_site(document, &until.expression.value),
+            );
+            self.lower_constraint_expression(document, parameter, family, &until.expression)?;
+        }
         Ok(())
     }
 
@@ -1302,14 +1741,15 @@ impl SemanticModelBuilder {
         span: Span,
         node: &IfStmt,
     ) -> Result<(), ConstructionError> {
+        if self.lower_conditional_target_successions(document, owner, family, node)? {
+            return Ok(());
+        }
         let declaration = self.push_typed_declaration(
             document,
             Some(owner),
             DeclarationKind::If,
             None,
             span,
-            // A synthesized scope for the conditional's guard and branches. `else_body` is a
-            // typed parser distinction, so publish its presence once at this lowering boundary.
             DeclarationFacts {
                 has_else_action: Some(node.else_body.is_some()),
                 ..DeclarationFacts::none()
@@ -1385,19 +1825,10 @@ impl SemanticModelBuilder {
         }
     }
 
-    /// Lowers a `for <var> in <range> { ... }` loop control node (BNF `ForLoop`) as its own
-    /// anonymous `DeclarationKind::ForLoop` nested-declaration feature owned by `owner`, mirroring
-    /// `lower_while_or_loop_stmt`'s shape: the `range` collection expression is lowered through
-    /// the same `classify_expression`/`lower_constraint_expression` machinery as
-    /// `while`'s condition, sourced at this `ForLoop` declaration (the range is evaluated once per
-    /// loop, not once per iteration binding). `var` (a bare, untyped `String` -- the parser
-    /// records no type/multiplicity for it) is lowered as a named `DeclarationKind::
-    /// ForLoopVariable` feature owned by this same `ForLoop` declaration -- introducing a binding,
-    /// not a reference, mirroring `InOutDecl`'s own scope boundary -- so it is a visible sibling
-    /// through the shared `DeclarationDomain::Any` lexical lookup the body's own statements use.
-    /// The body then recurses through `lower_action_def_body`, owned by this `ForLoop`
-    /// declaration. No type inference from `range`'s element type is performed; this is
-    /// reference-resolution scope only, not iteration-execution semantics.
+    /// Lower a for-loop's node declaration, sequence expression, variable UsageDeclaration and
+    /// body. The variable belongs to the loop's lexical scope and retains its authored type,
+    /// multiplicity and specialization clauses. This does not execute the loop or infer the
+    /// variable's type from the sequence expression.
     pub(crate) fn lower_for_loop(
         &mut self,
         document: DocumentIdx,
@@ -1406,20 +1837,12 @@ impl SemanticModelBuilder {
         span: Span,
         node: &ForLoop,
     ) -> Result<(), ConstructionError> {
-        let declaration = self.push_typed_declaration(
+        let declaration = self.lower_structured_action_declaration(
             document,
-            Some(owner),
+            owner,
             DeclarationKind::ForLoop,
-            None,
             span,
-            // A synthesized scope owning the loop variable and range expression.
-            DeclarationFacts::none(),
-        )?;
-        self.push_membership(
-            declaration,
-            MembershipKind::Feature,
-            Visibility::Default,
-            span,
+            &node.prefix,
         )?;
         self.push_evaluation_fact(
             declaration,
@@ -1433,21 +1856,37 @@ impl SemanticModelBuilder {
         )?;
         let var_name =
             self.intern_declaration_name(document, node.variable.value.identification.name)?;
+        let short_name =
+            self.intern_short_name(document, node.variable.value.identification.short_name)?;
         let var_declaration = self.push_typed_declaration(
             document,
             Some(declaration),
             DeclarationKind::ForLoopVariable,
             var_name,
-            span,
-            // `ast::ForLoop::var` is a bare `String`; the parser records no type, multiplicity, or
-            // modifier for the loop variable.
-            DeclarationFacts::none(),
+            node.variable.span,
+            DeclarationFacts {
+                short_name,
+                multiplicity: multiplicity_facts(node.variable.value.multiplicity.as_ref()),
+                modifiers: DeclarationModifiers {
+                    ordered: node.variable.value.multiplicity_modifiers.is_ordered(),
+                    nonunique: !node.variable.value.multiplicity_modifiers.is_unique(),
+                    ..DeclarationModifiers::default()
+                },
+                ..DeclarationFacts::none()
+            },
         )?;
         self.push_membership(
             var_declaration,
             MembershipKind::Feature,
             Visibility::Default,
-            span,
+            node.variable.span,
+        )?;
+        self.lower_usage_declaration_clauses(
+            document,
+            var_declaration,
+            &node.variable.value,
+            false,
+            None,
         )?;
         let body_start = self.declarations.len();
         self.lower_action_def_body(document, declaration, &node.body.body)?;
@@ -1455,19 +1894,10 @@ impl SemanticModelBuilder {
         Ok(())
     }
 
-    /// Lowers a `then accept ...;` shorthand trigger (BNF `ThenTarget::Accept`, `ast::
-    /// TransitionAccept`) -- the inline accept-trigger form reused unchanged from `Transition`'s
-    /// own `accept` clause, deliberately deferred by `39bd06fc`. Sourced directly at `owner` (the
-    /// enclosing action def/usage declaration), not an anonymous nested declaration: an accept
-    /// trigger's operand is looked up in the action's own enclosing scope (e.g. `accept sig after
-    /// ...;`'s `sig`, `accept when b.f;`'s `b`), not among the action's own children the way a
-    /// `Succession`/`Decide`/`Merge` end is. Dispatches on the three `TransitionAccept` shapes:
-    /// `Shorthand`'s expression and `TimeTrigger`'s (`at`/`when`/`after`) expression both reuse
-    /// `lower_constraint_expression` directly (picking up its `FeatureRef`/`MemberAccess`/
-    /// `Invocation`/`Constructor` dispatch, e.g. `accept at new Time::Iso8601DateTime(...)`'s
-    /// constructor callee/argument); `Payload`'s typed `: Type` suffix reuses
-    /// `lower_payload_clause_type`. Either shape's optional trailing `via <port>` clause resolves
-    /// as an `AcceptVia` reference through `lower_satisfy_operand`.
+    /// Lowers a `then accept ...;` (BNF `ThenTarget::Accept`, `ast::TransitionAccept`) as the
+    /// anonymous accept action it declares, with the trigger lowered at that action exactly as
+    /// for a named `action a accept ...;` (see `lower_accept_trigger`). Names in the trigger are
+    /// still found in the enclosing action's scope, which a member's lookup reaches.
     pub(crate) fn lower_then_accept(
         &mut self,
         document: DocumentIdx,
@@ -1475,7 +1905,121 @@ impl SemanticModelBuilder {
         family: UnsupportedFamily,
         accept: &Node<TransitionAccept>,
     ) -> Result<(), ConstructionError> {
-        self.lower_accept_trigger(document, owner, family, &accept.value)
+        // `then accept ...;` is the `then` shorthand before an accept action node (BNF
+        // `AcceptNode`), like `then action a;` before an action. The node is anonymous: the
+        // name after `accept` is that of its payload parameter, not of the action.
+        let (has_payload_argument, has_receiver_argument) = match &accept.value {
+            TransitionAccept::Shorthand(_, via) => (true, via.is_some()),
+            TransitionAccept::TimeTrigger(_, _) | TransitionAccept::NamedTimeTrigger(_, _, _) => {
+                (true, false)
+            }
+            TransitionAccept::Payload(_, via) => (false, via.is_some()),
+        };
+        let declaration = self.push_typed_declaration(
+            document,
+            Some(owner),
+            DeclarationKind::AcceptActionUsage,
+            None,
+            accept.span,
+            DeclarationFacts {
+                modifiers: DeclarationModifiers {
+                    composite: true,
+                    ..DeclarationModifiers::default()
+                },
+                is_trigger_action: Some(false),
+                accept_has_payload_argument: Some(has_payload_argument),
+                accept_has_receiver_argument: Some(has_receiver_argument),
+                ..DeclarationFacts::none()
+            },
+        )?;
+        self.push_membership(
+            declaration,
+            MembershipKind::Feature,
+            Visibility::Default,
+            accept.span,
+        )?;
+        self.lower_accept_trigger(document, declaration, family, &accept.value, accept.span)
+    }
+
+    /// Lowers an `accept when|at|after <argument>` trigger as its own SysML
+    /// `TriggerInvocationExpression` element owned by `owner` (the accept action, or the site an
+    /// accept trigger is written at), spanning `span`, with its `TriggerKind`. The argument is
+    /// lowered through the general constraint-expression dispatch at that element, and its
+    /// syntax is recorded as far as it settles the argument's result type: a literal, or the
+    /// feature reference whose settled feature carries the type.
+    pub(crate) fn lower_trigger_invocation(
+        &mut self,
+        document: DocumentIdx,
+        owner: DeclarationId,
+        family: UnsupportedFamily,
+        kind: sysml_v2_parser::ast::TriggerKind,
+        argument: &Node<Expression>,
+        span: Span,
+    ) -> Result<(), ConstructionError> {
+        use crate::lower::facts::LiteralKind;
+        use crate::lower::facts::TriggerArgument;
+        use crate::lower::facts::TriggerInvocationKind;
+        let expression = self.push_typed_declaration(
+            document,
+            Some(owner),
+            DeclarationKind::KermlExpression,
+            None,
+            span,
+            DeclarationFacts::none(),
+        )?;
+        self.push_membership(
+            expression,
+            MembershipKind::Owning,
+            Visibility::Default,
+            span,
+        )?;
+        let result = self.push_typed_declaration(
+            document,
+            Some(expression),
+            DeclarationKind::KermlFeature,
+            None,
+            span,
+            DeclarationFacts {
+                direction: Some(ParameterDirection::Out),
+                ..DeclarationFacts::none()
+            },
+        )?;
+        self.push_membership(result, MembershipKind::Feature, Visibility::Default, span)?;
+        self.declaration_facts[expression.index()].expression_result = Some(result);
+        let argument_fact = match &argument.value {
+            Expression::LiteralBoolean(_) => TriggerArgument::Literal(LiteralKind::Boolean),
+            Expression::LiteralInteger(_) => TriggerArgument::Literal(LiteralKind::Integer),
+            Expression::LiteralReal(_) => TriggerArgument::Literal(LiteralKind::Real),
+            Expression::LiteralString(_) => TriggerArgument::Literal(LiteralKind::String),
+            Expression::Null => TriggerArgument::Literal(LiteralKind::Null),
+            Expression::FeatureRef(target) | Expression::FeatureChainRef(target) => {
+                self.note_expression_node(expression, argument);
+                TriggerArgument::FeatureReference(self.push_expression_operand_reference_id(
+                    document,
+                    expression,
+                    *target,
+                    crate::lower::facts::ExpressionOperandRole::FeatureReference,
+                )?)
+            }
+            _ => TriggerArgument::Other,
+        };
+        if let TriggerArgument::Literal(_) = argument_fact {
+            self.lower_leaf_expression(document, expression, argument)?;
+        }
+        if argument_fact == TriggerArgument::Other {
+            self.lower_constraint_expression(document, expression, family, argument)?;
+        }
+        self.trigger_invocations
+            .push(crate::lower::facts::TriggerInvocationRecord {
+                expression,
+                kind: match kind {
+                    sysml_v2_parser::ast::TriggerKind::When => TriggerInvocationKind::When,
+                    sysml_v2_parser::ast::TriggerKind::At => TriggerInvocationKind::At,
+                    sysml_v2_parser::ast::TriggerKind::After => TriggerInvocationKind::After,
+                },
+                argument: argument_fact,
+            });
+        Ok(())
     }
 
     /// The `TransitionAccept` dispatch shared by `then accept ...;` (see `lower_then_accept`) and
@@ -1487,10 +2031,11 @@ impl SemanticModelBuilder {
         owner: DeclarationId,
         family: UnsupportedFamily,
         accept: &TransitionAccept,
+        span: Span,
     ) -> Result<(), ConstructionError> {
         match accept {
             TransitionAccept::Shorthand(expr, via) => {
-                self.lower_constraint_expression(document, owner, family, expr)?;
+                self.lower_accept_payload_expression(document, owner, family, expr)?;
                 if let Some(via) = via {
                     self.lower_satisfy_operand(
                         document,
@@ -1501,8 +2046,9 @@ impl SemanticModelBuilder {
                     )?;
                 }
             }
-            TransitionAccept::TimeTrigger(_kind, expr) => {
-                self.lower_constraint_expression(document, owner, family, expr)?;
+            TransitionAccept::TimeTrigger(kind, expr)
+            | TransitionAccept::NamedTimeTrigger(_, kind, expr) => {
+                self.lower_trigger_invocation(document, owner, family, *kind, expr, span)?;
             }
             TransitionAccept::Payload(clause, via) => {
                 self.lower_payload_clause_type(document, owner, clause)?;
@@ -1516,6 +2062,30 @@ impl SemanticModelBuilder {
                     )?;
                 }
             }
+        }
+        Ok(())
+    }
+
+    /// The shorthand accept payload is a typing expression on every action surface.
+    pub(crate) fn lower_accept_payload_expression(
+        &mut self,
+        document: DocumentIdx,
+        owner: DeclarationId,
+        family: UnsupportedFamily,
+        expr: &Node<Expression>,
+    ) -> Result<(), ConstructionError> {
+        // `accept T` names the payload's type (SysML `PayloadFeature`'s
+        // `OwnedFeatureTyping`), not a feature reference.
+        match &expr.value {
+            Expression::FeatureRef(target) | Expression::FeatureChainRef(target) => {
+                self.push_expression_operand_reference(
+                    document,
+                    owner,
+                    *target,
+                    crate::lower::facts::ExpressionOperandRole::PayloadTyping,
+                )?;
+            }
+            _ => self.lower_constraint_expression(document, owner, family, expr)?,
         }
         Ok(())
     }
@@ -1573,7 +2143,10 @@ impl SemanticModelBuilder {
         let declaration = self.push_typed_declaration(
             document,
             Some(owner),
-            DeclarationKind::Flow,
+            match node.value.kind {
+                FlowUsageKind::Flow | FlowUsageKind::Message => DeclarationKind::Flow,
+                FlowUsageKind::SuccessionFlow => DeclarationKind::SuccessionFlow,
+            },
             name,
             node.span,
             DeclarationFacts {
@@ -1589,6 +2162,9 @@ impl SemanticModelBuilder {
                 // KerML's `ownedEndFeatures` are the two typed `from`/`to` endpoints; a declared
                 // flow without them owns no end features of its own.
                 owned_end_feature_count: endpoints.map(|_| 2),
+                payload_feature_count: Some(
+                    u32::try_from(payloads.len()).map_err(|_| ConstructionError::Capacity)?,
+                ),
                 ..DeclarationFacts::none()
             },
         )?;
@@ -1655,6 +2231,7 @@ impl SemanticModelBuilder {
         node: &Node<SuccessionUsage>,
     ) -> Result<(), ConstructionError> {
         let name = self.intern_short_name(document, node.value.name)?;
+        let short_name = self.intern_short_name(document, node.value.short_name)?;
         let declaration = self.push_typed_declaration(
             document,
             Some(owner),
@@ -1662,7 +2239,12 @@ impl SemanticModelBuilder {
             name,
             node.span,
             DeclarationFacts {
+                short_name,
                 multiplicity: multiplicity_facts(node.value.multiplicity.as_ref()),
+                succession_end_multiplicities: SuccessionEndMultiplicities::authored(
+                    multiplicity_facts(node.value.source_multiplicity.as_ref()),
+                    multiplicity_facts(node.value.target_multiplicity.as_ref()),
+                ),
                 ..DeclarationFacts::none()
             },
         )?;
@@ -1713,7 +2295,8 @@ impl SemanticModelBuilder {
     }
 
     /// Lowers a `terminate <target>;`/bare `terminate;` body element (BNF `TerminateStmt`, `ast::
-    /// TerminateStmt`) found inside an action def/usage body. The optional `target` is resolved as
+    /// TerminateStmt`), named or not and optionally after `then`, found inside an action def/usage
+    /// body. The optional `target` is resolved as
     /// a `TerminateTarget` reference through the shared `lower_satisfy_operand`
     /// `DeclarationDomain::Any` lexical lookup. The statement owns a distinct anonymous
     /// `TerminateActionUsage` identity; lexical resolution from that child still reaches sibling
@@ -1726,20 +2309,23 @@ impl SemanticModelBuilder {
         family: UnsupportedFamily,
         node: &Node<TerminateStmt>,
     ) -> Result<(), ConstructionError> {
-        let declaration = self.push_typed_declaration(
+        // `then terminate` is a succession from the preceding member to this node, as for every
+        // `then` node (SysML 8.2.2.17.1).
+        let then_source = node
+            .value
+            .is_then
+            .then(|| self.then_source(owner, self.declarations.len()))
+            .flatten();
+        // `TerminateNode = OccurrenceUsagePrefix ActionNodeUsageDeclaration? 'terminate' ...`: a
+        // named `action stop terminate;` is one terminate node called `stop`.
+        let declaration = self.lower_structured_action_declaration(
             document,
-            Some(owner),
+            owner,
             DeclarationKind::TerminateActionUsage,
-            None,
             node.span,
-            DeclarationFacts::none(),
+            &node.value.prefix,
         )?;
-        self.push_membership(
-            declaration,
-            MembershipKind::Feature,
-            Visibility::Default,
-            node.span,
-        )?;
+        self.declaration_facts[declaration.index()].then_source = then_source;
         if let Some(target) = &node.value.target {
             self.lower_satisfy_operand(
                 document,
@@ -1766,17 +2352,15 @@ impl SemanticModelBuilder {
     ) -> Result<(), ConstructionError> {
         let declared = match &node.value.target {
             PerformActionTarget::Action(declaration) => Some(declaration.as_ref()),
-            PerformActionTarget::Reference { .. } => None,
+            PerformActionTarget::Reference { specialization, .. } => specialization.as_deref(),
         };
         let name = self.intern_declaration_name(
             document,
-            declared.and_then(|declaration| {
-                declaration
-                    .value
-                    .identification
-                    .name
-                    .or(declaration.value.identification.short_name)
-            }),
+            declared.and_then(|node| node.value.identification.name),
+        )?;
+        let short_name = self.intern_short_name(
+            document,
+            declared.and_then(|node| node.value.identification.short_name),
         )?;
         let (is_abstract, variation) =
             definition_prefix_modifiers(node.value.usage_prefix.as_ref());
@@ -1787,9 +2371,14 @@ impl SemanticModelBuilder {
             name,
             node.span,
             DeclarationFacts {
+                short_name,
                 modifiers: DeclarationModifiers {
                     is_abstract,
                     variation,
+                    ordered: declared
+                        .is_some_and(|node| node.value.multiplicity_modifiers.is_ordered()),
+                    nonunique: declared
+                        .is_some_and(|node| !node.value.multiplicity_modifiers.is_unique()),
                     ..DeclarationModifiers::default()
                 },
                 multiplicity: multiplicity_facts(
@@ -1804,28 +2393,35 @@ impl SemanticModelBuilder {
             Visibility::Default,
             node.span,
         )?;
-        // Constructs the canonical value Expression/result and preserves its authored spelling.
-        // This usage family does not yet classify the expression operands.
-        if let Some(feature_value) = &node.value.value {
-            self.record_feature_value(document, declaration, feature_value)?;
-        }
-        match &node.value.target {
-            PerformActionTarget::Action(usage_declaration) => {
-                if let Some(relationship) = &usage_declaration.value.typing {
-                    self.lower_typing_relationship(document, declaration, relationship)?;
-                }
-                if let Some((relationship, _)) = &usage_declaration.value.subsets {
-                    self.lower_subsetting_relationship(document, declaration, relationship)?;
-                }
-                if let Some(relationship) = &usage_declaration.value.redefines {
-                    self.lower_subsetting_relationship(document, declaration, relationship)?;
-                }
-            }
-            // `perform <path>;` is `PerformActionUsage`'s `OwnedReferenceSubsetting` alternative
-            // (SysML BNF 1411-1417, Pilot `SysML.xtext`), so the performed action is a `::>`
-            // reference-subsetting target -- the reference family `validatePerformActionUsageReference`
-            // (`checkReferenceType` in the Pilot) reads.
-            PerformActionTarget::Reference { action, redefines } => {
+        self.lower_value_assignment(
+            document,
+            declaration,
+            UnsupportedFamily::ActionDefinitionMember,
+            node.value.value.as_ref(),
+        )?;
+        self.lower_perform_target(
+            document,
+            declaration,
+            &node.value.target,
+            ReferenceKind::References,
+        )?;
+        self.lower_perform_body(document, declaration, &node.value.body)
+    }
+
+    /// Retain every specialization of the grammar-owned perform declaration or reference.
+    pub(crate) fn lower_perform_target(
+        &mut self,
+        document: DocumentIdx,
+        declaration: DeclarationId,
+        target: &PerformActionTarget,
+        reference_kind: ReferenceKind,
+    ) -> Result<(), ConstructionError> {
+        let usage = match target {
+            PerformActionTarget::Action(usage) => Some(usage.as_ref()),
+            PerformActionTarget::Reference {
+                action,
+                specialization,
+            } => {
                 let span = self.documents[document.index()]
                     .parsed
                     .qualified_reference(*action)
@@ -1834,19 +2430,20 @@ impl SemanticModelBuilder {
                     .span;
                 self.push_reference(PendingReference {
                     source: declaration,
-                    kind: ReferenceKind::References,
+                    kind: reference_kind,
                     document,
                     local: *action,
                     flags: RelationshipFlags::default(),
                     span,
                     import: None,
                 })?;
-                if let Some(relationship) = redefines {
-                    self.lower_subsetting_relationship(document, declaration, relationship)?;
-                }
+                specialization.as_deref()
             }
+        };
+        if let Some(usage) = usage {
+            self.lower_usage_declaration_clauses(document, declaration, &usage.value, false, None)?;
         }
-        self.lower_perform_body(document, declaration, &node.value.body)
+        Ok(())
     }
 
     /// Lowers the `PerformBody` owned by a `perform action` usage (BNF `PerformBodyElement`):
@@ -1993,6 +2590,7 @@ impl SemanticModelBuilder {
                 modifiers: DeclarationModifiers {
                     is_abstract,
                     variation,
+                    individual: node.value.is_individual,
                     ..DeclarationModifiers::default()
                 },
                 ..DeclarationFacts::none()

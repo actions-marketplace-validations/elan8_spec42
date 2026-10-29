@@ -2,6 +2,7 @@
 
 use crate::lower::facts::DeclarationFacts;
 use crate::lower::facts::DeclarationModifiers;
+use crate::lower::facts::MetadataAnnotationForm;
 use crate::lower::facts::MetadataAnnotationRecord;
 use crate::lower::facts::PendingReference;
 use crate::lower::facts::RelationshipFlags;
@@ -67,52 +68,111 @@ impl SemanticModelBuilder {
     /// bare `QualifiedReferenceId`, so its `FeatureTyping` reference is pushed directly rather
     /// than through `lower_typing_relationship`. `MetadataUsage`'s body is a plain
     /// `AttributeBody` (see `lower_metadata_def`), so owned members are lowered through
-    /// `lower_attribute_body`. The `about` clause (annotation targets) is deliberately not
-    /// lowered here -- it belongs to the separate annotation-application fact family, out of
-    /// scope for this slice.
+    /// `lower_attribute_body`. A `metadata` usage also applies its type as a metadata annotation:
+    /// with no `about` clause it annotates its owning namespace, and with one it annotates each
+    /// listed target (the `about` references, resolved through `DeclarationDomain::Any`).
+    /// The metaclass a `metadata` feature, `@` annotation or prefix metadata of `document`
+    /// lowers to. The parser gives these one node in both languages; the admitted document
+    /// language decides between KerML `MetadataFeature` and SysML `MetadataUsage` (KerML
+    /// 8.3.4.12, SysML 8.3.27).
+    pub(crate) fn metadata_feature_kind(
+        &self,
+        document: DocumentIdx,
+    ) -> Result<DeclarationKind, ConstructionError> {
+        let language = self
+            .documents
+            .get(document.index())
+            .ok_or(ConstructionError::InvalidIdentity)?
+            .language;
+        Ok(match language {
+            source_identity::SourceLanguage::KerML => DeclarationKind::KermlMetadataFeature,
+            source_identity::SourceLanguage::SysML => DeclarationKind::MetadataUsage,
+        })
+    }
+
     pub(crate) fn lower_metadata_usage(
         &mut self,
         document: DocumentIdx,
         owner: Option<DeclarationId>,
         node: &Node<ParserMetadataUsage>,
     ) -> Result<(), ConstructionError> {
-        let name = self.intern_declaration_name(document, Some(node.value.name))?;
+        let name = self.intern_declaration_name(document, node.value.name)?;
+        let short_name = self.intern_short_name(document, node.value.short_name)?;
+        let kind = self.metadata_feature_kind(document)?;
         let declaration = self.push_typed_declaration(
             document,
             owner,
-            DeclarationKind::MetadataUsage,
+            kind,
             name,
             node.span,
             // `ast::MetadataUsage` carries no modifier, multiplicity, direction, or short name.
-            DeclarationFacts::none(),
+            DeclarationFacts {
+                short_name,
+                ..DeclarationFacts::none()
+            },
         )?;
         self.push_membership(
             declaration,
-            MembershipKind::Feature,
+            MembershipKind::Owning,
             self.member_visibility(
                 &node.value.membership,
                 ParserMembershipKind::FeatureMembership,
             )?,
             node.value.membership.span,
         )?;
-        if let Some(type_reference) = node.value.type_reference {
+        let type_reference = node.value.type_reference;
+        let span = self.documents[document.index()]
+            .parsed
+            .qualified_reference(type_reference)
+            .ok_or(ConstructionError::InvalidParserReference)?
+            .metadata
+            .span;
+        self.push_reference(PendingReference {
+            source: declaration,
+            kind: ReferenceKind::FeatureTyping,
+            document,
+            local: type_reference,
+            flags: RelationshipFlags::default(),
+            span,
+            import: None,
+        })?;
+        self.metadata_annotations.push(MetadataAnnotationRecord {
+            annotation: declaration,
+            annotated_element: owner.unwrap_or(declaration),
+            form: MetadataAnnotationForm::Usage,
+        });
+        self.lower_metadata_about_references(document, declaration, &node.value.about_targets)?;
+        self.lower_metadata_body(document, declaration, &node.value.body)
+    }
+
+    /// Pushes one [`ReferenceKind::MetadataAnnotationAbout`] reference per authored `about`
+    /// target, sourced at the annotation declaration. An `about` target is any element, so these
+    /// resolve through the `DeclarationDomain::Any` lexical lookup (like a connector end), never
+    /// the metadata-def type domain the annotation's own typing reference uses.
+    fn lower_metadata_about_references(
+        &mut self,
+        document: DocumentIdx,
+        annotation: DeclarationId,
+        about_targets: &[sysml_v2_parser::ast::QualifiedReferenceId],
+    ) -> Result<(), ConstructionError> {
+        for target in about_targets {
             let span = self.documents[document.index()]
                 .parsed
-                .qualified_reference(type_reference)
+                .qualified_reference(*target)
                 .ok_or(ConstructionError::InvalidParserReference)?
                 .metadata
                 .span;
             self.push_reference(PendingReference {
-                source: declaration,
-                kind: ReferenceKind::FeatureTyping,
+                source: annotation,
+                kind: ReferenceKind::MetadataAnnotationAbout,
                 document,
-                local: type_reference,
+                local: *target,
                 flags: RelationshipFlags::default(),
                 span,
                 import: None,
             })?;
         }
-        self.lower_metadata_body(document, declaration, &node.value.body)
+        Ok(())
     }
 
     /// Lowers a `MetadataBody` (`';' | '{' MetadataBodyElement* '}'`), the body shared by
@@ -131,6 +191,9 @@ impl SemanticModelBuilder {
         };
         for element in elements {
             match &element.value {
+                MetadataBodyElement::ExtendedDefinition(node) => {
+                    self.lower_extended_definition(document, Some(owner), node)?;
+                }
                 MetadataBodyElement::Error(error) => {
                     self.push_recovery(document, error.span);
                 }
@@ -162,20 +225,39 @@ impl SemanticModelBuilder {
         Ok(())
     }
 
-    /// Lowers one `MetadataBodyUsage`: an anonymous feature owned by `owner` that redefines the
-    /// named target (`totalRisk` in `@Risk { totalRisk = 0.3; }`), carries the authored value
-    /// spelling, and owns any nested metadata body.
+    /// Lowers one `MetadataBodyUsage`: a feature owned by `owner` that redefines the named target
+    /// (`totalRisk` in `@Risk { totalRisk = 0.3; }`), carries the authored value spelling, and
+    /// owns any nested metadata body.
+    ///
+    /// The redefinition target token (`totalRisk`) doubles as this feature's own name: nothing
+    /// else in the grammar authors one, but the token is right there in the source, so there is
+    /// no reason to publish this declaration as anonymous (empty `name`, a qualified name ending
+    /// in `::`) the way a target-less `ref requirement :>> unnamed;` legitimately does. Spec42
+    /// issue #201 (L-08): downstream export consumers otherwise cannot locate a metadata body
+    /// attribute like a report section's `order` by name at all.
     pub(crate) fn lower_metadata_body_usage(
         &mut self,
         document: DocumentIdx,
         owner: DeclarationId,
         node: &Node<MetadataBodyUsage>,
     ) -> Result<(), ConstructionError> {
+        let name = self
+            .documents
+            .get(document.index())
+            .and_then(|entry| entry.parsed.qualified_reference(node.value.target))
+            .and_then(|reference| {
+                reference.segment_decoded_text(reference.segments.len().checked_sub(1)?)
+            })
+            .map(|name| name.into_owned());
+        let name = match name {
+            Some(name) => self.intern_declared_name(&name)?,
+            None => None,
+        };
         let declaration = self.push_typed_declaration(
             document,
             Some(owner),
             DeclarationKind::AttributeUsage,
-            None,
+            name,
             node.span,
             DeclarationFacts::none(),
         )?;
@@ -235,10 +317,11 @@ impl SemanticModelBuilder {
             document,
             identification.and_then(|identification| identification.short_name),
         )?;
+        let kind = self.metadata_feature_kind(document)?;
         let annotation = self.push_typed_declaration(
             document,
             Some(owner),
-            DeclarationKind::MetadataUsage,
+            kind,
             name,
             node.span,
             DeclarationFacts {
@@ -248,13 +331,14 @@ impl SemanticModelBuilder {
         )?;
         self.push_membership(
             annotation,
-            MembershipKind::Feature,
+            MembershipKind::Owning,
             Visibility::Default,
             node.span,
         )?;
         self.metadata_annotations.push(MetadataAnnotationRecord {
             annotation,
             annotated_element: owner,
+            form: MetadataAnnotationForm::AnnotatingMember,
         });
         let span = self.documents[document.index()]
             .parsed
@@ -271,6 +355,24 @@ impl SemanticModelBuilder {
             span,
             import: None,
         })?;
+        // Also published as a `FeatureTyping` reference to the same target: `Family::Typing`
+        // (and so `relationships.typing` in the export projection) only ever reads
+        // `ReferenceKind::FeatureTyping`, which `lower_metadata_usage` pushes for the identical
+        // `metadata name : Type` syntax at package/part/action body level. Without this, a marker
+        // metadata usage nested in an item/attribute body (this function's call site) published
+        // no resolved typing at all -- spec42 issue #201 (L-07). The `MetadataAnnotation`
+        // reference above is unchanged and still what
+        // `metadata_annotation_definition_kind(AnnotatingMember)` reads for `metadata_annotations()`.
+        self.push_reference(PendingReference {
+            source: annotation,
+            kind: ReferenceKind::FeatureTyping,
+            document,
+            local: node.value.type_reference,
+            flags: RelationshipFlags::default(),
+            span,
+            import: None,
+        })?;
+        self.lower_metadata_about_references(document, annotation, &node.value.about_targets)?;
         self.lower_metadata_body(document, annotation, &node.value.body)?;
         Ok(())
     }

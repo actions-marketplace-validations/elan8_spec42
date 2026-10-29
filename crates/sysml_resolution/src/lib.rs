@@ -1,5 +1,3 @@
-#![recursion_limit = "256"]
-
 //! The semantic authority.
 //!
 //! The only crate that calls the parser, holds parsed trees ([`syntax`]), lowers and resolves,
@@ -10,10 +8,13 @@
 
 use std::fmt;
 
-use source_identity::{ContentDigest, RootDigest, SourceManifest, SourceManifestEntry, SourceRole};
+use source_identity::{
+    ContentDigest, RootDigest, SourceLanguage, SourceManifest, SourceManifestEntry, SourceRole,
+};
 
 mod action_query;
 mod check;
+mod connection_query;
 mod definition_usage_query;
 mod details;
 mod diagnose;
@@ -21,14 +22,17 @@ mod diagnostics;
 mod diagram_query;
 mod evaluate;
 mod evaluation;
+mod expression;
 mod feature_query;
 mod index;
 mod inspection;
 pub mod library;
 mod lower;
+mod metadata_query;
 mod model;
 mod namespace_query;
 mod pipeline;
+mod projection;
 pub mod publication;
 mod qualified_reference;
 mod redefinition_query;
@@ -61,37 +65,48 @@ pub use sysml_source as source;
 mod traceability;
 mod type_query;
 mod verification;
+mod view_query;
 
 pub use action_query::{
     ActionArgumentId, ActionDerivedFactCollection, ActionDerivedFactKind, ActionDerivedFactOutcome,
     ActionDerivedFactPrerequisite, ActionInputParameterId, ActionOwnedMembershipId,
-    ActionOwnedMembershipKind, ActionOwnedMembershipMember,
+    ActionOwnedMembershipKind, ActionOwnedMembershipMember, FilterConditionId,
+};
+pub use connection_query::{
+    ConnectorEndpoint, ConnectorKind, PublishedConnectionGraph, PublishedConnector,
+    PublishedConnectorEnd,
 };
 pub use definition_usage_query::{
     DefinitionUsageDerivedKind, DefinitionUsageDerivedOutcome, DefinitionUsageDerivedPrerequisite,
 };
 pub use details::{
     ConnectedElement, EffectiveTypeEntry, EffectiveTyping, ElementDetails, ElementDetailsAt,
-    InheritedFeature, ReferencedDetails, RelationshipFamily, RelationshipOutcome, ViewSelection,
-    ViewSelectionObstacle, ViewSelectionOutcome,
+    InheritedFeature, ReferencedDetails, RelationshipFamily, RelationshipOutcome, ViewRendering,
+    ViewSelection, ViewSelectionObstacle, ViewSelectionOutcome,
 };
 pub use diagnostics::{
     Diagnostic, DiagnosticCategory, DiagnosticCode, DiagnosticLocation, DiagnosticOrigin,
     DiagnosticSeverity, PublishedDiagnostics, RelatedLocation,
 };
 pub use diagram_query::{
-    DiagramCompartment, DiagramCompartmentKind, DiagramCompartmentProvenance, DiagramEdge,
-    DiagramEdgeKind, DiagramElement, DiagramElementTyping, DiagramEndpointOccurrence,
-    DiagramIncompleteReason, DiagramOccurrenceIdentity, DiagramRelationship,
-    DiagramRelationshipEndpoint, DiagramRelationshipKind, DiagramRelationshipTarget, DiagramScene,
-    DiagramSemanticReference, DiagramSequenceEndpoint, DiagramSequenceMessage,
+    DiagramBrowserMembers, DiagramBrowserRow, DiagramCompartment, DiagramCompartmentKind,
+    DiagramCompartmentProvenance, DiagramEdge, DiagramEdgeKind, DiagramElement,
+    DiagramElementTyping, DiagramEndpointOccurrence, DiagramIncompleteReason, DiagramMembership,
+    DiagramOccurrenceIdentity, DiagramRelationship, DiagramRelationshipEndpoint,
+    DiagramRelationshipKind, DiagramRelationshipTarget, DiagramScene, DiagramSemanticReference,
+    DiagramSequenceCycleStep, DiagramSequenceEndpoint, DiagramSequenceMessage,
     DiagramSequenceOrder, DiagramSequenceScene, DiagramStateTransition,
     DiagramStateTransitionScene, DiagramStateVertex, DiagramStateVertexKind,
-    DiagramTransitionFeature, DiagramViewCatalogEntry, DiagramViewKind, DiagramViewProjection,
+    DiagramSuccessionGuard, DiagramTransitionFeature, DiagramViewCatalogEntry, DiagramViewKind,
+    DiagramViewProjection,
 };
 pub use evaluation::{
     AnalysisEvaluation, AuthoredUnit, ElementEvaluation, EvaluatedScalar, EvaluationFailure,
     EvaluationPolicy, EvaluationState, ExpectedMeasurement, ResolvedUnit, UnitResolution,
+};
+pub use expression::{
+    ContextualExpressionOutcome, ExpressionNode, ExpressionNodeKind, ExpressionOperator,
+    ExpressionOutcome, PublishedContextualExpression, PublishedExpression,
 };
 pub use feature_query::FeatureDerivedRelationshipCollection;
 pub use inspection::{
@@ -102,11 +117,21 @@ pub use inspection::{
     RelationshipProvenance, RelationshipTarget, SymbolEntry, ValueKind, Visibility,
     VisibilityProvenance,
 };
+pub use inspection::{EffectiveIdentification, EffectiveName};
+pub use metadata_query::{
+    MetadataAnnotationForm, MetadataAnnotationValue, PublishedMetadataAnnotation,
+};
+pub use model::published_relationship_kinds;
 pub use model::query::VisibleMemberRef;
 pub use model::query::VisibleMembers;
 pub use namespace_query::{NamespaceDerivedElementCollection, NamespaceImportDerivedElement};
+pub use projection::{
+    AdmittedSourceCounts, ProjectedElement, ProjectionEnvelope, ProjectionPhase,
+    ProjectionTruncation, PublishedModelProjection, MODEL_PROJECTION_SCHEMA_VERSION,
+};
 pub use qualified_reference::{
-    QualifiedElementReference, QualifiedReferenceOutcome, QualifiedReferenceTarget,
+    AnonymousElementReference, QualifiedElementReference, QualifiedReferenceOutcome,
+    QualifiedReferenceTarget,
 };
 pub use redefinition_query::{
     RedefinitionCheckKind, RedefinitionCheckOutcome, RedefinitionCheckPrerequisite,
@@ -118,10 +143,11 @@ pub use requirement_query::{
 pub use specialization_query::{
     SpecializationCheckKind, SpecializationCheckOutcome, SpecializationCheckPrerequisite,
 };
+pub use sysml_contract::EffectiveNameProvenance;
 pub use traceability::{
     BindingConnector, BindingConnectorCheckKind, BindingConnectorValidationOutcome,
-    BindingConnectorValidationPrerequisite, BindingEndpoint, SatisfyEndpoint, SatisfyPolarity,
-    SatisfyRelationship,
+    BindingConnectorValidationPrerequisite, BindingEndpoint, DerivationEndpoint,
+    DerivationRelationship, SatisfyEndpoint, SatisfyPolarity, SatisfyRelationship,
 };
 pub use type_query::{
     Conformance, ConformanceObstacle, EffectiveType, EffectiveTypeOrigin, RequirementUsageTyping,
@@ -132,10 +158,11 @@ pub use type_query::{
     TypeReference,
 };
 pub use verification::{RequirementVerification, VerificationOutcome, VerificationRequirement};
+pub use view_query::{ViewExposedElements, ViewExposureObstacle};
 
 use model::resolver::ResolvedSemanticModel;
 use pipeline::schedule::BuildSchedule;
-use pipeline::{CoordinatorError, OwnedSourceRecord, SemanticModelBuildCoordinator};
+use pipeline::{OwnedSourceRecord, SemanticModelBuildCoordinator};
 
 /// Owner-measured elapsed times for the stable publication barriers.
 ///
@@ -146,6 +173,14 @@ pub struct BuildMeasurements {
     pub parse: std::time::Duration,
     pub lowering: std::time::Duration,
     pub resolution: std::time::Duration,
+    /// Subphases of `resolution`, measured by the owning phase barriers.
+    pub resolve: std::time::Duration,
+    pub evaluation: std::time::Duration,
+    pub indexing: std::time::Duration,
+    pub diagnostics: std::time::Duration,
+    /// Namespace membership-identity checks, measured inside `diagnostics` by their owner.
+    /// This observation is excluded from publication identity and semantic results.
+    pub namespace_checks: std::time::Duration,
     /// How many admitted documents this build lowered itself: a memo miss, or no memo at all.
     ///
     /// `documents_lowered + documents_reused` is every admitted document, library and workspace
@@ -204,6 +239,7 @@ pub struct SourceInput {
     identity: Box<str>,
     payload: SourcePayload,
     kind: SourceKind,
+    language: SourceLanguage,
     content_digest: ContentDigest,
     library_root_slot: Option<u32>,
     library_relative_path: Option<Box<str>>,
@@ -218,10 +254,14 @@ impl SourceInput {
         &self.identity
     }
 
+    /// Admit text under `identity`, in the language its path names
+    /// ([`SourceLanguage::of_path`]).
     pub fn new(identity: impl Into<Box<str>>, content: String, kind: SourceKind) -> Self {
         let content_digest = ContentDigest::of_bytes(content.as_bytes());
+        let identity = identity.into();
         Self {
-            identity: identity.into(),
+            language: SourceLanguage::of_path(&identity),
+            identity,
             payload: SourcePayload::Text(content),
             kind,
             content_digest,
@@ -240,6 +280,7 @@ impl SourceInput {
             identity: identity.into(),
             content_digest: document.digest(),
             kind: document.kind(),
+            language: document.language(),
             payload: SourcePayload::Pending(document),
             library_root_slot: library_location.as_ref().map(|(slot, _)| *slot),
             library_relative_path: library_location.map(|(_, path)| path),
@@ -253,14 +294,28 @@ impl SourceInput {
         parsed: syntax::ParsedSource,
         kind: SourceKind,
     ) -> Self {
+        let identity = identity.into();
         Self {
-            identity: identity.into(),
+            language: parsed.language(),
+            identity,
             content_digest: parsed.digest(),
             payload: SourcePayload::Parsed(parsed),
             kind,
             library_root_slot: None,
             library_relative_path: None,
         }
+    }
+}
+
+impl SourceInput {
+    /// The same source admitted as `language`, for an identity whose path does not name it.
+    /// A pre-parsed handle must already use that language; a mismatch is rejected during build.
+    pub fn with_language(mut self, language: SourceLanguage) -> Self {
+        self.language = language;
+        if let SourcePayload::Pending(document) = &mut self.payload {
+            *document = document.with_language(language);
+        }
+        self
     }
 }
 
@@ -377,6 +432,7 @@ pub struct BuildRequest {
     /// service handles, and the only trace a consumer sees is the counted facts on
     /// [`BuildMeasurements`].
     lowering: Option<std::sync::Arc<lower::memo::LoweringMemo>>,
+    cancellation: Option<publication::BuildCancellation>,
 }
 
 fn manifest_entry(source: &SourceInput) -> SourceManifestEntry {
@@ -384,6 +440,7 @@ fn manifest_entry(source: &SourceInput) -> SourceManifestEntry {
         uri: source.identity.to_string(),
         path_hint: None,
         role: source_role(source.kind),
+        language: source.language,
         content_digest: source.content_digest,
         byte_len: source.payload.byte_len(),
         library_root_slot: source.library_root_slot,
@@ -458,11 +515,21 @@ pub(crate) fn build_library_stratum_memoized(
     syntax: Option<std::sync::Arc<syntax::SyntaxAuthority>>,
     lowering: Option<std::sync::Arc<lower::memo::LoweringMemo>>,
 ) -> Result<LibraryStratum, BuildFailure> {
+    build_library_stratum_cancellable(sources, syntax, lowering, None)
+}
+
+pub(crate) fn build_library_stratum_cancellable(
+    sources: Vec<SourceInput>,
+    syntax: Option<std::sync::Arc<syntax::SyntaxAuthority>>,
+    lowering: Option<std::sync::Arc<lower::memo::LoweringMemo>>,
+    cancellation: Option<publication::BuildCancellation>,
+) -> Result<LibraryStratum, BuildFailure> {
     let mut request = BuildRequest::new(
         sources,
         ConstructionSchedule::Parallel,
         LIBRARY_STRATUM_CONTRACT,
-    )?;
+    )?
+    .with_cancellation(cancellation);
     request.syntax = syntax;
     request.lowering = lowering;
     let manifest_entries = request.sources.iter().map(manifest_entry).collect();
@@ -472,10 +539,7 @@ pub(crate) fn build_library_stratum_memoized(
         .map(|source| source.identity.clone())
         .collect();
     let (published, _, sources) = build_parts(request)?;
-    let prepared = published
-        .model
-        .prepared_library(sources)
-        .map_err(|_| BuildFailure::ConstructionFailed)?;
+    let prepared = published.model.prepared_library(sources)?;
     Ok(LibraryStratum {
         prepared,
         manifest_entries,
@@ -521,6 +585,7 @@ impl BuildRequest {
             },
             syntax: None,
             lowering: None,
+            cancellation: None,
         })
     }
 
@@ -618,22 +683,88 @@ impl BuildRequest {
         self
     }
 
+    pub(crate) fn with_cancellation(
+        mut self,
+        cancellation: Option<publication::BuildCancellation>,
+    ) -> Self {
+        self.cancellation = cancellation;
+        self
+    }
+
     pub fn identity(&self) -> &PublicationIdentity {
         &self.identity
     }
 }
 
+/// The owner phase that rejected a semantic build.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ConstructionPhase {
+    SourceAdmission,
+    Lowering,
+    Splicing,
+    Resolution,
+    Evaluation,
+    Indexing,
+    Diagnostics,
+    LibrarySeed,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub enum BuildFailure {
+    Cancelled {
+        phase: ConstructionPhase,
+    },
     DuplicateSourceIdentity,
-    ConstructionFailed,
+    ConstructionFailed {
+        phase: ConstructionPhase,
+        /// The failed source when known; otherwise the model-wide phase's input documents.
+        documents: Box<[Box<str>]>,
+        cause: String,
+    },
+}
+
+impl BuildFailure {
+    pub(crate) fn construction(
+        phase: ConstructionPhase,
+        documents: impl IntoIterator<Item = impl AsRef<str>>,
+        cause: impl fmt::Debug,
+    ) -> Self {
+        Self::ConstructionFailed {
+            phase,
+            documents: documents
+                .into_iter()
+                .map(|uri| uri.as_ref().into())
+                .collect(),
+            cause: format!("{cause:?}"),
+        }
+    }
 }
 
 impl fmt::Display for BuildFailure {
     fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
-        write!(formatter, "{self:?}")
+        match self {
+            Self::Cancelled { phase } => write!(formatter, "{phase:?} cancelled"),
+            Self::DuplicateSourceIdentity => formatter.write_str("DuplicateSourceIdentity"),
+            Self::ConstructionFailed {
+                phase,
+                documents,
+                cause,
+            } => {
+                // A model-wide phase names every input, standard library included; a message for
+                // a person shows the first few and counts the rest.
+                let shown = &documents[..documents.len().min(BUILD_FAILURE_DOCUMENTS_SHOWN)];
+                write!(formatter, "{phase:?} failed for documents {shown:?}")?;
+                if documents.len() > shown.len() {
+                    write!(formatter, " and {} more", documents.len() - shown.len())?;
+                }
+                write!(formatter, ": {cause}")
+            }
+        }
     }
 }
+
+/// How many failed documents a [`BuildFailure`] message names before counting the rest.
+const BUILD_FAILURE_DOCUMENTS_SHOWN: usize = 3;
 
 impl std::error::Error for BuildFailure {}
 
@@ -693,6 +824,7 @@ fn build_parts(
         .map(|source| OwnedSourceRecord {
             identity: source.identity,
             role: source_role(source.kind),
+            language: source.language,
             digest: source.content_digest,
             payload: source.payload,
             syntax: syntax.clone(),
@@ -706,12 +838,11 @@ fn build_parts(
             request.standard_library_availability,
             request.library.as_deref().map(|library| &library.prepared),
             &request.reported,
-            request.lowering.as_deref(),
-        )
-        .map_err(|error| match error {
-            CoordinatorError::DuplicateSourceIdentity => BuildFailure::DuplicateSourceIdentity,
-            CoordinatorError::ConstructionFailed => BuildFailure::ConstructionFailed,
-        })?;
+            pipeline::BuildControls {
+                lowering_memo: request.lowering.as_deref(),
+                cancellation: request.cancellation.as_ref(),
+            },
+        )?;
     Ok((
         PublishedResolution {
             identity: request.identity,
@@ -721,6 +852,11 @@ fn build_parts(
             parse: measurements.parse,
             lowering: measurements.lowering,
             resolution: measurements.resolution,
+            resolve: measurements.semantic.resolve,
+            evaluation: measurements.semantic.evaluation,
+            indexing: measurements.semantic.indexing,
+            diagnostics: measurements.semantic.diagnostics,
+            namespace_checks: measurements.semantic.namespace_checks,
             sources_parsed: measurements.sources_parsed,
             documents_lowered: measurements.documents_lowered,
             documents_reused: measurements.documents_reused,
@@ -817,6 +953,26 @@ impl PublishedResolution {
     /// measurement, from facts this publication fixed before it became visible.
     pub fn evaluate(&self, symbol: SymbolId) -> QueryOutcome<ElementEvaluation> {
         self.model.evaluate(symbol)
+    }
+
+    /// The resolved structure of one element's authored constraint / calc / value expression.
+    ///
+    /// Every feature reference is paired with the specific inherited or redefined feature it
+    /// names; a shape outside the published slice is reported, never dropped. This retains
+    /// structure resolution already builds -- it performs no new analysis.
+    pub fn resolved_expression(&self, symbol: SymbolId) -> QueryOutcome<PublishedExpression> {
+        self.model.resolved_expression(symbol)
+    }
+
+    /// The effective expression body and bindings in a derived type or typed usage, with
+    /// authored provenance retained. Invalid contexts are unresolved; competing bindings
+    /// return a typed ambiguity rather than an asserted tree.
+    pub fn contextual_expression(
+        &self,
+        symbol: SymbolId,
+        context: SymbolId,
+    ) -> QueryOutcome<ContextualExpressionOutcome> {
+        self.model.contextual_expression(symbol, context)
     }
 
     /// Everything this publication knows about one element.
@@ -981,6 +1137,11 @@ impl PublishedResolution {
         self.model.satisfy_relationships()
     }
 
+    /// Workspace requirement derivation connections in canonical declaration order.
+    pub fn derivation_relationships(&self) -> QueryOutcome<Box<[DerivationRelationship]>> {
+        self.model.derivation_relationships()
+    }
+
     /// One exact derived relationship collection for a lowered Feature.
     ///
     /// The collection is a projection of canonical authored/implied relationships; it does not
@@ -1105,6 +1266,33 @@ impl PublishedResolution {
         self.model.binding_connectors()
     }
 
+    /// Every metadata annotation bound to one element: its form, the annotating definition, its
+    /// `about` targets, and the resolved values its body redefines.
+    pub fn metadata_annotations(
+        &self,
+        symbol: SymbolId,
+    ) -> QueryOutcome<Box<[PublishedMetadataAnnotation]>> {
+        self.model.metadata_annotation_details(symbol)
+    }
+
+    /// The `connect` / `interface` topology reachable from one element: every connector it owns
+    /// (directly or transitively), each with its `:` type and resolved ends.
+    pub fn connections(&self, root: SymbolId) -> QueryOutcome<PublishedConnectionGraph> {
+        self.model.connection_graph(root)
+    }
+
+    /// A read-only, deterministic projection of this publication's workspace-authored structure:
+    /// every element with its full details and composed resolved facts, every connector, and a
+    /// publication envelope. `max_nodes` bounds the element list (and the per-element composition
+    /// work); use `usize::MAX` for the whole workspace.
+    pub fn model_projection(&self, max_nodes: usize) -> QueryOutcome<PublishedModelProjection> {
+        self.model.model_projection(
+            max_nodes,
+            *self.identity.source_digest(),
+            self.identity.model_digest(),
+        )
+    }
+
     /// The explicit applicability outcome for a closed named binding-connector validation.
     pub fn binding_connector_validation(
         &self,
@@ -1123,6 +1311,14 @@ impl PublishedResolution {
         self.model.effective_features(symbol)
     }
 
+    /// The publication's effective name, short name, and naming provenance.
+    pub fn effective_identification(
+        &self,
+        symbol: SymbolId,
+    ) -> QueryOutcome<EffectiveIdentification<'_>> {
+        self.model.effective_identification(symbol)
+    }
+
     /// Applies every owned and inherited condition of `view` to one candidate element.
     pub fn view_selection(
         &self,
@@ -1130,6 +1326,16 @@ impl PublishedResolution {
         candidate: SymbolId,
     ) -> QueryOutcome<ViewSelection> {
         self.model.view_selection(view, candidate)
+    }
+
+    /// The elements exposed by any view usage after namespace expansion and effective filters.
+    pub fn view_exposed_elements(&self, view: SymbolId) -> QueryOutcome<ViewExposedElements> {
+        self.model.view_exposed_elements(view)
+    }
+
+    /// The rendering reached through this view's direct or inherited rendering membership.
+    pub fn view_rendering(&self, view: SymbolId) -> QueryOutcome<Option<ViewRendering>> {
+        self.model.view_rendering(view)
     }
 
     /// The types a feature declares.
@@ -1286,6 +1492,26 @@ impl DebugQueries<'_> {
 
     pub fn write_types_sexpr(&self, output: &mut dyn fmt::Write) -> fmt::Result {
         self.model.write_types_sexpr(output)
+    }
+
+    pub fn write_expressions_sexpr(&self, output: &mut dyn fmt::Write) -> fmt::Result {
+        self.model.write_expressions_sexpr(output)
+    }
+
+    pub fn write_metadata_annotations_sexpr(&self, output: &mut dyn fmt::Write) -> fmt::Result {
+        self.model.write_metadata_annotations_sexpr(output)
+    }
+
+    pub fn write_connections_sexpr(&self, output: &mut dyn fmt::Write) -> fmt::Result {
+        self.model.write_connections_sexpr(output)
+    }
+
+    pub fn write_projection_sexpr(&self, output: &mut dyn fmt::Write) -> fmt::Result {
+        self.model.write_projection_sexpr(
+            &self.identity.source_digest,
+            &self.identity.model_digest(),
+            output,
+        )
     }
 }
 
@@ -1825,6 +2051,43 @@ mod tests {
 mod parsed_admission_tests {
     use super::*;
     use sysml_source::{SourceAuthority, SourceKind};
+
+    #[test]
+    fn parsed_language_is_authoritative_and_mismatched_admission_is_rejected() {
+        let authority = syntax::SyntaxAuthority::new();
+        let text = "package P { feature port; }";
+        let parsed = authority.parse_text_with_language(text, SourceLanguage::KerML);
+        // A handle carries its selected language even when the new URI has another suffix.
+        let source =
+            SourceInput::from_parsed("memory://language.sysml", parsed, SourceKind::Workspace);
+        assert_eq!(source.language, SourceLanguage::KerML);
+        let canonical = SourceInput::new(
+            "memory://language.sysml",
+            text.to_owned(),
+            SourceKind::Workspace,
+        )
+        .with_language(SourceLanguage::KerML);
+        let request = BuildRequest::new(
+            vec![source.clone()],
+            ConstructionSchedule::Sequential,
+            "test",
+        )
+        .unwrap();
+        let from_text =
+            BuildRequest::new(vec![canonical], ConstructionSchedule::Sequential, "test").unwrap();
+        assert_eq!(request.identity(), from_text.identity());
+        assert_eq!(
+            build_measured(request).unwrap().0.identity(),
+            build_measured(from_text).unwrap().0.identity()
+        );
+        let mismatched = source.with_language(SourceLanguage::SysML);
+        let request =
+            BuildRequest::new(vec![mismatched], ConstructionSchedule::Sequential, "test").unwrap();
+        assert!(matches!(
+            build_measured(request),
+            Err(BuildFailure::ConstructionFailed { .. })
+        ));
+    }
 
     /// Admitting a parsed handle and admitting its text are the same publication: same identity,
     /// same manifest, same model digest. The examples corpus is the evidence.

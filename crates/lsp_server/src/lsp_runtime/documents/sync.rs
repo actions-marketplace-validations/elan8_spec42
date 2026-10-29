@@ -7,6 +7,18 @@ pub(crate) async fn did_open(
     runtime_config: &Arc<std::sync::OnceLock<RuntimeConfig>>,
     params: DidOpenTextDocumentParams,
 ) {
+    ensure_analysis_notifications(client, handle, runtime_config);
+    // Loose projects created after initialize do not run initialized_handle. Announce their
+    // initial readiness here, while a library-reindex epoch remains owned by its scan task.
+    let snapshot = handle.snapshot();
+    let announce_initial = snapshot.diagnostic_readiness.needs_initial_notification()
+        && crate::session::state::supports_semantic_queries(snapshot.session.lifecycle());
+    let readiness_token = snapshot.diagnostic_readiness.token();
+    drop(snapshot);
+    if announce_initial {
+        send_semantic_ready_notification(client, handle, readiness_token).await;
+        refresh_semantic_tokens(client, runtime_config).await;
+    }
     let uri = params.text_document.uri.clone();
     let uri_norm = util::normalize_file_uri(&uri);
     let text = params.text_document.text;
@@ -23,21 +35,19 @@ pub(crate) async fn did_open(
             "resolved document project boundary"
         );
     }
-    // Recorded before diagnostics are computed: an opened library file is an authoring surface,
-    // and the publication only reports one it was told about.
-    let _ = handle.set_document_open(uri_norm.clone(), true).await;
     let perf_logging_enabled = runtime_config
         .get()
         .expect("initialize precedes all other LSP requests")
         .perf_logging_enabled;
 
     // Check whether the file is already indexed with identical content before
-    // mutating. If so, the startup scan already published this URI and no expensive
-    // rebuild is needed.
+    // mutating. Only entries admitted to the semantic publication qualify: a search-only
+    // library entry still needs promotion when the editor opens its unchanged text.
     let open_status = {
         let snap = handle.snapshot();
         match snap.index.get(&uri_norm) {
             None => "newFile",
+            Some(entry) if !entry.admitted_to_publication => "searchOnly",
             Some(entry) if entry.content() != text => "contentChanged",
             _ => "alreadyIndexed",
         }
@@ -47,6 +57,15 @@ pub(crate) async fn did_open(
     let (warning, lock_wait_ms, scheduled_relink) = if already_indexed {
         // Fast path: content unchanged — skip re-parse and re-evaluation entirely.
         let lock_start = Instant::now();
+        if let Err(error) = handle
+            .set_editor_document_open(uri_norm.clone(), params.text_document.version)
+            .await
+        {
+            client
+                .log_message(MessageType::ERROR, format!("didOpen failed: {error:?}"))
+                .await;
+            return;
+        }
         let lock_wait_ms = lock_start.elapsed().as_millis();
         (None, lock_wait_ms, false)
     } else {
@@ -55,12 +74,31 @@ pub(crate) async fn did_open(
         // edges and expression evaluation happen outside the lock.
         let lock_start = Instant::now();
         let warning = handle
-            .store_document_text_fast(uri_norm.clone(), text.clone())
-            .await
-            .unwrap_or_default();
+            .store_document_text_fast(
+                uri_norm.clone(),
+                text.clone(),
+                Some(params.text_document.version),
+            )
+            .await;
+        let warning = match warning {
+            Ok(warning) => warning,
+            Err(error) => {
+                client
+                    .log_message(MessageType::ERROR, format!("didOpen failed: {error:?}"))
+                    .await;
+                return;
+            }
+        };
         let lock_wait_ms = lock_start.elapsed().as_millis();
         let scheduled_relink = true;
-        publish_semantic_change(client, handle, runtime_config, uri_norm.clone()).await;
+        publish_semantic_change(
+            client,
+            handle,
+            runtime_config,
+            uri_norm.clone(),
+            params.text_document.version,
+        )
+        .await;
         (warning, lock_wait_ms, scheduled_relink)
     };
 
@@ -122,52 +160,30 @@ pub(crate) async fn did_change(
     let version = params.text_document.version;
     let apply_start = Instant::now();
 
-    // Phase 1: derive prospective text from the currently published source. This does not
-    // publish anything: readers continue to observe the prior coherent snapshot until parsing
-    // and the local semantic patch can be committed together.
-    let (edit, mut warnings) = handle
-        .prepare_document_content_edit(uri_norm.clone(), version, params.content_changes)
+    use crate::session::handle::DocumentChange;
+    let (change, mut warnings) = match handle
+        .apply_document_content_edit(uri_norm.clone(), version, params.content_changes)
         .await
-        .unwrap_or_default();
-
-    // Phase 2: parse the new content WITHOUT holding up the actor. Malformed or
-    // incomplete syntax (e.g. an unterminated view/viewpoint) can make error
-    // recovery in the parser noticeably slower than the happy path; running
-    // it as a `mutate` closure would stall every other in-flight request
-    // (hover, completion, further edits) behind it. `spawn_blocking` also
-    // keeps this off the async executor thread.
-    let mut semantic_inputs_changed = false;
-    if let Some(edit) = edit {
-        let services = handle.snapshot().services.clone();
-        let (admit_uri, content) = (edit.uri.clone(), edit.content.clone());
-        let parse_start = Instant::now();
-        let parse_outcome = tokio::task::spawn_blocking(move || {
-            crate::session::handle::PreparedDocumentEdit::admit_text(admit_uri, &content, &services)
-        })
-        .await;
-        let parse_time_ms = (parse_start.elapsed().as_millis().max(1)) as u32;
-        match parse_outcome {
-            Ok((document, parsed)) => {
-                let parse_warnings = handle
-                    .apply_parsed_document_update(edit, document, parsed, parse_time_ms)
-                    .await
-                    .unwrap_or_default();
-                semantic_inputs_changed = true;
-                warnings.extend(parse_warnings);
-            }
-            Err(_) => {
-                warnings.push((
-                        MessageType::WARNING,
-                        format!(
-                            "didChange: parse task for {} (version {}) failed unexpectedly; document kept at its previous parsed state.",
-                            uri_norm, version
-                        ),
-                    ));
-            }
+    {
+        Ok(change) => change,
+        Err(error) => {
+            client
+                .log_message(
+                    MessageType::ERROR,
+                    format!("didChange source ingestion failed for {uri_norm}: {error:?}"),
+                )
+                .await;
+            return;
         }
+    };
+    let source_ingest_ms = apply_start.elapsed().as_secs_f64() * 1000.0;
+    let semantic_inputs_changed = matches!(change, DocumentChange::Changed);
+    if let DocumentChange::Rejected(reason) = change {
+        warnings.push((
+            MessageType::LOG,
+            format!("didChange for {uri_norm} (version {version}) was rejected: {reason:?}"),
+        ));
     }
-
-    // Phase 3: the atomic parse/graph commit above already scheduled its relink token.
     let perf_logging_enabled = runtime_config
         .get()
         .expect("initialize precedes all other LSP requests")
@@ -183,7 +199,7 @@ pub(crate) async fn did_change(
     // evaluation haven't run yet; the relink task publishes diagnostics after
     // committing the fully-resolved graph.
     if semantic_inputs_changed {
-        publish_semantic_change(client, handle, runtime_config, uri_norm.clone()).await;
+        publish_semantic_change(client, handle, runtime_config, uri_norm.clone(), version).await;
     }
     log_perf(
         client,
@@ -193,40 +209,56 @@ pub(crate) async fn did_change(
             ("uri", format!("{:?}", uri_norm.as_str())),
             ("version", version.to_string()),
             ("applyChangesMs", apply_ms.to_string()),
+            ("sourceIngestWallMs", source_ingest_ms.to_string()),
+            ("sourceChanged", semantic_inputs_changed.to_string()),
+            (
+                "handlerTotalMs",
+                (apply_start.elapsed().as_secs_f64() * 1000.0).to_string(),
+            ),
         ],
     )
     .await;
-    schedule_workspace_diagnostics_republish(client, handle, runtime_config);
 }
 
 pub(crate) async fn did_close(
     client: &Client,
     handle: &WorkspaceHandle,
+    config: &Arc<Spec42Config>,
+    runtime_config: &Arc<std::sync::OnceLock<RuntimeConfig>>,
     params: DidCloseTextDocumentParams,
 ) {
     let uri = params.text_document.uri;
-    let _ = handle
-        .set_document_open(util::normalize_file_uri(&uri), false)
+    let uri_norm = util::normalize_file_uri(&uri);
+    let library = handle
+        .set_document_open(uri_norm.clone(), false)
+        .await
+        .unwrap_or(false);
+    // An unsaved editor buffer ceases to be authoritative on close. Re-admit the on-disk source
+    // through the same watched-file path so dependants and project diagnostics use that
+    // revision. A URI with no backing file on disk is not this rule's concern -- it is either an
+    // unsaved buffer the workspace never scanned, or a file a concurrent delete already reported
+    // through the client's own file watcher -- so synthesizing a DELETED event here would remove
+    // it from the index on nothing more than a race with that watcher, or on every close of a
+    // buffer that was never saved at all.
+    if uri.to_file_path().ok().is_some_and(|path| path.is_file()) {
+        did_change_watched_files(
+            client,
+            handle,
+            config,
+            runtime_config,
+            DidChangeWatchedFilesParams {
+                changes: vec![FileEvent {
+                    uri: uri.clone(),
+                    typ: FileChangeType::CHANGED,
+                }],
+            },
+        )
         .await;
-    client.publish_diagnostics(uri, vec![], None).await;
-}
-
-/// Whether `content` (freshly read from disk for `uri`) already matches what the server has
-/// tracked in memory for that URI — i.e. this watched-file event is just an echo of an edit
-/// the server already knows about via `textDocument/didChange`, not a genuinely new change.
-/// Pure, `Client`-free predicate so it can be unit tested directly without spinning up a real
-/// LSP client/subprocess (see the test module below for why that matters here).
-pub(crate) fn watched_file_content_already_current(
-    handle: &WorkspaceHandle,
-    uri: &Url,
-    content: &str,
-) -> bool {
-    handle
-        .snapshot()
-        .index
-        .get(uri)
-        .map(|entry| entry.content() == content)
-        .unwrap_or(false)
+    }
+    // Library diagnostics are only shown while their editor is open.
+    if library {
+        client.publish_diagnostics(uri, vec![], None).await;
+    }
 }
 
 pub(crate) async fn did_change_watched_files(
@@ -246,7 +278,8 @@ pub(crate) async fn did_change_watched_files(
     let mut runtime_warnings = Vec::new();
     let mut changed_or_created_uris = Vec::new();
     let mut deleted_uris = Vec::new();
-    let mut refresh_document_ms = 0u64;
+    let mut deleted_client_uris = Vec::new();
+    let mut changes = Vec::new();
     for event in params.changes {
         let uri_norm = util::normalize_file_uri(&event.uri);
         if event.typ == FileChangeType::CREATED || event.typ == FileChangeType::CHANGED {
@@ -271,27 +304,10 @@ pub(crate) async fn did_change_watched_files(
             match admitted {
                 Some(Ok(document)) => {
                     let content = document.content().to_owned();
-                    // The editor already sent `textDocument/didChange` for its own edits
-                    // (handled cheaply/incrementally); saving that same content to disk
-                    // then fires this notification too, with disk content that's already
-                    // byte-identical to what the server has tracked. Doing the full,
-                    // synchronous `refresh_document` (whole-graph relink + eager evaluate)
-                    // again in that case is pure waste — skip it. A genuinely external
-                    // edit (another editor, git checkout, a formatter) still has different
-                    // content and gets the full treatment below, unchanged.
-                    if watched_file_content_already_current(handle, &uri_norm, &content) {
-                        continue;
-                    }
-
-                    let refresh_start = Instant::now();
-                    let warning = handle
-                        .refresh_document(uri_norm.clone(), content)
-                        .await
-                        .unwrap_or_default();
-                    refresh_document_ms += refresh_start.elapsed().as_millis() as u64;
-                    if let Some(message) = warning {
-                        runtime_warnings.push(format!("didChangeWatchedFiles: {}", message));
-                    }
+                    // Compare against the evolving batch inside `apply_watched_file_changes`.
+                    // Comparing against the pre-batch snapshot here would drop the create half
+                    // of a delete/create pair when the new file has identical contents.
+                    changes.push((uri_norm.clone(), Some(content)));
                     changed_or_created_uris.push(uri_norm.clone());
                 }
                 Some(Err(error)) => runtime_warnings.push(format!(
@@ -304,27 +320,59 @@ pub(crate) async fn did_change_watched_files(
                 )),
             }
         } else if event.typ == FileChangeType::DELETED {
-            handle.remove_document(uri_norm.clone()).await.ok();
+            changes.push((uri_norm.clone(), None));
             deleted_uris.push(uri_norm);
+            deleted_client_uris.push(event.uri);
         }
     }
+    ensure_analysis_notifications(client, handle, runtime_config);
+    let refresh_start = Instant::now();
+    let changed = match handle.apply_watched_file_changes(changes).await {
+        Ok((changed, warnings)) => {
+            runtime_warnings.extend(
+                warnings
+                    .into_iter()
+                    .map(|message| format!("didChangeWatchedFiles: {}", message)),
+            );
+            changed
+        }
+        Err(error) => {
+            runtime_warnings.push(format!(
+                "didChangeWatchedFiles: failed to apply file changes: {}",
+                error
+            ));
+            false
+        }
+    };
+    let refresh_document_ms = refresh_start.elapsed().as_millis() as u64;
     for msg in runtime_warnings {
         client.log_message(MessageType::WARNING, msg).await;
     }
-    let diagnostics_start = Instant::now();
-    if !changed_or_created_uris.is_empty() {
-        publish_workspace_diagnostics(
-            client,
-            handle,
-            runtime_config,
-            Some(&changed_or_created_uris),
-        )
-        .await;
+    report_publication_failure(client, handle).await;
+    if changed {
+        handle.request_rebuild();
     }
-    let diagnostics_ms = diagnostics_start.elapsed().as_millis() as u64;
     let deleted_uri_count = deleted_uris.len();
-    for uri in deleted_uris {
-        client.publish_diagnostics(uri, vec![], None).await;
+    let current = handle.snapshot();
+    let removed_uris = deleted_uris
+        .into_iter()
+        .filter(|uri| !current.index.contains_key(uri))
+        .collect::<Vec<_>>();
+    drop(current);
+    for uri in removed_uris {
+        client.publish_diagnostics(uri.clone(), vec![], None).await;
+        // `normalize_uri` canonicalizes the path. A file that has already been renamed away
+        // cannot be canonicalized, so the stored key can differ from the URI the client sent.
+        // Publish the clear for that client URI too, or the editor keeps stale diagnostics.
+        if let Some(index) = deleted_client_uris
+            .iter()
+            .position(|client_uri| util::normalize_file_uri(client_uri) == uri)
+        {
+            let client_uri = deleted_client_uris.swap_remove(index);
+            if client_uri != uri {
+                client.publish_diagnostics(client_uri, vec![], None).await;
+            }
+        }
     }
     log_perf(
         client,
@@ -337,7 +385,6 @@ pub(crate) async fn did_change_watched_files(
             ),
             ("deletedUris", deleted_uri_count.to_string()),
             ("refreshDocumentMs", refresh_document_ms.to_string()),
-            ("diagnosticsMs", diagnostics_ms.to_string()),
             ("totalMs", total_start.elapsed().as_millis().to_string()),
         ],
     )
@@ -351,22 +398,27 @@ pub(crate) async fn did_change_configuration(
     runtime_config: &Arc<std::sync::OnceLock<RuntimeConfig>>,
     params: DidChangeConfigurationParams,
 ) {
+    let library_path_base = runtime_config
+        .get()
+        .and_then(|config| config.library_path_base.as_deref());
     let client_library_paths = params
         .settings
         .get("spec42")
-        .map(|value| util::parse_library_paths_from_value(Some(value)))
-        .unwrap_or_else(|| util::parse_library_paths_from_value(Some(&params.settings)));
+        .map(|value| util::parse_library_paths_with_base(Some(value), library_path_base))
+        .unwrap_or_else(|| {
+            util::parse_library_paths_with_base(Some(&params.settings), library_path_base)
+        });
     let new_library_paths = util::merge_host_and_client_library_paths(
         &config.default_library_paths,
         client_library_paths,
     );
-    let changed = handle
+    let readiness_token = handle
         .begin_library_reindex_if_changed(new_library_paths.clone())
         .await
-        .unwrap_or(false);
-    if !changed {
+        .unwrap_or(None);
+    let Some(readiness_token) = readiness_token else {
         return;
-    }
+    };
 
     let handle = handle.clone();
     let runtime_config = Arc::clone(runtime_config);
@@ -426,7 +478,8 @@ pub(crate) async fn did_change_configuration(
         for warning in warnings {
             client.log_message(MessageType::WARNING, warning).await;
         }
-        send_semantic_ready_notification(&client, &handle).await;
+        send_semantic_ready_notification(&client, &handle, readiness_token).await;
+        refresh_semantic_tokens(&client, &runtime_config).await;
         let diagnostics_start = Instant::now();
         publish_workspace_diagnostics(&client, &handle, &runtime_config, None).await;
         log_perf(

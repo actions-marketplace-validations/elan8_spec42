@@ -8,7 +8,6 @@ source_expectation=accepted
 rule_family=validate
 expectation=diagnostics
 rule_id=sysml-2.0:8.3.21.8:validateRequirementDefinitionSubjectParameterPosition
-blocked_by=semantic-subject-member-order
 type=file
 ~~~
 # SOURCE
@@ -18,7 +17,7 @@ package Roles {
 
     // Conforming: the subject parameter comes first.
     requirement def Good {
-        subject first : Component;
+        subject 'first' : Component;
         in ref part other : Component;
     }
 
@@ -39,6 +38,12 @@ package Roles {
         (code "subject_member_not_first")
         (source "semantic")
         (range (start 12 8) (end 12 34))
+        (related-information
+          (related
+            (uri "memory://snapshot/sysml_requirement_definition_subject_parameter_position.md")
+            (range (start 11 8) (end 11 38))
+          )
+        )
       )
     )
   )
@@ -49,6 +54,18 @@ package Roles {
 (fixture-diagnostics
   (document "memory://snapshot/sysml_requirement_definition_subject_parameter_position.md"
     (diagnostics
+      (diagnostic
+        (severity warning)
+        (code "subject_member_not_first")
+        (source "semantic")
+        (range (start 12 8) (end 12 34))
+        (related-information
+          (related
+            (uri "memory://snapshot/sysml_requirement_definition_subject_parameter_position.md")
+            (range (start 11 8) (end 11 38))
+          )
+        )
+      )
     )
   )
 )
@@ -56,16 +73,16 @@ package Roles {
 # SMG
 ~~~sexpr
 (semantic-model
-  (publication (phase resolved) (completeness complete) (has-evaluation false) (source-digest "blake3:f6c8f187488cc1dac4955669e0f60b83e3875b6e41153115e4425e0e192c6c2a"))
+  (publication (phase resolved) (completeness complete) (has-evaluation false) (source-digest "blake3:45f8639604aa11f7d324297141dde8ec41526e3b8f88e56dc7a939be45ffc1c0"))
   (declarations
     (declaration (id (node (document "memory://snapshot/sysml_requirement_definition_subject_parameter_position.md") (qualified-name "Roles"))) (kind package) (membership (kind owning) (visibility default)))
     (declaration (id (node (document "memory://snapshot/sysml_requirement_definition_subject_parameter_position.md") (qualified-name "Roles::Bad"))) (kind requirement-def) (membership (kind owning) (visibility default)))
     (declaration (id (node (document "memory://snapshot/sysml_requirement_definition_subject_parameter_position.md") (qualified-name "Roles::Bad::later"))) (kind subject) (membership (kind feature) (visibility default)) (authored (membership (kind feature) (visibility default)) (relationships (featureTyping (reference "Component")))))
-    (declaration (id (node (document "memory://snapshot/sysml_requirement_definition_subject_parameter_position.md") (qualified-name "Roles::Bad::other"))) (kind ref) (membership (kind feature) (visibility default)) (facts (direction in)) (authored (membership (kind feature) (visibility default)) (relationships (featureTyping (reference "Component")))))
+    (declaration (id (node (document "memory://snapshot/sysml_requirement_definition_subject_parameter_position.md") (qualified-name "Roles::Bad::other"))) (kind part) (membership (kind feature) (visibility default)) (facts (modifiers reference) (direction in)) (authored (membership (kind feature) (visibility default)) (relationships (featureTyping (reference "Component")))))
     (declaration (id (node (document "memory://snapshot/sysml_requirement_definition_subject_parameter_position.md") (qualified-name "Roles::Component"))) (kind part-def) (membership (kind owning) (visibility default)))
     (declaration (id (node (document "memory://snapshot/sysml_requirement_definition_subject_parameter_position.md") (qualified-name "Roles::Good"))) (kind requirement-def) (membership (kind owning) (visibility default)))
     (declaration (id (node (document "memory://snapshot/sysml_requirement_definition_subject_parameter_position.md") (qualified-name "Roles::Good::first"))) (kind subject) (membership (kind feature) (visibility default)) (authored (membership (kind feature) (visibility default)) (relationships (featureTyping (reference "Component")))))
-    (declaration (id (node (document "memory://snapshot/sysml_requirement_definition_subject_parameter_position.md") (qualified-name "Roles::Good::other"))) (kind ref) (membership (kind feature) (visibility default)) (facts (direction in)) (authored (membership (kind feature) (visibility default)) (relationships (featureTyping (reference "Component")))))
+    (declaration (id (node (document "memory://snapshot/sysml_requirement_definition_subject_parameter_position.md") (qualified-name "Roles::Good::other"))) (kind part) (membership (kind feature) (visibility default)) (facts (modifiers reference) (direction in)) (authored (membership (kind feature) (visibility default)) (relationships (featureTyping (reference "Component")))))
   )
   (references
     (reference (id (source (node (document "memory://snapshot/sysml_requirement_definition_subject_parameter_position.md") (qualified-name "Roles::Bad::later"))) (kind featureTyping) (ordinal 0))
@@ -143,7 +160,7 @@ package Roles {
       (outcome (status resolved) (target (node (document "memory://snapshot/sysml_requirement_definition_subject_parameter_position.md") (qualified-name "Roles::Component")))))
     )
   )
-  (query (document "memory://snapshot/sysml_requirement_definition_subject_parameter_position.md") (range (start 5 24) (end 5 33)) (probe (position 5 24))
+  (query (document "memory://snapshot/sysml_requirement_definition_subject_parameter_position.md") (range (start 5 26) (end 5 35)) (probe (position 5 26))
     (reference (id (source (node (document "memory://snapshot/sysml_requirement_definition_subject_parameter_position.md") (qualified-name "Roles::Good::first"))) (kind featureTyping) (ordinal 0) (authored-target "Component")
       (outcome (status resolved) (target (node (document "memory://snapshot/sysml_requirement_definition_subject_parameter_position.md") (qualified-name "Roles::Component")))))
     )

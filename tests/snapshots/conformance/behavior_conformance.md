@@ -32,9 +32,9 @@ package Behavior {
     }
 
     action def ConformingSuccession {
-        action first : Step;
+        action 'first' : Step;
         action second : Step;
-        first first then second;
+        first 'first' then second;
     }
 
     action def SuccessionOverSomethingThatIsNotAnAction {
@@ -51,6 +51,10 @@ package Behavior {
         state opening;
         state closing;
         transition first opening then closing;
+    }
+
+    abstract state def AbstractStateTemplate {
+        state abstractSubstate;
     }
 }
 ~~~
@@ -113,12 +117,6 @@ package Behavior {
       )
       (diagnostic
         (severity information)
-        (code "missing_final_state")
-        (source "semantic")
-        (range (start 42 4) (end 46 5))
-      )
-      (diagnostic
-        (severity information)
         (code "missing_initial_state")
         (source "semantic")
         (range (start 42 4) (end 46 5))
@@ -130,15 +128,19 @@ package Behavior {
 # SMG
 ~~~sexpr
 (semantic-model
-  (publication (phase resolved) (completeness complete) (has-evaluation false) (source-digest "blake3:39aaa8d2f87b6729b3a6a98cdefab1758af92ed95dcb18833372ed5ac2be218b"))
+  (publication (phase resolved) (completeness complete) (has-evaluation false) (source-digest "blake3:2ef123562f77c4ffc2cea699eb748e47cfff5cf12067f2057330c372ecd0c0a0"))
   (declarations
     (declaration (id (node (document "memory://snapshot/behavior_conformance.md") (qualified-name "Behavior"))) (kind package) (membership (kind owning) (visibility default)))
+    (declaration (id (node (document "memory://snapshot/behavior_conformance.md") (qualified-name "Behavior::AbstractStateTemplate"))) (kind state-def) (membership (kind owning) (visibility default)) (facts (modifiers abstract)))
+    (declaration (id (node (document "memory://snapshot/behavior_conformance.md") (qualified-name "Behavior::AbstractStateTemplate::abstractSubstate"))) (kind state) (membership (kind feature) (visibility default)))
     (declaration (id (node (document "memory://snapshot/behavior_conformance.md") (qualified-name "Behavior::AcceptsAnIncompatiblePayload"))) (kind action-def) (membership (kind owning) (visibility default)))
     (declaration (id (node (document "memory://snapshot/behavior_conformance.md") (path (named (kind package) (name "Behavior")) (named (kind action-def) (name "AcceptsAnIncompatiblePayload")) (anonymous (kind accept-action) (ordinal 0))))) (kind accept-action) (membership (kind feature) (visibility default)) (facts (modifiers composite)) (authored (membership (kind feature) (visibility default)) (relationships (acceptPayloadType (reference "Step")))))
     (declaration (id (node (document "memory://snapshot/behavior_conformance.md") (qualified-name "Behavior::ConformingMachine"))) (kind state-def) (membership (kind owning) (visibility default)))
     (declaration (id (node (document "memory://snapshot/behavior_conformance.md") (path (named (kind package) (name "Behavior")) (named (kind state-def) (name "ConformingMachine")) (anonymous (kind initial-state) (ordinal 0))))) (kind initial-state) (membership (kind feature) (visibility default)) (authored (membership (kind feature) (visibility default)) (relationships (initialState (reference "running")))))
     (declaration (id (node (document "memory://snapshot/behavior_conformance.md") (path (named (kind package) (name "Behavior")) (named (kind state-def) (name "ConformingMachine")) (anonymous (kind transition) (ordinal 0))))) (kind transition) (membership (kind feature) (visibility default)) (authored (membership (kind feature) (visibility default)) (relationships (transitionSource (reference "running")) (transitionTarget (reference "stopped")))))
     (declaration (id (node (document "memory://snapshot/behavior_conformance.md") (path (named (kind package) (name "Behavior")) (named (kind state-def) (name "ConformingMachine")) (anonymous (kind transition) (ordinal 0)) (anonymous (kind succession) (ordinal 0))))) (kind succession) (membership (kind owning) (visibility default)) (authored (membership (kind owning) (visibility default)) (relationships (succession (reference "running")) (succession (reference "stopped")))))
+    (declaration (id (node (document "memory://snapshot/behavior_conformance.md") (path (named (kind package) (name "Behavior")) (named (kind state-def) (name "ConformingMachine")) (anonymous (kind transition) (ordinal 0)) (anonymous (kind parameter) (ordinal 0))))) (kind parameter) (membership (kind feature) (visibility default)) (facts (direction in)))
+    (declaration (id (node (document "memory://snapshot/behavior_conformance.md") (path (named (kind package) (name "Behavior")) (named (kind state-def) (name "ConformingMachine")) (anonymous (kind transition) (ordinal 0)) (anonymous (kind ref) (ordinal 0))))) (kind ref) (membership (kind feature) (visibility default)))
     (declaration (id (node (document "memory://snapshot/behavior_conformance.md") (qualified-name "Behavior::ConformingMachine::running"))) (kind state) (membership (kind feature) (visibility default)))
     (declaration (id (node (document "memory://snapshot/behavior_conformance.md") (qualified-name "Behavior::ConformingMachine::stopped"))) (kind final-state) (membership (kind feature) (visibility default)))
     (declaration (id (node (document "memory://snapshot/behavior_conformance.md") (qualified-name "Behavior::ConformingPerform"))) (kind part-def) (membership (kind owning) (visibility default)))
@@ -150,6 +152,8 @@ package Behavior {
     (declaration (id (node (document "memory://snapshot/behavior_conformance.md") (qualified-name "Behavior::NoInitialOrFinalMarker"))) (kind state-def) (membership (kind owning) (visibility default)))
     (declaration (id (node (document "memory://snapshot/behavior_conformance.md") (path (named (kind package) (name "Behavior")) (named (kind state-def) (name "NoInitialOrFinalMarker")) (anonymous (kind transition) (ordinal 0))))) (kind transition) (membership (kind feature) (visibility default)) (authored (membership (kind feature) (visibility default)) (relationships (transitionSource (reference "opening")) (transitionTarget (reference "closing")))))
     (declaration (id (node (document "memory://snapshot/behavior_conformance.md") (path (named (kind package) (name "Behavior")) (named (kind state-def) (name "NoInitialOrFinalMarker")) (anonymous (kind transition) (ordinal 0)) (anonymous (kind succession) (ordinal 0))))) (kind succession) (membership (kind owning) (visibility default)) (authored (membership (kind owning) (visibility default)) (relationships (succession (reference "opening")) (succession (reference "closing")))))
+    (declaration (id (node (document "memory://snapshot/behavior_conformance.md") (path (named (kind package) (name "Behavior")) (named (kind state-def) (name "NoInitialOrFinalMarker")) (anonymous (kind transition) (ordinal 0)) (anonymous (kind parameter) (ordinal 0))))) (kind parameter) (membership (kind feature) (visibility default)) (facts (direction in)))
+    (declaration (id (node (document "memory://snapshot/behavior_conformance.md") (path (named (kind package) (name "Behavior")) (named (kind state-def) (name "NoInitialOrFinalMarker")) (anonymous (kind transition) (ordinal 0)) (anonymous (kind ref) (ordinal 0))))) (kind ref) (membership (kind feature) (visibility default)))
     (declaration (id (node (document "memory://snapshot/behavior_conformance.md") (qualified-name "Behavior::NoInitialOrFinalMarker::closing"))) (kind state) (membership (kind feature) (visibility default)))
     (declaration (id (node (document "memory://snapshot/behavior_conformance.md") (qualified-name "Behavior::NoInitialOrFinalMarker::opening"))) (kind state) (membership (kind feature) (visibility default)))
     (declaration (id (node (document "memory://snapshot/behavior_conformance.md") (qualified-name "Behavior::PerformsSomethingThatIsNotAnAction"))) (kind part-def) (membership (kind owning) (visibility default)))
@@ -164,6 +168,8 @@ package Behavior {
     (declaration (id (node (document "memory://snapshot/behavior_conformance.md") (path (named (kind package) (name "Behavior")) (named (kind state-def) (name "TransitionLeavesAState")) (anonymous (kind initial-state) (ordinal 0))))) (kind initial-state) (membership (kind feature) (visibility default)) (authored (membership (kind feature) (visibility default)) (relationships (initialState (reference "armed")))))
     (declaration (id (node (document "memory://snapshot/behavior_conformance.md") (path (named (kind package) (name "Behavior")) (named (kind state-def) (name "TransitionLeavesAState")) (anonymous (kind transition) (ordinal 0))))) (kind transition) (membership (kind feature) (visibility default)) (authored (membership (kind feature) (visibility default)) (relationships (transitionSource (reference "armed")) (transitionTarget (reference "Structure")))))
     (declaration (id (node (document "memory://snapshot/behavior_conformance.md") (path (named (kind package) (name "Behavior")) (named (kind state-def) (name "TransitionLeavesAState")) (anonymous (kind transition) (ordinal 0)) (anonymous (kind succession) (ordinal 0))))) (kind succession) (membership (kind owning) (visibility default)) (authored (membership (kind owning) (visibility default)) (relationships (succession (reference "armed")) (succession (reference "Structure")))))
+    (declaration (id (node (document "memory://snapshot/behavior_conformance.md") (path (named (kind package) (name "Behavior")) (named (kind state-def) (name "TransitionLeavesAState")) (anonymous (kind transition) (ordinal 0)) (anonymous (kind parameter) (ordinal 0))))) (kind parameter) (membership (kind feature) (visibility default)) (facts (direction in)))
+    (declaration (id (node (document "memory://snapshot/behavior_conformance.md") (path (named (kind package) (name "Behavior")) (named (kind state-def) (name "TransitionLeavesAState")) (anonymous (kind transition) (ordinal 0)) (anonymous (kind ref) (ordinal 0))))) (kind ref) (membership (kind feature) (visibility default)))
     (declaration (id (node (document "memory://snapshot/behavior_conformance.md") (qualified-name "Behavior::TransitionLeavesAState::armed"))) (kind state) (membership (kind feature) (visibility default)))
     (declaration (id (node (document "memory://snapshot/behavior_conformance.md") (qualified-name "Behavior::TransitionLeavesAState::disarmed"))) (kind final-state) (membership (kind feature) (visibility default)))
   )
@@ -270,9 +276,12 @@ package Behavior {
     (relationship (kind transitionTarget) (source (node (document "memory://snapshot/behavior_conformance.md") (path (named (kind package) (name "Behavior")) (named (kind state-def) (name "TransitionLeavesAState")) (anonymous (kind transition) (ordinal 0))))) (target (node (document "memory://snapshot/behavior_conformance.md") (qualified-name "Behavior::Structure"))) (provenance authored) (authored-reference (source (node (document "memory://snapshot/behavior_conformance.md") (path (named (kind package) (name "Behavior")) (named (kind state-def) (name "TransitionLeavesAState")) (anonymous (kind transition) (ordinal 0))))) (kind transitionTarget) (ordinal 0)))
     (relationship (kind succession) (source (node (document "memory://snapshot/behavior_conformance.md") (path (named (kind package) (name "Behavior")) (named (kind state-def) (name "TransitionLeavesAState")) (anonymous (kind transition) (ordinal 0)) (anonymous (kind succession) (ordinal 0))))) (target (node (document "memory://snapshot/behavior_conformance.md") (qualified-name "Behavior::TransitionLeavesAState::armed"))) (provenance authored) (authored-reference (source (node (document "memory://snapshot/behavior_conformance.md") (path (named (kind package) (name "Behavior")) (named (kind state-def) (name "TransitionLeavesAState")) (anonymous (kind transition) (ordinal 0)) (anonymous (kind succession) (ordinal 0))))) (kind succession) (ordinal 0)))
     (relationship (kind succession) (source (node (document "memory://snapshot/behavior_conformance.md") (path (named (kind package) (name "Behavior")) (named (kind state-def) (name "TransitionLeavesAState")) (anonymous (kind transition) (ordinal 0)) (anonymous (kind succession) (ordinal 0))))) (target (node (document "memory://snapshot/behavior_conformance.md") (qualified-name "Behavior::Structure"))) (provenance authored) (authored-reference (source (node (document "memory://snapshot/behavior_conformance.md") (path (named (kind package) (name "Behavior")) (named (kind state-def) (name "TransitionLeavesAState")) (anonymous (kind transition) (ordinal 0)) (anonymous (kind succession) (ordinal 0))))) (kind succession) (ordinal 1)))
+    (relationship (kind typeFeaturing) (source (node (document "memory://snapshot/behavior_conformance.md") (qualified-name "Behavior::AbstractStateTemplate::abstractSubstate"))) (target (node (document "memory://snapshot/behavior_conformance.md") (qualified-name "Behavior::AbstractStateTemplate"))) (provenance implied))
     (relationship (kind typeFeaturing) (source (node (document "memory://snapshot/behavior_conformance.md") (path (named (kind package) (name "Behavior")) (named (kind action-def) (name "AcceptsAnIncompatiblePayload")) (anonymous (kind accept-action) (ordinal 0))))) (target (node (document "memory://snapshot/behavior_conformance.md") (qualified-name "Behavior::AcceptsAnIncompatiblePayload"))) (provenance implied))
     (relationship (kind typeFeaturing) (source (node (document "memory://snapshot/behavior_conformance.md") (path (named (kind package) (name "Behavior")) (named (kind state-def) (name "ConformingMachine")) (anonymous (kind initial-state) (ordinal 0))))) (target (node (document "memory://snapshot/behavior_conformance.md") (qualified-name "Behavior::ConformingMachine"))) (provenance implied))
     (relationship (kind typeFeaturing) (source (node (document "memory://snapshot/behavior_conformance.md") (path (named (kind package) (name "Behavior")) (named (kind state-def) (name "ConformingMachine")) (anonymous (kind transition) (ordinal 0))))) (target (node (document "memory://snapshot/behavior_conformance.md") (qualified-name "Behavior::ConformingMachine"))) (provenance implied))
+    (relationship (kind typeFeaturing) (source (node (document "memory://snapshot/behavior_conformance.md") (path (named (kind package) (name "Behavior")) (named (kind state-def) (name "ConformingMachine")) (anonymous (kind transition) (ordinal 0)) (anonymous (kind parameter) (ordinal 0))))) (target (node (document "memory://snapshot/behavior_conformance.md") (path (named (kind package) (name "Behavior")) (named (kind state-def) (name "ConformingMachine")) (anonymous (kind transition) (ordinal 0))))) (provenance implied))
+    (relationship (kind typeFeaturing) (source (node (document "memory://snapshot/behavior_conformance.md") (path (named (kind package) (name "Behavior")) (named (kind state-def) (name "ConformingMachine")) (anonymous (kind transition) (ordinal 0)) (anonymous (kind ref) (ordinal 0))))) (target (node (document "memory://snapshot/behavior_conformance.md") (path (named (kind package) (name "Behavior")) (named (kind state-def) (name "ConformingMachine")) (anonymous (kind transition) (ordinal 0))))) (provenance implied))
     (relationship (kind typeFeaturing) (source (node (document "memory://snapshot/behavior_conformance.md") (qualified-name "Behavior::ConformingMachine::running"))) (target (node (document "memory://snapshot/behavior_conformance.md") (qualified-name "Behavior::ConformingMachine"))) (provenance implied))
     (relationship (kind typeFeaturing) (source (node (document "memory://snapshot/behavior_conformance.md") (qualified-name "Behavior::ConformingMachine::stopped"))) (target (node (document "memory://snapshot/behavior_conformance.md") (qualified-name "Behavior::ConformingMachine"))) (provenance implied))
     (relationship (kind typeFeaturing) (source (node (document "memory://snapshot/behavior_conformance.md") (qualified-name "Behavior::ConformingPerform::ok"))) (target (node (document "memory://snapshot/behavior_conformance.md") (qualified-name "Behavior::ConformingPerform"))) (provenance implied))
@@ -280,6 +289,8 @@ package Behavior {
     (relationship (kind typeFeaturing) (source (node (document "memory://snapshot/behavior_conformance.md") (qualified-name "Behavior::ConformingSuccession::first"))) (target (node (document "memory://snapshot/behavior_conformance.md") (qualified-name "Behavior::ConformingSuccession"))) (provenance implied))
     (relationship (kind typeFeaturing) (source (node (document "memory://snapshot/behavior_conformance.md") (qualified-name "Behavior::ConformingSuccession::second"))) (target (node (document "memory://snapshot/behavior_conformance.md") (qualified-name "Behavior::ConformingSuccession"))) (provenance implied))
     (relationship (kind typeFeaturing) (source (node (document "memory://snapshot/behavior_conformance.md") (path (named (kind package) (name "Behavior")) (named (kind state-def) (name "NoInitialOrFinalMarker")) (anonymous (kind transition) (ordinal 0))))) (target (node (document "memory://snapshot/behavior_conformance.md") (qualified-name "Behavior::NoInitialOrFinalMarker"))) (provenance implied))
+    (relationship (kind typeFeaturing) (source (node (document "memory://snapshot/behavior_conformance.md") (path (named (kind package) (name "Behavior")) (named (kind state-def) (name "NoInitialOrFinalMarker")) (anonymous (kind transition) (ordinal 0)) (anonymous (kind parameter) (ordinal 0))))) (target (node (document "memory://snapshot/behavior_conformance.md") (path (named (kind package) (name "Behavior")) (named (kind state-def) (name "NoInitialOrFinalMarker")) (anonymous (kind transition) (ordinal 0))))) (provenance implied))
+    (relationship (kind typeFeaturing) (source (node (document "memory://snapshot/behavior_conformance.md") (path (named (kind package) (name "Behavior")) (named (kind state-def) (name "NoInitialOrFinalMarker")) (anonymous (kind transition) (ordinal 0)) (anonymous (kind ref) (ordinal 0))))) (target (node (document "memory://snapshot/behavior_conformance.md") (path (named (kind package) (name "Behavior")) (named (kind state-def) (name "NoInitialOrFinalMarker")) (anonymous (kind transition) (ordinal 0))))) (provenance implied))
     (relationship (kind typeFeaturing) (source (node (document "memory://snapshot/behavior_conformance.md") (qualified-name "Behavior::NoInitialOrFinalMarker::closing"))) (target (node (document "memory://snapshot/behavior_conformance.md") (qualified-name "Behavior::NoInitialOrFinalMarker"))) (provenance implied))
     (relationship (kind typeFeaturing) (source (node (document "memory://snapshot/behavior_conformance.md") (qualified-name "Behavior::NoInitialOrFinalMarker::opening"))) (target (node (document "memory://snapshot/behavior_conformance.md") (qualified-name "Behavior::NoInitialOrFinalMarker"))) (provenance implied))
     (relationship (kind typeFeaturing) (source (node (document "memory://snapshot/behavior_conformance.md") (qualified-name "Behavior::PerformsSomethingThatIsNotAnAction::wrong"))) (target (node (document "memory://snapshot/behavior_conformance.md") (qualified-name "Behavior::PerformsSomethingThatIsNotAnAction"))) (provenance implied))
@@ -288,6 +299,8 @@ package Behavior {
     (relationship (kind typeFeaturing) (source (node (document "memory://snapshot/behavior_conformance.md") (qualified-name "Behavior::SuccessionOverSomethingThatIsNotAnAction::structure"))) (target (node (document "memory://snapshot/behavior_conformance.md") (qualified-name "Behavior::SuccessionOverSomethingThatIsNotAnAction"))) (provenance implied))
     (relationship (kind typeFeaturing) (source (node (document "memory://snapshot/behavior_conformance.md") (path (named (kind package) (name "Behavior")) (named (kind state-def) (name "TransitionLeavesAState")) (anonymous (kind initial-state) (ordinal 0))))) (target (node (document "memory://snapshot/behavior_conformance.md") (qualified-name "Behavior::TransitionLeavesAState"))) (provenance implied))
     (relationship (kind typeFeaturing) (source (node (document "memory://snapshot/behavior_conformance.md") (path (named (kind package) (name "Behavior")) (named (kind state-def) (name "TransitionLeavesAState")) (anonymous (kind transition) (ordinal 0))))) (target (node (document "memory://snapshot/behavior_conformance.md") (qualified-name "Behavior::TransitionLeavesAState"))) (provenance implied))
+    (relationship (kind typeFeaturing) (source (node (document "memory://snapshot/behavior_conformance.md") (path (named (kind package) (name "Behavior")) (named (kind state-def) (name "TransitionLeavesAState")) (anonymous (kind transition) (ordinal 0)) (anonymous (kind parameter) (ordinal 0))))) (target (node (document "memory://snapshot/behavior_conformance.md") (path (named (kind package) (name "Behavior")) (named (kind state-def) (name "TransitionLeavesAState")) (anonymous (kind transition) (ordinal 0))))) (provenance implied))
+    (relationship (kind typeFeaturing) (source (node (document "memory://snapshot/behavior_conformance.md") (path (named (kind package) (name "Behavior")) (named (kind state-def) (name "TransitionLeavesAState")) (anonymous (kind transition) (ordinal 0)) (anonymous (kind ref) (ordinal 0))))) (target (node (document "memory://snapshot/behavior_conformance.md") (path (named (kind package) (name "Behavior")) (named (kind state-def) (name "TransitionLeavesAState")) (anonymous (kind transition) (ordinal 0))))) (provenance implied))
     (relationship (kind typeFeaturing) (source (node (document "memory://snapshot/behavior_conformance.md") (qualified-name "Behavior::TransitionLeavesAState::armed"))) (target (node (document "memory://snapshot/behavior_conformance.md") (qualified-name "Behavior::TransitionLeavesAState"))) (provenance implied))
     (relationship (kind typeFeaturing) (source (node (document "memory://snapshot/behavior_conformance.md") (qualified-name "Behavior::TransitionLeavesAState::disarmed"))) (target (node (document "memory://snapshot/behavior_conformance.md") (qualified-name "Behavior::TransitionLeavesAState"))) (provenance implied))
   )
@@ -298,6 +311,9 @@ package Behavior {
 # TYPES
 ~~~sexpr
 (types
+    (declaration (id (node (document "memory://snapshot/behavior_conformance.md") (qualified-name "Behavior::AbstractStateTemplate::abstractSubstate")))
+      (featured-by (node (document "memory://snapshot/behavior_conformance.md") (qualified-name "Behavior::AbstractStateTemplate")))
+    )
     (declaration (id (node (document "memory://snapshot/behavior_conformance.md") (path (named (kind package) (name "Behavior")) (named (kind action-def) (name "AcceptsAnIncompatiblePayload")) (anonymous (kind accept-action) (ordinal 0)))))
       (featured-by (node (document "memory://snapshot/behavior_conformance.md") (qualified-name "Behavior::AcceptsAnIncompatiblePayload")))
     )
@@ -306,6 +322,12 @@ package Behavior {
     )
     (declaration (id (node (document "memory://snapshot/behavior_conformance.md") (path (named (kind package) (name "Behavior")) (named (kind state-def) (name "ConformingMachine")) (anonymous (kind transition) (ordinal 0)))))
       (featured-by (node (document "memory://snapshot/behavior_conformance.md") (qualified-name "Behavior::ConformingMachine")))
+    )
+    (declaration (id (node (document "memory://snapshot/behavior_conformance.md") (path (named (kind package) (name "Behavior")) (named (kind state-def) (name "ConformingMachine")) (anonymous (kind transition) (ordinal 0)) (anonymous (kind parameter) (ordinal 0)))))
+      (featured-by (node (document "memory://snapshot/behavior_conformance.md") (path (named (kind package) (name "Behavior")) (named (kind state-def) (name "ConformingMachine")) (anonymous (kind transition) (ordinal 0)))))
+    )
+    (declaration (id (node (document "memory://snapshot/behavior_conformance.md") (path (named (kind package) (name "Behavior")) (named (kind state-def) (name "ConformingMachine")) (anonymous (kind transition) (ordinal 0)) (anonymous (kind ref) (ordinal 0)))))
+      (featured-by (node (document "memory://snapshot/behavior_conformance.md") (path (named (kind package) (name "Behavior")) (named (kind state-def) (name "ConformingMachine")) (anonymous (kind transition) (ordinal 0)))))
     )
     (declaration (id (node (document "memory://snapshot/behavior_conformance.md") (qualified-name "Behavior::ConformingMachine::running")))
       (featured-by (node (document "memory://snapshot/behavior_conformance.md") (qualified-name "Behavior::ConformingMachine")))
@@ -336,6 +358,12 @@ package Behavior {
     )
     (declaration (id (node (document "memory://snapshot/behavior_conformance.md") (path (named (kind package) (name "Behavior")) (named (kind state-def) (name "NoInitialOrFinalMarker")) (anonymous (kind transition) (ordinal 0)))))
       (featured-by (node (document "memory://snapshot/behavior_conformance.md") (qualified-name "Behavior::NoInitialOrFinalMarker")))
+    )
+    (declaration (id (node (document "memory://snapshot/behavior_conformance.md") (path (named (kind package) (name "Behavior")) (named (kind state-def) (name "NoInitialOrFinalMarker")) (anonymous (kind transition) (ordinal 0)) (anonymous (kind parameter) (ordinal 0)))))
+      (featured-by (node (document "memory://snapshot/behavior_conformance.md") (path (named (kind package) (name "Behavior")) (named (kind state-def) (name "NoInitialOrFinalMarker")) (anonymous (kind transition) (ordinal 0)))))
+    )
+    (declaration (id (node (document "memory://snapshot/behavior_conformance.md") (path (named (kind package) (name "Behavior")) (named (kind state-def) (name "NoInitialOrFinalMarker")) (anonymous (kind transition) (ordinal 0)) (anonymous (kind ref) (ordinal 0)))))
+      (featured-by (node (document "memory://snapshot/behavior_conformance.md") (path (named (kind package) (name "Behavior")) (named (kind state-def) (name "NoInitialOrFinalMarker")) (anonymous (kind transition) (ordinal 0)))))
     )
     (declaration (id (node (document "memory://snapshot/behavior_conformance.md") (qualified-name "Behavior::NoInitialOrFinalMarker::closing")))
       (featured-by (node (document "memory://snapshot/behavior_conformance.md") (qualified-name "Behavior::NoInitialOrFinalMarker")))
@@ -379,6 +407,12 @@ package Behavior {
     )
     (declaration (id (node (document "memory://snapshot/behavior_conformance.md") (path (named (kind package) (name "Behavior")) (named (kind state-def) (name "TransitionLeavesAState")) (anonymous (kind transition) (ordinal 0)))))
       (featured-by (node (document "memory://snapshot/behavior_conformance.md") (qualified-name "Behavior::TransitionLeavesAState")))
+    )
+    (declaration (id (node (document "memory://snapshot/behavior_conformance.md") (path (named (kind package) (name "Behavior")) (named (kind state-def) (name "TransitionLeavesAState")) (anonymous (kind transition) (ordinal 0)) (anonymous (kind parameter) (ordinal 0)))))
+      (featured-by (node (document "memory://snapshot/behavior_conformance.md") (path (named (kind package) (name "Behavior")) (named (kind state-def) (name "TransitionLeavesAState")) (anonymous (kind transition) (ordinal 0)))))
+    )
+    (declaration (id (node (document "memory://snapshot/behavior_conformance.md") (path (named (kind package) (name "Behavior")) (named (kind state-def) (name "TransitionLeavesAState")) (anonymous (kind transition) (ordinal 0)) (anonymous (kind ref) (ordinal 0)))))
+      (featured-by (node (document "memory://snapshot/behavior_conformance.md") (path (named (kind package) (name "Behavior")) (named (kind state-def) (name "TransitionLeavesAState")) (anonymous (kind transition) (ordinal 0)))))
     )
     (declaration (id (node (document "memory://snapshot/behavior_conformance.md") (qualified-name "Behavior::TransitionLeavesAState::armed")))
       (featured-by (node (document "memory://snapshot/behavior_conformance.md") (qualified-name "Behavior::TransitionLeavesAState")))
@@ -426,17 +460,17 @@ package Behavior {
       (outcome (status resolved) (target (node (document "memory://snapshot/behavior_conformance.md") (qualified-name "Behavior::Step")))))
     )
   )
-  (query (document "memory://snapshot/behavior_conformance.md") (range (start 29 14) (end 29 19)) (probe (position 29 14))
+  (query (document "memory://snapshot/behavior_conformance.md") (range (start 29 14) (end 29 21)) (probe (position 29 14))
     (reference (id (source (node (document "memory://snapshot/behavior_conformance.md") (path (named (kind package) (name "Behavior")) (named (kind action-def) (name "ConformingSuccession")) (anonymous (kind succession) (ordinal 0))))) (kind succession) (ordinal 0) (authored-target "first")
       (outcome (status resolved) (target (node (document "memory://snapshot/behavior_conformance.md") (qualified-name "Behavior::ConformingSuccession::first")))))
     )
   )
-  (query (document "memory://snapshot/behavior_conformance.md") (range (start 29 25) (end 29 31)) (probe (position 29 25))
+  (query (document "memory://snapshot/behavior_conformance.md") (range (start 29 27) (end 29 33)) (probe (position 29 27))
     (reference (id (source (node (document "memory://snapshot/behavior_conformance.md") (path (named (kind package) (name "Behavior")) (named (kind action-def) (name "ConformingSuccession")) (anonymous (kind succession) (ordinal 0))))) (kind succession) (ordinal 1) (authored-target "second")
       (outcome (status resolved) (target (node (document "memory://snapshot/behavior_conformance.md") (qualified-name "Behavior::ConformingSuccession::second")))))
     )
   )
-  (query (document "memory://snapshot/behavior_conformance.md") (range (start 27 23) (end 27 27)) (probe (position 27 23))
+  (query (document "memory://snapshot/behavior_conformance.md") (range (start 27 25) (end 27 29)) (probe (position 27 25))
     (reference (id (source (node (document "memory://snapshot/behavior_conformance.md") (qualified-name "Behavior::ConformingSuccession::first"))) (kind featureTyping) (ordinal 0) (authored-target "Step")
       (outcome (status resolved) (target (node (document "memory://snapshot/behavior_conformance.md") (qualified-name "Behavior::Step")))))
     )

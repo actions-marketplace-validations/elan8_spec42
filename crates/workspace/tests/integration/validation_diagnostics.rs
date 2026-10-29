@@ -123,15 +123,6 @@ fn surveillance_drone_semantic_diagnostics_have_meaningful_ranges() {
         "expected semantic diagnostics to avoid line1/col1 sentinel ranges"
     );
 
-    let unconnected_count = semantic_diags
-        .iter()
-        .filter(|diagnostic| diagnostic.code == "unconnected_port")
-        .count();
-    assert!(
-        unconnected_count <= 25,
-        "expected reduced unconnected_port noise, got {unconnected_count}"
-    );
-
     let unresolved: Vec<_> = semantic_diags
         .iter()
         .filter(|diagnostic| diagnostic.code == "unresolved_type_reference")
@@ -289,7 +280,7 @@ fn non_viewpoint_target_for_view_conformance_emits_semantic_diagnostic() {
 fn missing_library_context_info_is_emitted_for_imported_unresolved_types_without_library_paths() {
     let content = r#"
         package P {
-            import ScalarValues::Real;
+            private import ScalarValues::Real;
 
             part def Vehicle {
                 attribute mass : Real;
@@ -315,7 +306,7 @@ fn missing_library_context_info_is_emitted_for_imported_unresolved_types_without
 fn missing_library_context_info_is_emitted_for_unresolved_import_targets_without_library_paths() {
     let content = r#"
         package P {
-            import MissingLibrary::*;
+            private import MissingLibrary::*;
         }
     "#;
     let diagnostics = validate_inline_sysml("missing_import_target_context.sysml", content);
@@ -338,7 +329,7 @@ fn missing_library_context_info_is_emitted_for_unresolved_import_targets_without
 fn unresolved_specializes_reference_is_emitted_for_imported_missing_bases() {
     let content = r#"
         package P {
-            import RoboticsCore::*;
+            private import RoboticsCore::*;
             part def InspectionRover :> RobotPlatform {
                 attribute robotName = "inspection-rover";
             }

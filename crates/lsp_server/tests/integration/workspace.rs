@@ -15,7 +15,7 @@ fn lsp_workspace_scan_goto_definition() {
     std::fs::write(root.join("def.sysml"), "package P { part def Engine; }").expect("write def");
     std::fs::write(
         root.join("use.sysml"),
-        "package Q { import P::*; part e : Engine; }",
+        "package Q { private import P::*; part e : Engine; }",
     )
     .expect("write use");
 
@@ -57,7 +57,7 @@ fn lsp_workspace_scan_goto_definition() {
                 "uri": uri_use.as_str(),
                 "languageId": "sysml",
                 "version": 1,
-                "text": "package Q { import P::*; part e : Engine; }"
+                "text": "package Q { private import P::*; part e : Engine; }"
             }
         }
     });
@@ -71,7 +71,7 @@ fn lsp_workspace_scan_goto_definition() {
         "method": "textDocument/definition",
         "params": {
             "textDocument": { "uri": uri_use.as_str() },
-            "position": { "line": 0, "character": 35 }
+            "position": { "line": 0, "character": 43 }
         }
     });
     send_message(&mut stdin, &def_req.to_string());
@@ -198,7 +198,7 @@ fn lsp_publishes_diagnostics_for_loose_file_on_did_open() {
     .expect("write ScalarValues library");
 
     let lib_path = lib_dir.canonicalize().expect("canonical lib path");
-    let loose_uri = "file:///outside-workspace/loose.sysml";
+    let loose_uri = "file:///c:/spec42-lsp-tests/outside-workspace/loose.sysml";
     let loose_text = r#"
         package P {
             private import ScalarValues::Real;
@@ -303,7 +303,7 @@ fn lsp_workspace_scan_clears_unresolved_for_wildcard_imported_workspace_types() 
         root.join("RobotAutonomy.sysml"),
         r#"
         package RobotAutonomy {
-            import RoboticsCore::*;
+            private import RoboticsCore::*;
 
             part def BehaviorModule {
                 attribute behaviorName : Name;
@@ -482,6 +482,10 @@ fn lsp_workspace_scan_sysml_release() {
     let release_root = match std::env::var_os(SYSML_V2_RELEASE_DIR_ENV) {
         Some(v) => PathBuf::from(v),
         None => {
+            assert!(
+                std::env::var_os("SPEC42_REQUIRE_SYSML_RELEASE").is_none(),
+                "the required release-scan gate must set {SYSML_V2_RELEASE_DIR_ENV}"
+            );
             eprintln!(
                 "Skipping lsp_workspace_scan_sysml_release: set {} to the SysML-v2-Release clone root",
                 SYSML_V2_RELEASE_DIR_ENV
@@ -489,10 +493,11 @@ fn lsp_workspace_scan_sysml_release() {
             return;
         }
     };
-    if !release_root.is_dir() {
-        eprintln!("Skipping: {} is not a directory", release_root.display());
-        return;
-    }
+    assert!(
+        release_root.is_dir(),
+        "release fixture is not a directory: {}",
+        release_root.display()
+    );
 
     let root_uri = match url::Url::from_file_path(&release_root) {
         Ok(u) => u,
@@ -543,9 +548,18 @@ fn lsp_workspace_scan_sysml_release() {
             "params": { "query": "Part" }
         });
         send_message(&mut stdin, &sym_req.to_string());
-        let sym_resp = read_response(&mut stdout, sym_id).expect("workspace/symbol response");
-        let sym_json: serde_json::Value =
-            serde_json::from_str(&sym_resp).expect("parse workspace/symbol response");
+        let sym_json: serde_json::Value = loop {
+            let message = read_message(&mut stdout).expect("release workspace response");
+            let value: serde_json::Value =
+                serde_json::from_str(&message).expect("release JSON-RPC message");
+            assert!(
+                value["method"] != "window/showMessage" || value["params"]["type"] != 1,
+                "release workspace analysis failed: {value}"
+            );
+            if value["id"].as_i64() == Some(sym_id) {
+                break value;
+            }
+        };
         assert_eq!(sym_json["id"], sym_id);
         let results = sym_json["result"]
             .as_array()

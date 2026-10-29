@@ -51,7 +51,7 @@ package Ends {
 # SMG
 ~~~sexpr
 (semantic-model
-  (publication (phase resolved) (completeness complete) (has-evaluation false) (source-digest "blake3:0901f26312779071a67b3b90aec10cb735e504347908bcc635f5757b73311a68"))
+  (publication (phase resolved) (completeness complete) (has-evaluation false) (source-digest "blake3:fd231f5c3250dc6d9cc177e39dcd46d5031dc8fca51b6a821560982e4241ef5c"))
   (declarations
     (declaration (id (node (document "memory://snapshot/effective_positional_ends.md") (qualified-name "Ends"))) (kind package) (membership (kind owning) (visibility default)))
     (declaration (id (node (document "memory://snapshot/effective_positional_ends.md") (qualified-name "Ends::Feed"))) (kind connection-def) (membership (kind owning) (visibility default)))
@@ -167,6 +167,16 @@ package Ends {
     (declaration (id (node (document "memory://snapshot/effective_positional_ends.md") (qualified-name "Ends::Tank")))
       (subtype (node (document "memory://snapshot/effective_positional_ends.md") (qualified-name "Ends::Feed::reservoir")) (scopes any))
     )
+)
+~~~
+# CONNECTIONS
+~~~sexpr
+(connections
+  (connector (id (node (document "memory://snapshot/effective_positional_ends.md") (qualified-name "Ends::Feed"))) (kind connection) (end (name (node (document "memory://snapshot/effective_positional_ends.md") (qualified-name "Ends::Feed::supply"))) unconnected) (end (name (node (document "memory://snapshot/effective_positional_ends.md") (qualified-name "Ends::Feed::reservoir"))) unconnected))
+  (connector (id (node (document "memory://snapshot/effective_positional_ends.md") (qualified-name "Ends::Grandchild"))) (kind connection))
+  (connector (id (node (document "memory://snapshot/effective_positional_ends.md") (qualified-name "Ends::InheritedPair"))) (kind connection))
+  (connector (id (node (document "memory://snapshot/effective_positional_ends.md") (qualified-name "Ends::Lone"))) (kind connection) (end (name (node (document "memory://snapshot/effective_positional_ends.md") (qualified-name "Ends::Lone::only"))) unconnected))
+  (connector (id (node (document "memory://snapshot/effective_positional_ends.md") (qualified-name "Ends::PartialOverride"))) (kind connection) (end (name (node (document "memory://snapshot/effective_positional_ends.md") (qualified-name "Ends::PartialOverride::supply"))) unconnected))
 )
 ~~~
 # NAVIGATION

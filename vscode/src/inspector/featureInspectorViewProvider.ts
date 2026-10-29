@@ -181,8 +181,9 @@ export class FeatureInspectorViewProvider implements vscode.WebviewViewProvider 
     .section:first-child { border-top: none; padding-top: 0; }
     .title { font-weight: 600; }
     .muted { color: var(--vscode-descriptionForeground); font-size: 12px; }
+    .element-name { font-size: 14px; font-weight: 600; overflow-wrap: anywhere; }
+    .element-kind { margin-top: 4px; }
     .header-line { display: flex; align-items: center; gap: 6px; flex-wrap: wrap; }
-    .qualified-name { font-family: var(--vscode-editor-font-family); font-size: 12px; color: var(--vscode-descriptionForeground); margin-top: 2px; word-break: break-word; }
     .doc { margin-top: 8px; font-size: 12px; line-height: 1.45; white-space: pre-wrap; }
     .pill { font-size: 11px; border-radius: 3px; padding: 1px 5px; border: 1px solid var(--vscode-panel-border); }
     .pill.ok { color: var(--vscode-testing-iconPassed); }
@@ -341,18 +342,28 @@ export class FeatureInspectorViewProvider implements vscode.WebviewViewProvider 
     }
 
     function inheritedFeaturesSection(nodes, inheritedFeatures) {
-      if (!inheritedFeatures || !inheritedFeatures.length) return;
+      if (!inheritedFeatures) return;
+      const direct = inheritedFeatures.direct || [];
+      const indirect = inheritedFeatures.indirect || [];
+      if (!direct.length && !indirect.length) return;
       const section = el('div', 'section');
       section.appendChild(el('div', 'title', 'Inherited features'));
-      inheritedFeatures.forEach((inherited) => {
+      function appendFeature(parent, inherited) {
         const row = elementRefRow(inherited.feature);
         const subtitle = row.querySelector('.row-sub');
         if (subtitle) {
           subtitle.textContent = 'Declared in ' +
             (inherited.declaredIn.qualifiedName || inherited.declaredIn.name || '');
         }
-        section.appendChild(row);
-      });
+        parent.appendChild(row);
+      }
+      direct.forEach((inherited) => appendFeature(section, inherited));
+      if (indirect.length) {
+        const details = el('details', '');
+        details.appendChild(el('summary', '', 'Show all inherited features (' + indirect.length + ' more)'));
+        indirect.forEach((inherited) => appendFeature(details, inherited));
+        section.appendChild(details);
+      }
       nodes.push(section);
     }
 
@@ -398,14 +409,6 @@ export class FeatureInspectorViewProvider implements vscode.WebviewViewProvider 
       container.appendChild(row);
     }
 
-    function declarationSection(nodes, declaration) {
-      if (!declaration) return;
-      const section = el('div', 'section');
-      section.appendChild(el('div', 'title', 'Declaration'));
-      section.appendChild(el('div', 'qualified-name', declaration));
-      nodes.push(section);
-    }
-
     function renderLanguage(nodes, help) {
       const section = el('div', 'section');
       section.appendChild(el('div', 'title', 'Language construct'));
@@ -443,23 +446,21 @@ export class FeatureInspectorViewProvider implements vscode.WebviewViewProvider 
     function renderElement(nodes, viewModel) {
       const element = viewModel.primaryElement;
       const header = el('div', 'section');
-      header.appendChild(el('div', 'title', 'Model element'));
-      const headerLine = el('div', 'header-line');
-      headerLine.appendChild(el('span', '', element.name || '(unnamed)'));
-      headerLine.appendChild(pill(element.role || 'other', element.role === 'definition' ? 'ok' : 'info'));
-      header.appendChild(headerLine);
-      header.appendChild(el('div', 'qualified-name', element.qualifiedName || ''));
+      const heading = viewModel.elementHeading;
+      header.appendChild(el('div', 'element-name', heading.name));
+      header.appendChild(el('div', 'element-kind muted', heading.kind));
       nodes.push(header);
 
-      declarationSection(nodes, element.declaration);
+      const documentation = el('div', 'section');
+      documentation.appendChild(el('div', 'title', 'Documentation'));
+      documentation.appendChild(el('div', heading.hasDocumentation ? 'doc' : 'doc muted', heading.documentation));
+      nodes.push(documentation);
 
       if (viewModel.referencedFrom) {
         const source = viewModel.referencedFrom;
         const sourceSection = el('div', 'section');
         sourceSection.appendChild(el('div', 'title', 'Referenced from'));
         const sourceRow = elementRefRow(source);
-        const declaration = source.declaration;
-        if (declaration) sourceRow.querySelector('.row-sub').textContent = declaration;
         sourceSection.appendChild(sourceRow);
         nodes.push(sourceSection);
       }
@@ -474,21 +475,27 @@ export class FeatureInspectorViewProvider implements vscode.WebviewViewProvider 
       nodes.push(identity);
 
       resolutionSection(nodes, 'Declared type', element.typing);
-      if (element.effectiveTyping && !sameResolution(element.typing, element.effectiveTyping)) {
-        resolutionSection(nodes, 'Effective type', element.effectiveTyping);
+      // The server drops the implied stdlib closure (Item, Part, Anything, ...) from the effective
+      // type set, so a feature that only inherited types implicitly now resolves to an empty list.
+      // Show the section only when it adds a type the declared typing did not.
+      const effectiveTyping = element.effectiveTyping;
+      const effectiveTypingHasTargets =
+        (effectiveTyping?.targets || []).length > 0 ||
+        effectiveTyping?.status === 'unresolved' ||
+        effectiveTyping?.status === 'unsupported' ||
+        effectiveTyping?.status === 'ambiguous';
+      if (
+        effectiveTyping &&
+        effectiveTypingHasTargets &&
+        !sameResolution(element.typing, effectiveTyping)
+      ) {
+        resolutionSection(nodes, 'Effective type', effectiveTyping);
       }
       resolutionSection(nodes, 'Specializes', element.specialization);
       resolutionSection(nodes, 'Subsets', element.subsetting);
       resolutionSection(nodes, 'Redefines', element.redefinition);
-      inheritedFeaturesSection(nodes, element.inheritedFeatures);
+      inheritedFeaturesSection(nodes, viewModel.inheritedFeatures);
 
-      const doc = element.documentation;
-      if (doc) {
-        const documentation = el('div', 'section');
-        documentation.appendChild(el('div', 'title', 'Documentation'));
-        documentation.appendChild(el('div', 'doc', doc));
-        nodes.push(documentation);
-      }
       elementRefsSection(nodes, 'Metadata', element.metadata);
 
       const valueFields = [

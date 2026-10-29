@@ -19,7 +19,7 @@ package UseCases {
         part other : Component;
     }
     use case def Main {
-        subject item : Component;
+        subject 'item' : Component;
 
         // Conforming: the included feature is a use case usage.
         include Library::operate;
@@ -74,7 +74,7 @@ package UseCases {
 # SMG
 ~~~sexpr
 (semantic-model
-  (publication (phase resolved) (completeness complete) (has-evaluation false) (source-digest "blake3:c88d14aa4e5cbef60100bee9f15694b74b3e2ffd3aee26130c4e8e9e9c7f1542"))
+  (publication (phase resolved) (completeness complete) (has-evaluation false) (source-digest "blake3:9f2a871447eee257c25ec582b411d6d3eebf968d09ef6363f8f2b80145606e28"))
   (declarations
     (declaration (id (node (document "memory://snapshot/sysml_include_use_case_usage_reference.md") (qualified-name "UseCases"))) (kind package) (membership (kind owning) (visibility default)))
     (declaration (id (node (document "memory://snapshot/sysml_include_use_case_usage_reference.md") (qualified-name "UseCases::Component"))) (kind part-def) (membership (kind owning) (visibility default)))
@@ -153,7 +153,7 @@ package UseCases {
       (outcome (status resolved) (target (node (document "memory://snapshot/sysml_include_use_case_usage_reference.md") (qualified-name "UseCases::Library::other")))))
     )
   )
-  (query (document "memory://snapshot/sysml_include_use_case_usage_reference.md") (range (start 7 23) (end 7 32)) (probe (position 7 23))
+  (query (document "memory://snapshot/sysml_include_use_case_usage_reference.md") (range (start 7 25) (end 7 34)) (probe (position 7 25))
     (reference (id (source (node (document "memory://snapshot/sysml_include_use_case_usage_reference.md") (qualified-name "UseCases::Main::item"))) (kind featureTyping) (ordinal 0) (authored-target "Component")
       (outcome (status resolved) (target (node (document "memory://snapshot/sysml_include_use_case_usage_reference.md") (qualified-name "UseCases::Component")))))
     )

@@ -3,7 +3,7 @@
 description=Geometry view preserves exposed elements and reports absent geometry facts
 type=generate
 libraries=standard
-plugin=repository:diagram
+plugin=native:diagram
 viewKind=geometry-view
 viewDocument=diagram_geometry_incomplete.md
 viewQualifiedName=GeometryExample::selected
@@ -28,7 +28,7 @@ package GeometryExample {
 # SMG
 ~~~sexpr
 (semantic-model
-  (publication (phase resolved) (completeness complete) (has-evaluation true) (source-digest "blake3:cd1533e0f705a7b2c58dee234aa3cf4a76e04be85c15ceb525c4fe29d47ea5f8") (admitted (standard-library 94)))
+  (publication (phase resolved) (completeness complete) (has-evaluation true) (source-digest "blake3:9eecfcf9c905d8371ab92a510b359100e02a99fd72cc1a5652ca45f0b32b0227") (admitted (standard-library 94)))
   (declarations
     (declaration (id (node (document "memory://snapshot/diagram_geometry_incomplete.md") (qualified-name "GeometryExample"))) (kind package) (membership (kind owning) (visibility default)))
     (declaration (id (node (document "memory://snapshot/diagram_geometry_incomplete.md") (path (named (kind package) (name "GeometryExample")) (anonymous (kind import) (ordinal 0))))) (kind import) (membership (kind import) (visibility private)) (authored (membership (kind import) (visibility private)) (relationships (namespaceImport (reference "StandardViewDefinitions") (import (shape namespace) (recursive false))))))
@@ -120,16 +120,12 @@ package GeometryExample {
 ## diagram.json
 ~~~json
 {
-  "schemaVersion": 5,
-  "modelDigest": "blake3:97fe1efbc7e47d9872e5317a7a3b4af8a71cbeb68dd25c17300629528a66699f",
+  "schemaVersion": 10,
+  "modelDigest": "blake3:53c7059d4b125893092ccd432bef2317414c32d29e9b05929440fd51a0c3507f",
   "documents": [
     {
       "uri": "memory://snapshot/diagram_geometry_incomplete.md",
       "sourceDomain": "workspace"
-    },
-    {
-      "uri": "memory://snapshot/sysml.library/parts.md",
-      "sourceDomain": "standard-library"
     }
   ],
   "sources": [
@@ -162,17 +158,6 @@ package GeometryExample {
       "document": 0,
       "kind": "qualified-name",
       "qualifiedName": "GeometryExample::selected"
-    },
-    {
-      "document": 1,
-      "kind": "qualified-name",
-      "qualifiedName": "Parts::Part"
-    },
-    {
-      "kind": "relationship",
-      "ordinal": 0,
-      "relationshipKind": "specializes",
-      "source": 0
     }
   ],
   "selectedView": {
@@ -204,30 +189,24 @@ package GeometryExample {
     "nodes": [
       {
         "compartments": [],
+        "conjugated": false,
+        "direction": null,
+        "featureDirection": null,
         "metaclass": "PartDefinition",
+        "multiplicity": null,
         "name": "Shape",
         "notationRole": "definition",
         "owner": null,
         "reference": 0,
         "source": 0,
+        "stateSubaction": null,
+        "successionGuard": null,
         "typing": {
           "status": "absent"
         }
       }
     ],
-    "relationships": [
-      {
-        "kind": "specializes",
-        "navigation": null,
-        "provenance": "implied",
-        "reference": 3,
-        "source": 0,
-        "target": {
-          "reference": 2,
-          "status": "resolved"
-        }
-      }
-    ],
+    "relationships": [],
     "scene": {
       "kind": "geometry"
     }

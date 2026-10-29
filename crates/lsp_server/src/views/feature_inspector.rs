@@ -97,8 +97,8 @@ fn semantic_role(kind: ElementKind) -> &'static str {
         | ElementKind::EnumerationDefinition
         | ElementKind::ItemDefinition
         | ElementKind::PortDefinition
+        | ElementKind::ConjugatedPortDefinition
         | ElementKind::OccurrenceDefinition
-        | ElementKind::IndividualDefinition
         | ElementKind::ConnectionDefinition
         | ElementKind::InterfaceDefinition
         | ElementKind::AllocationDefinition
@@ -131,12 +131,14 @@ fn semantic_role(kind: ElementKind) -> &'static str {
         | ElementKind::Function
         | ElementKind::Predicate
         | ElementKind::Interaction
-        | ElementKind::Multiplicity => "definition",
+        | ElementKind::Multiplicity
+        | ElementKind::MultiplicityRange => "definition",
 
         ElementKind::ConnectionUsage
         | ElementKind::InterfaceUsage
         | ElementKind::AllocationUsage
         | ElementKind::FlowConnectionUsage
+        | ElementKind::SuccessionFlowUsage
         | ElementKind::SuccessionAsUsage
         | ElementKind::SatisfyRequirementUsage
         | ElementKind::BindingConnectorAsUsage
@@ -145,7 +147,8 @@ fn semantic_role(kind: ElementKind) -> &'static str {
         | ElementKind::Alias
         | ElementKind::Dependency
         | ElementKind::Connector
-        | ElementKind::BindingConnector => "relationship",
+        | ElementKind::BindingConnector
+        | ElementKind::Succession => "relationship",
 
         ElementKind::PartUsage
         | ElementKind::AttributeUsage
@@ -155,6 +158,7 @@ fn semantic_role(kind: ElementKind) -> &'static str {
         | ElementKind::OccurrenceUsage
         | ElementKind::ActionUsage
         | ElementKind::StateUsage
+        | ElementKind::ExhibitStateUsage
         | ElementKind::CalculationUsage
         | ElementKind::ConstraintUsage
         | ElementKind::AssertConstraintUsage
@@ -179,16 +183,34 @@ fn semantic_role(kind: ElementKind) -> &'static str {
         | ElementKind::WhileLoopActionUsage
         | ElementKind::ForLoopActionUsage
         | ElementKind::ForLoopVariable
+        | ElementKind::ControlNode
         | ElementKind::DecisionNode
         | ElementKind::MergeNode
         | ElementKind::ForkNode
         | ElementKind::JoinNode
         | ElementKind::FinalState
         | ElementKind::Feature
+        | ElementKind::FlowEnd
         | ElementKind::Step
         | ElementKind::Expression
         | ElementKind::BooleanExpression
+        | ElementKind::LiteralExpression
+        | ElementKind::LiteralBoolean
+        | ElementKind::LiteralInteger
+        | ElementKind::LiteralRational
+        | ElementKind::LiteralString
+        | ElementKind::LiteralInfinity
+        | ElementKind::NullExpression
+        | ElementKind::MetadataAccessExpression
+        | ElementKind::MetadataFeature
         | ElementKind::Invariant => "usage",
+
+        // Comments, documentation and textual representations annotate elements; they are
+        // neither types, features nor relationships.
+        ElementKind::AnnotatingElement
+        | ElementKind::Comment
+        | ElementKind::Documentation
+        | ElementKind::TextualRepresentation => "other",
     }
 }
 
@@ -245,6 +267,7 @@ fn inherited_feature(
     SysmlFeatureInspectorInheritedFeatureDto {
         feature: element_ref(model, &feature.feature),
         declared_in: element_ref(model, &feature.declared_in),
+        is_direct: feature.is_direct,
     }
 }
 
@@ -305,6 +328,7 @@ fn evaluation(evaluation: &ElementEvaluation) -> SysmlFeatureInspectorEvaluation
                 EvaluationFailure::DivisionByZero => "divisionByZero",
                 EvaluationFailure::TypeMismatch => "typeMismatch",
                 EvaluationFailure::UnresolvedOperand => "unresolvedOperand",
+                EvaluationFailure::UnsupportedUnitOperation => "unsupportedUnitOperation",
             }
             .to_string(),
         },
@@ -333,7 +357,7 @@ fn bound_text(bound: MultiplicityBound) -> String {
         MultiplicityBound::Unbounded => "*".to_string(),
         MultiplicityBound::Literal(value) => value.to_string(),
         // The author wrote a non-literal bound. Rendering a number here would invent one.
-        MultiplicityBound::Expression => "…".to_string(),
+        MultiplicityBound::NonIntegerLiteral | MultiplicityBound::Expression => "…".to_string(),
     }
 }
 
@@ -465,6 +489,12 @@ pub(crate) fn covers_name(details: &ElementDetails, position: Position) -> bool 
 }
 
 pub fn parse_sysml_feature_inspector_params(v: &serde_json::Value) -> Result<(Url, Position)> {
+    parse_sysml_feature_inspector_context(v).map(|(uri, position, _)| (uri, position))
+}
+
+pub(crate) fn parse_sysml_feature_inspector_context(
+    v: &serde_json::Value,
+) -> Result<(Url, Position, Option<Url>)> {
     // vscode-jsonrpc versions can encode `sendRequest(method, params, undefined)`
     // as `[params, null]`. Accept that transition artifact at the protocol boundary
     // while clients migrate to omitting the absent cancellation-token argument.
@@ -489,7 +519,19 @@ pub fn parse_sysml_feature_inspector_params(v: &serde_json::Value) -> Result<(Ur
     })?;
     let uri = util::normalize_file_uri(&uri);
     let position = Position::new(params.position.line, params.position.character);
-    Ok((uri, position))
+    let project_uri = params
+        .project_uri
+        .map(|raw| {
+            Url::parse(&raw)
+                .map(|uri| util::normalize_file_uri(&uri))
+                .map_err(|_| {
+                    tower_lsp::jsonrpc::Error::invalid_params(
+                        "sysml/featureInspector: invalid projectUri",
+                    )
+                })
+        })
+        .transpose()?;
+    Ok((uri, position, project_uri))
 }
 
 pub fn empty_feature_inspector_response(
@@ -556,10 +598,16 @@ pub(crate) fn feature_inspector_element(
         typing: resolution(model, &details.typing),
         effective_typing: SysmlFeatureInspectorResolutionDto {
             status: resolution_status(details.effective_typing.outcome).to_string(),
+            // Lead with the declared type and the types reached through an authored subsetting or
+            // redefinition. The implied library closure (`Item`, `Part`, `Anything`, ... via
+            // `Parts::parts` and the rest of the kernel chain) is semantically real but is not
+            // display-worthy in the compact inspector; "Inherited features" below is a different,
+            // useful fact family and is unaffected.
             targets: details
                 .effective_typing
                 .types
                 .iter()
+                .filter(|entry| entry.provenance == RelationshipProvenance::Authored)
                 .map(|entry| element_ref(model, &entry.element))
                 .collect(),
             candidates: Vec::new(),

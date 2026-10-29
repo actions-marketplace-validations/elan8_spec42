@@ -35,10 +35,13 @@ use crate::model::ReferenceKind;
 use crate::model::SymbolPathId;
 use crate::model::Visibility;
 use crate::resolve::results::EffectiveNameOutcome;
+use crate::resolve::results::EffectiveNameProvenance;
 use crate::resolve::results::ImpliedRelationship;
 use crate::resolve::results::ResolutionStatus;
 use crate::Diagnostic;
 use crate::TextRange;
+use source_identity::PublicationModelDigest;
+use source_identity::RootDigest;
 use source_identity::SourceRole;
 
 use std::fmt;
@@ -72,6 +75,609 @@ pub(crate) fn write_types_only(
     output: &mut dyn fmt::Write,
 ) -> fmt::Result {
     write_types(model, output)
+}
+
+pub(crate) fn write_expressions_only(
+    model: &ResolvedSemanticModel,
+    output: &mut dyn fmt::Write,
+) -> fmt::Result {
+    write_expressions(model, output)
+}
+
+/// Renders the resolved expression tree of every declaration that authored a constraint / calc /
+/// value expression, in canonical declaration order. A declaration with no such expression
+/// contributes nothing, so this section stays proportional to the expressions a fixture authors.
+pub(crate) fn write_expressions(
+    model: &ResolvedSemanticModel,
+    output: &mut dyn fmt::Write,
+) -> fmt::Result {
+    writeln!(output, "(expressions")?;
+    for index in canonical_declaration_indices(model) {
+        let declaration = DeclarationId(index as u32);
+        let Some(row) = model.resolved_expressions.row(declaration) else {
+            continue;
+        };
+        write!(output, "  (declaration (id ")?;
+        write_node_identity(model, declaration, output)?;
+        write!(output, ") (outcome {})", row.outcome.as_str())?;
+        if let Some(root) = row.root {
+            output.write_char(' ')?;
+            write_resolved_expression_node(model, &row.nodes, root, output)?;
+        }
+        writeln!(output, ")")?;
+    }
+    let order = canonical_declaration_indices(model);
+    for context_index in order {
+        let context = DeclarationId(context_index as u32);
+        let mut rows: Vec<_> = model
+            .resolved_expressions
+            .contextual
+            .range((context, DeclarationId(0))..=(context, DeclarationId(u32::MAX)))
+            .collect();
+        rows.sort_by(|((_, left), _), ((_, right), _)| {
+            document_identity(model, model.storage.declarations[left.index()].document)
+                .cmp(document_identity(
+                    model,
+                    model.storage.declarations[right.index()].document,
+                ))
+                .then_with(|| {
+                    declaration_path_key(model, *left).cmp(&declaration_path_key(model, *right))
+                })
+        });
+        for ((_, element), contextual) in rows {
+            let element = *element;
+            let origin = &contextual.authored;
+            let result = &contextual.result;
+            if model
+                .storage
+                .declaration(*origin)
+                .and_then(|declaration| declaration.owner)
+                == Some(context)
+                && element == *origin
+                && contextual.effective == element
+                && matches!(
+                    result,
+                    crate::index::resolved_expressions::ContextualExpressionResult::Resolved(_)
+                )
+            {
+                continue;
+            }
+            write!(output, "  (contextual (context ")?;
+            write_node_identity(model, context, output)?;
+            output.write_str(") (element ")?;
+            write_node_identity(model, element, output)?;
+            match result {
+                crate::index::resolved_expressions::ContextualExpressionResult::Resolved(row) => {
+                    output.write_str(") (effective-element ")?;
+                    write_node_identity(model, contextual.effective, output)?;
+                    output.write_str(") (authored-element ")?;
+                    write_node_identity(model, *origin, output)?;
+                    write!(output, ") (outcome {})", row.outcome.as_str())?;
+                    if let Some(root) = row.root {
+                        output.write_char(' ')?;
+                        write_resolved_expression_node(model, &row.nodes, root, output)?;
+                    }
+                }
+                crate::index::resolved_expressions::ContextualExpressionResult::Unresolved => {
+                    output.write_str(") (outcome unresolved)")?
+                }
+                crate::index::resolved_expressions::ContextualExpressionResult::Ambiguous(
+                    candidates,
+                ) => {
+                    output.write_str(") (outcome ambiguous) (candidates")?;
+                    for candidate in candidates.iter() {
+                        output.write_char(' ')?;
+                        write_node_identity(model, *candidate, output)?;
+                    }
+                    output.write_char(')')?;
+                }
+            }
+            writeln!(output, ")")?;
+        }
+    }
+    writeln!(output, ")")
+}
+
+/// Renders one node of a settled resolved-expression tree. Shared by the `EXPRESSIONS` section
+/// and the metadata-annotation body values, which reuse the same tree.
+pub(crate) fn write_resolved_expression_node(
+    model: &ResolvedSemanticModel,
+    nodes: &[crate::index::resolved_expressions::RawExpressionNode],
+    index: u32,
+    output: &mut dyn fmt::Write,
+) -> fmt::Result {
+    use crate::index::resolved_expressions::RawExpressionNodeKind;
+
+    let Some(node) = nodes.get(index as usize) else {
+        return output.write_str("(invalid-node)");
+    };
+    match &node.kind {
+        RawExpressionNodeKind::Literal(value) => {
+            output.write_str("(literal ")?;
+            write_evaluated_scalar(value, output)?;
+            output.write_char(')')
+        }
+        RawExpressionNodeKind::FeatureReference {
+            target, authored, ..
+        } => {
+            write!(output, "(feature-reference {authored:?}")?;
+            match target {
+                Some(declaration) => {
+                    output.write_str(" (target ")?;
+                    write_node_identity(model, *declaration, output)?;
+                    output.write_char(')')?;
+                }
+                None => output.write_str(" (target unresolved)")?,
+            }
+            output.write_char(')')
+        }
+        RawExpressionNodeKind::Operator { operator, operands } => {
+            write!(output, "(operator {:?}", operator.as_str())?;
+            for operand in operands.iter() {
+                output.write_char(' ')?;
+                write_resolved_expression_node(model, nodes, *operand, output)?;
+            }
+            output.write_char(')')
+        }
+        RawExpressionNodeKind::Unsupported { children } => {
+            output.write_str("(unsupported")?;
+            for child in children.iter() {
+                output.write_char(' ')?;
+                write_resolved_expression_node(model, nodes, *child, output)?;
+            }
+            output.write_char(')')
+        }
+    }
+}
+
+pub(crate) fn write_metadata_annotations_only(
+    model: &ResolvedSemanticModel,
+    output: &mut dyn fmt::Write,
+) -> fmt::Result {
+    write_metadata_annotations(model, output)
+}
+
+/// Renders every authored metadata annotation, grouped under the element it binds to, in
+/// canonical declaration order. A fixture that authors none contributes nothing.
+/// Renders one authored reference's settled target as `(resolved <node>)` / `ambiguous` /
+/// `unsupported` / `unresolved`. Shared by the `METADATA ANNOTATIONS` and `CONNECTIONS`
+/// sections.
+pub(crate) fn write_settled_reference_target(
+    model: &ResolvedSemanticModel,
+    reference_id: AuthoredReferenceId,
+    output: &mut dyn fmt::Write,
+) -> fmt::Result {
+    match model.resolution.outcome(reference_id) {
+        Some(ResolutionStatus::Resolved(target)) => {
+            output.write_str("(resolved ")?;
+            write_node_identity(model, target, output)?;
+            output.write_char(')')
+        }
+        Some(ResolutionStatus::Ambiguous(_)) => output.write_str("ambiguous"),
+        Some(ResolutionStatus::Unsupported) => output.write_str("unsupported"),
+        _ => output.write_str("unresolved"),
+    }
+}
+
+pub(crate) fn write_metadata_annotations(
+    model: &ResolvedSemanticModel,
+    output: &mut dyn fmt::Write,
+) -> fmt::Result {
+    fn write_target(
+        model: &ResolvedSemanticModel,
+        reference_id: AuthoredReferenceId,
+        output: &mut dyn fmt::Write,
+    ) -> fmt::Result {
+        write_settled_reference_target(model, reference_id, output)
+    }
+
+    fn write_body(
+        model: &ResolvedSemanticModel,
+        owner: DeclarationId,
+        output: &mut dyn fmt::Write,
+    ) -> fmt::Result {
+        for child in model.child_declarations(owner) {
+            let Some(redefinition) = model.outgoing_reference_ids(*child).iter().find(|id| {
+                model
+                    .storage
+                    .references
+                    .get(id.index())
+                    .is_some_and(|reference| reference.kind == ReferenceKind::Redefinition)
+            }) else {
+                continue;
+            };
+            output.write_str(" (value (redefines ")?;
+            write_target(model, *redefinition, output)?;
+            output.write_char(')')?;
+            let value_declaration = model.value_expression(*child).unwrap_or(*child);
+            match model.resolved_expressions.row(value_declaration) {
+                Some(row) => {
+                    write!(output, " (outcome {})", row.outcome.as_str())?;
+                    if let Some(root) = row.root {
+                        output.write_char(' ')?;
+                        write_resolved_expression_node(model, &row.nodes, root, output)?;
+                    }
+                }
+                None => output.write_str(" (outcome not-applicable)")?,
+            }
+            write_body(model, *child, output)?;
+            output.write_char(')')?;
+        }
+        Ok(())
+    }
+
+    writeln!(output, "(metadata-annotations")?;
+    for index in canonical_declaration_indices(model) {
+        let element = DeclarationId(index as u32);
+        for record in model.storage.metadata_annotations.iter().filter(|record| {
+            let about = model.metadata_annotation_about_references(record.annotation);
+            model.metadata_annotation_binds_to(record, &about, element)
+        }) {
+            write!(output, "  (annotation (element ")?;
+            write_node_identity(model, element, output)?;
+            write!(
+                output,
+                ") (form {})",
+                metadata_annotation_form_name(record.form)
+            )?;
+            let definition_kind =
+                ResolvedSemanticModel::metadata_annotation_definition_kind(record.form);
+            for reference_id in model.outgoing_reference_ids(record.annotation) {
+                let Some(reference) = model.storage.references.get(reference_id.index()) else {
+                    continue;
+                };
+                if reference.kind == definition_kind {
+                    output.write_str(" (definition ")?;
+                    write_target(model, *reference_id, output)?;
+                    output.write_char(')')?;
+                } else if reference.kind == ReferenceKind::MetadataAnnotationAbout {
+                    output.write_str(" (about ")?;
+                    write_target(model, *reference_id, output)?;
+                    output.write_char(')')?;
+                }
+            }
+            write_body(model, record.annotation, output)?;
+            writeln!(output, ")")?;
+        }
+    }
+    writeln!(output, ")")
+}
+
+fn metadata_annotation_form_name(
+    form: crate::lower::facts::MetadataAnnotationForm,
+) -> &'static str {
+    match form {
+        crate::lower::facts::MetadataAnnotationForm::PrefixKeyword => "prefix-keyword",
+        crate::lower::facts::MetadataAnnotationForm::AnnotatingMember => "annotating-member",
+        crate::lower::facts::MetadataAnnotationForm::Usage => "usage",
+    }
+}
+
+pub(crate) fn write_connections_only(
+    model: &ResolvedSemanticModel,
+    output: &mut dyn fmt::Write,
+) -> fmt::Result {
+    write_connections(model, output)
+}
+
+pub(crate) fn write_projection_only(
+    model: &ResolvedSemanticModel,
+    source_digest: &RootDigest,
+    model_digest: &PublicationModelDigest,
+    output: &mut dyn fmt::Write,
+) -> fmt::Result {
+    write_projection(model, source_digest, model_digest, output)
+}
+
+/// Renders the whole-model projection: the publication envelope, every workspace element (its
+/// canonical identity, its resolved-expression outcome, and its metadata-annotation count), and
+/// every connector, in the projection's canonical order.
+///
+/// Deliberately shallow: the deep content -- relationship families, expression trees, annotation
+/// bodies, connector ends -- is already covered by the `SMG`, `EXPRESSIONS`, `METADATA
+/// ANNOTATIONS` and `CONNECTIONS` sections of the same fixture. This section proves the
+/// composition itself: schema version, envelope, canonical ordering, workspace-only scoping, and
+/// truncation.
+pub(crate) fn write_projection(
+    model: &ResolvedSemanticModel,
+    source_digest: &RootDigest,
+    model_digest: &PublicationModelDigest,
+    output: &mut dyn fmt::Write,
+) -> fmt::Result {
+    let projection = match model
+        .model_projection(usize::MAX, *source_digest, *model_digest)
+        .answer
+    {
+        crate::QueryAnswer::Resolved(projection) => projection,
+        _ => {
+            writeln!(output, "(projection (status incomplete))")?;
+            return Ok(());
+        }
+    };
+
+    writeln!(
+        output,
+        "(projection (schema-version {})",
+        projection.schema_version
+    )?;
+
+    let envelope = &projection.envelope;
+    let phase = envelope.phase.as_str();
+    let completeness = if envelope.completeness.is_complete() {
+        "complete".to_owned()
+    } else {
+        envelope
+            .completeness
+            .obstacles()
+            .map(crate::PublicationObstacle::as_str)
+            .collect::<Vec<_>>()
+            .join(",")
+    };
+    write!(
+        output,
+        "  (envelope (phase {phase}) (completeness {completeness}) (has-evaluation {})",
+        envelope.has_evaluation
+    )?;
+    let admitted = envelope.admitted;
+    if admitted.standard_library > 0 || admitted.library > 0 || admitted.external > 0 {
+        write!(
+            output,
+            " (admitted (standard-library {}) (library {}) (external {}))",
+            admitted.standard_library, admitted.library, admitted.external
+        )?;
+    }
+    writeln!(output, ")")?;
+
+    for element in projection.elements.iter() {
+        let Some(id) = model.declaration_of(element.identity) else {
+            continue;
+        };
+        write!(output, "  (element ")?;
+        write_node_identity(model, id, output)?;
+        write!(
+            output,
+            " (expression {})",
+            element.expression.outcome.as_str()
+        )?;
+        if !element.metadata_annotations.is_empty() {
+            write!(
+                output,
+                " (metadata-annotations {})",
+                element.metadata_annotations.len()
+            )?;
+        }
+        writeln!(output, ")")?;
+    }
+
+    for connector in projection.connectors.iter() {
+        let Some(id) = model.declaration_of(connector.identity) else {
+            continue;
+        };
+        write!(output, "  (connector ")?;
+        write_node_identity(model, id, output)?;
+        writeln!(
+            output,
+            " (kind {}) (ends {}))",
+            connector.kind.as_str(),
+            connector.ends.len()
+        )?;
+    }
+
+    writeln!(
+        output,
+        "  (truncation (elements-total {}) (elements-returned {}) (elements-incomplete {}))",
+        projection.truncation.elements_total,
+        projection.truncation.elements_returned,
+        projection.truncation.elements_incomplete
+    )?;
+    writeln!(output, ")")
+}
+
+/// Renders every workspace `connect` / `interface` connector with its type and resolved ends,
+/// in canonical declaration order. Not root-scoped -- the section is the whole workspace's
+/// topology. A fixture that authors no connector contributes nothing.
+pub(crate) fn write_connections(
+    model: &ResolvedSemanticModel,
+    output: &mut dyn fmt::Write,
+) -> fmt::Result {
+    use crate::model::query::connector_kind;
+
+    fn write_end_reference(
+        model: &ResolvedSemanticModel,
+        reference_id: AuthoredReferenceId,
+        output: &mut dyn fmt::Write,
+    ) -> fmt::Result {
+        let dotted = model
+            .storage
+            .references
+            .get(reference_id.index())
+            .is_some_and(|reference| {
+                reference.kind == ReferenceKind::MemberAccessOperand || reference.flags.dotted
+            });
+        if dotted {
+            let authored = model
+                .storage
+                .references
+                .get(reference_id.index())
+                .map(|reference| model.authored_path(reference.path))
+                .unwrap_or_default();
+            output.write_str("(feature-chain (root ")?;
+            match model
+                .resolution
+                .member_access_paths
+                .get(&reference_id)
+                .and_then(|path| path.first())
+            {
+                Some(ResolutionStatus::Resolved(one)) => write_node_identity(model, *one, output)?,
+                Some(ResolutionStatus::Ambiguous(_)) => output.write_str("ambiguous")?,
+                Some(ResolutionStatus::Unsupported) => output.write_str("unsupported")?,
+                Some(ResolutionStatus::NonConverged) => output.write_str("non-converged")?,
+                _ => output.write_str("unresolved")?,
+            }
+            output.write_str(") (terminal ")?;
+            write_settled_reference_target(model, reference_id, output)?;
+            output.write_str(") (path")?;
+            if let Some(path) = model.resolution.member_access_paths.get(&reference_id) {
+                for status in path.iter() {
+                    output.write_char(' ')?;
+                    match status {
+                        ResolutionStatus::Resolved(target) => {
+                            write_node_identity(model, *target, output)?
+                        }
+                        ResolutionStatus::Ambiguous(range) => {
+                            output.write_str("(ambiguous")?;
+                            for candidate in &model.resolution.ambiguous_candidates
+                                [range.start as usize..(range.start + range.len) as usize]
+                            {
+                                output.write_char(' ')?;
+                                write_node_identity(model, *candidate, output)?;
+                            }
+                            output.write_char(')')?;
+                        }
+                        ResolutionStatus::Unsupported => output.write_str("unsupported")?,
+                        ResolutionStatus::NonConverged => output.write_str("non-converged")?,
+                        ResolutionStatus::Unresolved => output.write_str("unresolved")?,
+                    }
+                }
+            }
+            write!(output, ") {authored:?})")
+        } else {
+            output.write_str("(feature ")?;
+            write_settled_reference_target(model, reference_id, output)?;
+            output.write_char(')')
+        }
+    }
+
+    fn is_end_reference(model: &ResolvedSemanticModel, reference_id: AuthoredReferenceId) -> bool {
+        model
+            .storage
+            .references
+            .get(reference_id.index())
+            .is_some_and(|reference| {
+                matches!(
+                    reference.kind,
+                    ReferenceKind::ConnectorEnd | ReferenceKind::MemberAccessOperand
+                )
+            })
+    }
+
+    writeln!(output, "(connections")?;
+    for index in canonical_declaration_indices(model) {
+        let connector = DeclarationId(index as u32);
+        let Some(declaration) = model.storage.declaration(connector) else {
+            continue;
+        };
+        let Some(kind) = connector_kind(declaration.kind) else {
+            continue;
+        };
+        if model
+            .storage
+            .declaration_facts(connector)
+            .and_then(|facts| facts.positional_end)
+            .is_some()
+        {
+            continue;
+        }
+        write!(output, "  (connector (id ")?;
+        write_node_identity(model, connector, output)?;
+        write!(output, ") (kind {})", kind.as_str())?;
+        if let Some(typing) = model.outgoing_reference_ids(connector).iter().find(|id| {
+            model
+                .storage
+                .references
+                .get(id.index())
+                .is_some_and(|reference| reference.kind == ReferenceKind::FeatureTyping)
+        }) {
+            output.write_str(" (type ")?;
+            write_settled_reference_target(model, *typing, output)?;
+            output.write_char(')')?;
+        }
+
+        fn write_named_end_head(
+            model: &ResolvedSemanticModel,
+            child: DeclarationId,
+            output: &mut dyn fmt::Write,
+        ) -> fmt::Result {
+            output.write_str(" (end (name ")?;
+            write_node_identity(model, child, output)?;
+            output.write_char(')')?;
+            if let Some(multiplicity) = model
+                .storage
+                .declaration_facts(child)
+                .and_then(|facts| facts.multiplicity.as_ref())
+            {
+                output.write_str(" (multiplicity (lower ")?;
+                write_multiplicity_bound(multiplicity.lower, output)?;
+                output.write_str(") (upper ")?;
+                write_multiplicity_bound(multiplicity.upper, output)?;
+                output.write_str("))")?;
+            }
+            if let Some(multiplicity) = model
+                .storage
+                .declaration_facts(child)
+                .and_then(|facts| facts.cross_multiplicity.as_ref())
+            {
+                output.write_str(" (cross-multiplicity (lower ")?;
+                write_multiplicity_bound(multiplicity.lower, output)?;
+                output.write_str(") (upper ")?;
+                write_multiplicity_bound(multiplicity.upper, output)?;
+                output.write_str("))")?;
+            }
+            Ok(())
+        }
+
+        // Connected ends (bare on the connector, or on a named child), in authored reference order.
+        let mut connected: Vec<(usize, Option<DeclarationId>, AuthoredReferenceId)> = Vec::new();
+        for reference_id in model.outgoing_reference_ids(connector) {
+            if is_end_reference(model, *reference_id) {
+                connected.push((reference_id.index(), None, *reference_id));
+            }
+        }
+        let mut unconnected: Vec<DeclarationId> = Vec::new();
+        for child in model.child_declarations(connector) {
+            if model
+                .storage
+                .declaration_facts(*child)
+                .and_then(|facts| facts.positional_end)
+                .is_none()
+            {
+                continue;
+            }
+            match model
+                .outgoing_reference_ids(*child)
+                .iter()
+                .copied()
+                .find(|id| is_end_reference(model, *id))
+            {
+                Some(reference_id) => {
+                    connected.push((reference_id.index(), Some(*child), reference_id))
+                }
+                None => unconnected.push(*child),
+            }
+        }
+        connected.sort_by_key(|(position, _, _)| *position);
+        for (_, child, reference_id) in connected {
+            match child {
+                Some(child) => {
+                    write_named_end_head(model, child, output)?;
+                    output.write_char(' ')?;
+                    write_end_reference(model, reference_id, output)?;
+                    output.write_char(')')?;
+                }
+                None => {
+                    output.write_str(" (end bare ")?;
+                    write_end_reference(model, reference_id, output)?;
+                    output.write_char(')')?;
+                }
+            }
+        }
+        for child in unconnected {
+            write_named_end_head(model, child, output)?;
+            output.write_str(" unconnected)")?;
+        }
+        writeln!(output, ")")?;
+    }
+    writeln!(output, ")")
 }
 
 /// Renders the settled specialization closure of each projected declaration.
@@ -233,6 +839,7 @@ pub(crate) fn specialization_scope(scope: types::ScopeBits) -> &'static str {
         types::ScopeBits::AnySpecialization => "any",
         types::ScopeBits::Subclassification => "subclassification",
         types::ScopeBits::FeatureSpecialization => "feature",
+        types::ScopeBits::Redefinition => "redefinition",
     }
 }
 
@@ -322,11 +929,7 @@ pub(crate) fn write_metadata(
             .metadata
             .completeness
             .obstacles()
-            .map(|obstacle| match obstacle {
-                crate::PublicationObstacle::ParseRecovery => "parse-recovery",
-                crate::PublicationObstacle::UnsupportedSyntax => "unsupported-syntax",
-                crate::PublicationObstacle::NonConverged => "non-converged",
-            })
+            .map(crate::PublicationObstacle::as_str)
             .collect::<Vec<_>>()
             .join(",")
     };
@@ -416,9 +1019,12 @@ fn write_effective_identification(
     let Some(facts) = model.resolution.effective_names.get(declaration.index()) else {
         return Ok(());
     };
-    if !facts.derived_from_redefinition {
-        return Ok(());
-    }
+    let provenance = match facts.provenance {
+        EffectiveNameProvenance::Declared => return Ok(()),
+        EffectiveNameProvenance::FirstRedefinition => "first-redefinition",
+        EffectiveNameProvenance::PerformedAction => "performed-action",
+        EffectiveNameProvenance::OriginalPortDefinition => "original-port-definition",
+    };
     output.write_str(" (effective-identification")?;
     match facts.name {
         EffectiveNameOutcome::Resolved(name) => {
@@ -438,7 +1044,7 @@ fn write_effective_identification(
         EffectiveNameOutcome::Unresolved => output.write_str(" (short-name unresolved)")?,
         EffectiveNameOutcome::NonConverged => output.write_str(" (short-name non-converged)")?,
     }
-    output.write_str(" (provenance first-redefinition))")
+    write!(output, " (provenance {provenance}))")
 }
 
 fn write_constructor_expression(
@@ -512,26 +1118,54 @@ pub(crate) fn write_declaration_facts(
         return Ok(());
     };
     let modifiers = declaration_modifier_names(&facts.modifiers);
-    if facts.short_name.is_none()
+    let kind = model
+        .storage
+        .declaration(declaration)
+        .ok_or(fmt::Error)?
+        .kind;
+    let implied_abstract = facts.modifiers.implied_abstract(kind);
+    let implied_variation = facts.modifiers.implied_variation(kind);
+    if matches!(facts.short_name, crate::lower::facts::DeclaredName::Absent)
         && modifiers.is_empty()
+        && !implied_abstract
+        && !implied_variation
         && facts.portion_kind.is_none()
         && facts.direction.is_none()
         && facts.multiplicity.is_none()
+        && facts.cross_multiplicity.is_none()
+        && facts.succession_end_multiplicities.is_none()
         && facts.positional_end.is_none()
         && facts.cross_feature_projection.is_none()
         && facts.expression_result.is_none()
+        && !facts.is_individual_multiplicity
     {
         return Ok(());
     }
     output.write_str(" (facts")?;
-    if let Some(short_name) = facts.short_name {
-        let text = model.storage.symbol(short_name).ok_or(fmt::Error)?;
-        write!(output, " (short-name {text:?})")?;
+    match facts.short_name {
+        crate::lower::facts::DeclaredName::Absent => {}
+        crate::lower::facts::DeclaredName::Malformed => {
+            output.write_str(" (short-name malformed)")?
+        }
+        crate::lower::facts::DeclaredName::Resolved(short_name) => {
+            let text = model.storage.symbol(short_name).ok_or(fmt::Error)?;
+            write!(output, " (short-name {text:?})")?;
+        }
     }
     if !modifiers.is_empty() {
         output.write_str(" (modifiers")?;
         for name in modifiers {
             write!(output, " {name}")?;
+        }
+        output.write_char(')')?;
+    }
+    if implied_abstract || implied_variation {
+        output.write_str(" (implied-modifiers")?;
+        if implied_abstract {
+            output.write_str(" abstract")?;
+        }
+        if implied_variation {
+            output.write_str(" variation")?;
         }
         output.write_char(')')?;
     }
@@ -548,6 +1182,25 @@ pub(crate) fn write_declaration_facts(
         write_multiplicity_bound(multiplicity.upper, output)?;
         output.write_str("))")?;
     }
+    if let Some(multiplicity) = &facts.cross_multiplicity {
+        output.write_str(" (cross-multiplicity (lower ")?;
+        write_multiplicity_bound(multiplicity.lower, output)?;
+        output.write_str(") (upper ")?;
+        write_multiplicity_bound(multiplicity.upper, output)?;
+        output.write_str("))")?;
+    }
+    if let Some(ends) = &facts.succession_end_multiplicities {
+        for (end, multiplicity) in [("source", &ends.source), ("target", &ends.target)] {
+            let Some(multiplicity) = multiplicity else {
+                continue;
+            };
+            write!(output, " (end-multiplicity (end {end}) (lower ")?;
+            write_multiplicity_bound(multiplicity.lower, output)?;
+            output.write_str(") (upper ")?;
+            write_multiplicity_bound(multiplicity.upper, output)?;
+            output.write_str("))")?;
+        }
+    }
     if let Some(position) = facts.positional_end {
         write!(output, " (positional-end {position})")?;
     }
@@ -557,6 +1210,14 @@ pub(crate) fn write_declaration_facts(
         output.write_str(") (owned-cross-feature ")?;
         write_node_identity(model, projection.owned_cross_feature, output)?;
         output.write_str("))")?;
+    }
+    if facts.is_individual_multiplicity {
+        output.write_str(" (origin individual-multiplicity)")?;
+    }
+    if let Some(multiplicity) = model.storage.individual_multiplicity(declaration) {
+        output.write_str(" (individual-multiplicity ")?;
+        write_node_identity(model, multiplicity, output)?;
+        output.write_char(')')?;
     }
     if let Some(result) = facts.expression_result {
         output.write_str(" (expression-result ")?;
@@ -573,6 +1234,7 @@ pub(crate) fn write_multiplicity_bound(
     match bound {
         MultiplicityBound::Unbounded => output.write_str("unbounded"),
         MultiplicityBound::Literal(value) => write!(output, "{value}"),
+        MultiplicityBound::NonIntegerLiteral => output.write_str("non-integer-literal"),
         MultiplicityBound::Expression => output.write_str("expression"),
     }
 }
@@ -631,7 +1293,7 @@ pub(crate) fn write_documentation(
         .storage
         .documentation
         .iter()
-        .filter(|record| record.declaration == declaration)
+        .filter(|record| record.element == declaration)
     {
         if !wrote_header {
             output.write_str(" (documentation")?;
@@ -1255,7 +1917,7 @@ pub(crate) fn write_declaration_path(
     for current in chain.iter().rev() {
         let declaration = model.storage.declaration(*current).ok_or(fmt::Error)?;
         match declaration.name {
-            Some(name) => {
+            crate::lower::facts::DeclaredName::Resolved(name) => {
                 write!(
                     output,
                     " (named (kind {}) (name ",
@@ -1274,11 +1936,17 @@ pub(crate) fn write_declaration_path(
                 }
                 output.write_char(')')?;
             }
-            None => write!(
+            crate::lower::facts::DeclaredName::Absent => write!(
                 output,
                 " (anonymous (kind {}) (ordinal {}))",
                 declaration_kind(declaration.kind),
                 declaration.anonymous_ordinal.ok_or(fmt::Error)?,
+            )?,
+            crate::lower::facts::DeclaredName::Malformed => write!(
+                output,
+                " (malformed-name (kind {}) (ordinal {}))",
+                declaration_kind(declaration.kind),
+                declaration.anonymous_ordinal.ok_or(fmt::Error)?
             )?,
         }
     }
@@ -1295,7 +1963,7 @@ pub(crate) fn write_declaration_name_body(
         write_declaration_name_body(model, owner, output)?;
         output.write_str("::")?;
     }
-    if let Some(name) = declaration.name {
+    if let Some(name) = declaration.name.resolved() {
         write_escaped(output, model.storage.symbol(name).ok_or(fmt::Error)?)?;
     }
     Ok(())
@@ -1481,6 +2149,7 @@ pub(crate) fn declaration_kind(kind: DeclarationKind) -> &'static str {
         DeclarationKind::RequirementDefinition => "requirement-def",
         DeclarationKind::RequirementUsage => "requirement",
         DeclarationKind::PortDefinition => "port-def",
+        DeclarationKind::ConjugatedPortDefinition => "conjugated-port-def",
         DeclarationKind::PortUsage => "port",
         DeclarationKind::ItemDefinition => "item-def",
         DeclarationKind::ItemUsage => "item",
@@ -1492,6 +2161,7 @@ pub(crate) fn declaration_kind(kind: DeclarationKind) -> &'static str {
         DeclarationKind::Succession => "succession",
         DeclarationKind::StateDefinition => "state-def",
         DeclarationKind::StateUsage => "state",
+        DeclarationKind::ExhibitStateUsage => "exhibit-state",
         DeclarationKind::MetadataDefinition => "metadata-def",
         DeclarationKind::MetadataUsage => "metadata",
         DeclarationKind::ConnectionDefinition => "connection-def",
@@ -1545,11 +2215,13 @@ pub(crate) fn declaration_kind(kind: DeclarationKind) -> &'static str {
         DeclarationKind::Join => "join",
         DeclarationKind::ThenContinuation => "then-continuation",
         DeclarationKind::Flow => "flow",
+        DeclarationKind::SuccessionFlow => "succession-flow",
         DeclarationKind::StakeholderUsage => "stakeholder",
         DeclarationKind::RequirementActor => "requirement-actor",
         DeclarationKind::CaseActor => "case-actor",
         DeclarationKind::Frame => "frame",
         DeclarationKind::VerifyRequirement => "verify-requirement",
+        DeclarationKind::ObjectiveRequirement => "objective-requirement",
         // One name per KerML metaclass; see `DeclarationKind`'s own doc comments for why the
         // keyword spellings are distinct metaclasses rather than one bucket.
         DeclarationKind::KermlClassifier => "kerml-classifier",
@@ -1563,17 +2235,27 @@ pub(crate) fn declaration_kind(kind: DeclarationKind) -> &'static str {
         DeclarationKind::KermlPredicate => "kerml-predicate",
         DeclarationKind::KermlInteraction => "kerml-interaction",
         DeclarationKind::KermlMultiplicity => "kerml-multiplicity",
+        DeclarationKind::KermlMultiplicityRange => "kerml-multiplicity-range",
         DeclarationKind::KermlType => "kerml-type",
         DeclarationKind::KermlStep => "kerml-step",
         DeclarationKind::KermlExpression => "kerml-expression",
         DeclarationKind::KermlBooleanExpression => "kerml-boolean-expression",
+        DeclarationKind::KermlLiteralBoolean => "kerml-literal-boolean",
+        DeclarationKind::KermlLiteralInteger => "kerml-literal-integer",
+        DeclarationKind::KermlLiteralRational => "kerml-literal-rational",
+        DeclarationKind::KermlLiteralString => "kerml-literal-string",
+        DeclarationKind::KermlLiteralInfinity => "kerml-literal-infinity",
+        DeclarationKind::KermlNullExpression => "kerml-null-expression",
+        DeclarationKind::KermlMetadataAccessExpression => "kerml-metadata-access-expression",
         DeclarationKind::KermlFeature => "kerml-feature",
         DeclarationKind::DefaultReferenceUsage => "default-reference",
         DeclarationKind::ExtendedUsage => "extended-usage",
         DeclarationKind::KermlConnector => "kerml-connector",
         DeclarationKind::KermlBinding => "kerml-binding",
         DeclarationKind::KermlInvariant => "kerml-invariant",
+        DeclarationKind::KermlMetadataFeature => "kerml-metadata-feature",
         DeclarationKind::KermlEnd => "kerml-end",
+        DeclarationKind::FlowEnd => "flow-end",
         DeclarationKind::Assign => "assign",
         DeclarationKind::While => "while",
         DeclarationKind::Loop => "loop",
@@ -1581,8 +2263,10 @@ pub(crate) fn declaration_kind(kind: DeclarationKind) -> &'static str {
         DeclarationKind::ForLoop => "for-loop",
         DeclarationKind::ForLoopVariable => "for-loop-variable",
         DeclarationKind::Dependency => "dependency",
+        DeclarationKind::Comment => "comment",
+        DeclarationKind::Documentation => "documentation",
+        DeclarationKind::TextualRepresentation => "textual-representation",
         DeclarationKind::ExtendedDefinition => "extended-definition",
-        DeclarationKind::IndividualDefinition => "individual-definition",
         DeclarationKind::BareConnect => "bare-connect",
         DeclarationKind::PerformParameterBinding => "perform-parameter-binding",
     }
@@ -1640,6 +2324,8 @@ pub(crate) fn reference_kind(kind: ReferenceKind) -> &'static str {
         ReferenceKind::TransitionTrigger => "transitionTrigger",
         ReferenceKind::TransitionEffect => "transitionEffect",
         ReferenceKind::MetadataAnnotation => "metadataAnnotation",
+        ReferenceKind::MetadataAnnotationAbout => "metadataAnnotationAbout",
+        ReferenceKind::Annotation => "annotation",
         ReferenceKind::FilterMetadataTest => "filterMetadataTest",
         ReferenceKind::SatisfySource => "satisfySource",
         ReferenceKind::SatisfyTarget => "satisfyTarget",
@@ -1660,6 +2346,7 @@ pub(crate) fn reference_kind(kind: ReferenceKind) -> &'static str {
         ReferenceKind::FlowTarget => "flowTarget",
         ReferenceKind::TypeCheckTarget => "typeCheckTarget",
         ReferenceKind::MetaCastTarget => "metaCastTarget",
+        ReferenceKind::MetadataAccessTarget => "metadataAccessTarget",
         ReferenceKind::StakeholderTarget => "stakeholderTarget",
         ReferenceKind::PurposeTarget => "purposeTarget",
         ReferenceKind::VerifyRequirementTarget => "verifyRequirementTarget",
@@ -1707,6 +2394,8 @@ pub(crate) fn relationship_kind(kind: ReferenceKind) -> Option<&'static str> {
         ReferenceKind::TransitionTrigger => Some("transitionTrigger"),
         ReferenceKind::TransitionEffect => Some("transitionEffect"),
         ReferenceKind::MetadataAnnotation => Some("metadataAnnotation"),
+        ReferenceKind::MetadataAnnotationAbout => Some("metadataAnnotationAbout"),
+        ReferenceKind::Annotation => Some("annotation"),
         ReferenceKind::FilterMetadataTest => Some("filterMetadataTest"),
         ReferenceKind::SatisfySource => Some("satisfySource"),
         ReferenceKind::SatisfyTarget => Some("satisfyTarget"),
@@ -1727,6 +2416,7 @@ pub(crate) fn relationship_kind(kind: ReferenceKind) -> Option<&'static str> {
         ReferenceKind::FlowTarget => Some("flowTarget"),
         ReferenceKind::TypeCheckTarget => Some("typeCheckTarget"),
         ReferenceKind::MetaCastTarget => Some("metaCastTarget"),
+        ReferenceKind::MetadataAccessTarget => Some("metadataAccessTarget"),
         ReferenceKind::StakeholderTarget => Some("stakeholderTarget"),
         ReferenceKind::PurposeTarget => Some("purposeTarget"),
         ReferenceKind::VerifyRequirementTarget => Some("verifyRequirementTarget"),
@@ -1770,14 +2460,19 @@ mod tests {
             unit_tokens: Box::new([]),
             filter_conditions: Box::new([]),
             invocations: Box::new([]),
+            assignments: Box::new([]),
+            trigger_invocations: Box::new([]),
+            unlowered_expressions: Box::new([]),
+            owned_end_features: Box::new([]),
         };
-        let (model, _) = crate::pipeline::phase::build_model(
+        let (model, _, _) = crate::pipeline::phase::build_model(
             storage,
             crate::lower::storage::ParsedSources::default(),
             EvaluationPolicy::Evaluate,
             sysml_contract::StandardLibraryAvailability::Unavailable,
             None,
             &[],
+            crate::pipeline::BuildControls::default(),
         )
         .unwrap();
         let mut output = String::new();

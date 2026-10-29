@@ -3,17 +3,39 @@
 use crate::lower::facts::TransitionFeatureRole;
 use crate::model::AuthoredReferenceId;
 use crate::model::DeclarationId;
+use crate::model::DocumentIdx;
 use crate::model::NameId;
 use crate::model::ReferenceKind;
 use crate::resolve::implied::LibrarySpecializationAnchor;
 use crate::resolve::implied::LibrarySpecializationAnchorFacts;
 use crate::resolve::names::CandidateRange;
-use crate::resolve::names::NameIndex;
+use crate::resolve::names::InheritedNameIndex;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(crate) enum ResolutionError {
     Capacity,
     InvalidStorage,
+    DocumentCapacity(DocumentIdx),
+    InvalidDocumentStorage(DocumentIdx),
+}
+
+impl ResolutionError {
+    pub(crate) fn in_document(self, document: DocumentIdx) -> Self {
+        match self {
+            Self::Capacity => Self::DocumentCapacity(document),
+            Self::InvalidStorage => Self::InvalidDocumentStorage(document),
+            Self::DocumentCapacity(_) | Self::InvalidDocumentStorage(_) => self,
+        }
+    }
+
+    pub(crate) fn document(self) -> Option<DocumentIdx> {
+        match self {
+            Self::DocumentCapacity(document) | Self::InvalidDocumentStorage(document) => {
+                Some(document)
+            }
+            Self::Capacity | Self::InvalidStorage => None,
+        }
+    }
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -46,10 +68,12 @@ pub(crate) enum EffectiveNameOutcome {
 pub(crate) struct EffectiveNameFacts {
     pub(crate) name: EffectiveNameOutcome,
     pub(crate) short_name: EffectiveNameOutcome,
-    /// True only when both components come from the first redefined Feature rather than authored
-    /// identification. This preserves provenance without replacing the authored declaration name.
-    pub(crate) derived_from_redefinition: bool,
+    /// Where the effective identification comes from, preserved without replacing the authored
+    /// declaration name.
+    pub(crate) provenance: EffectiveNameProvenance,
 }
+
+pub(crate) use sysml_contract::EffectiveNameProvenance;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
 pub(crate) struct ResolutionWork {
@@ -209,6 +233,32 @@ pub(crate) struct SuccessionEndpointSubsettingProjection {
     pub(crate) kind: SuccessionEndpointSubsettingKind,
 }
 
+/// Which connector end of a Succession a control node occupies.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
+pub(crate) enum ControlNodeSuccessionEnd {
+    /// The node is the succession's target (`then`): the succession is one of its
+    /// `targetConnector`s, an incoming succession.
+    Incoming,
+    /// The node is the succession's source (`first`): one of its `sourceConnector`s, an outgoing
+    /// succession.
+    Outgoing,
+}
+
+/// One Succession whose resolved source or target end is a SysML ControlNode (`decide`, `merge`,
+/// `fork`, `join`).
+///
+/// This is the canonical `ControlNode::sourceConnector`/`targetConnector` restricted to
+/// Successions, derived once from the settled end references. Entries are ordered by
+/// `(node, end, succession)`, so each node's incoming and outgoing successions are contiguous and
+/// in declaration order. Successions whose end does not resolve are absent: they attach to no
+/// known node, and the unresolved end is already its own diagnostic.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) struct ControlNodeSuccession {
+    pub(crate) node: DeclarationId,
+    pub(crate) end: ControlNodeSuccessionEnd,
+    pub(crate) succession: DeclarationId,
+}
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(crate) struct TransitionPayloadSubsettingProjection {
     pub(crate) transition: DeclarationId,
@@ -257,8 +307,15 @@ pub(crate) enum TransitionFeatureSpecializationStatus {
 #[derive(Debug)]
 pub(crate) struct ResolutionResults {
     pub(crate) outcomes: Box<[ResolutionStatus]>,
+    /// References that name an alias whose own binding did not settle. Each fails with the
+    /// binding's outcome, which the alias's `for` reference already reports, so they report
+    /// nothing of their own.
+    pub(crate) alias_failures: std::collections::BTreeSet<AuthoredReferenceId>,
+    /// Per-hop outcomes captured by the canonical member-access resolver at publication.
+    pub(crate) member_access_paths:
+        std::collections::BTreeMap<AuthoredReferenceId, Box<[ResolutionStatus]>>,
     pub(crate) ambiguous_candidates: Box<[DeclarationId]>,
-    pub(crate) inherited_names: NameIndex,
+    pub(crate) inherited_names: InheritedNameIndex,
     pub(crate) effective_names: Box<[EffectiveNameFacts]>,
     pub(crate) solver_status: SolverStatus,
     pub(crate) implied_relationships: Box<[ImpliedRelationship]>,
@@ -286,6 +343,7 @@ pub(crate) struct ResolutionResults {
         Box<[SuccessionEndpointSubsettingProjection]>,
     pub(crate) decision_outgoing_subsetting_status: SuccessionEndpointSubsettingStatus,
     pub(crate) merge_incoming_subsetting_status: SuccessionEndpointSubsettingStatus,
+    pub(crate) control_node_successions: Box<[ControlNodeSuccession]>,
     pub(crate) transition_payload_subsetting_projections:
         Box<[TransitionPayloadSubsettingProjection]>,
     pub(crate) transition_payload_subsetting_status: TransitionPayloadSubsettingStatus,
@@ -302,6 +360,88 @@ pub(crate) struct ResolutionResults {
 impl ResolutionResults {
     pub(crate) fn outcome(&self, id: AuthoredReferenceId) -> Option<ResolutionStatus> {
         self.outcomes.get(id.index()).copied()
+    }
+
+    /// Resolve every reference that names an alias to the element the alias is for.
+    ///
+    /// An alias is a non-owning Membership (SysML 7.5.2, KerML `Membership::memberElement`): its
+    /// name identifies the aliased element, so `part m : Motor;` after `alias Motor for Engine;`
+    /// is typed by `Engine`, and `:> Motor`, `subsets Motor` and every other reference likewise
+    /// relate to `Engine`. Chains of aliases are followed; an alias whose binding does not settle
+    /// gives the reference that binding's outcome, and a cycle of aliases resolves nothing.
+    ///
+    /// An import keeps the alias: importing an alias membership imports its element under the
+    /// alias's name (SysML 7.5.3), which name lookup through that import still needs.
+    pub(crate) fn follow_aliases(
+        mut self,
+        declarations: &[crate::lower::facts::Declaration],
+        references: &[crate::lower::facts::AuthoredReference],
+    ) -> Self {
+        use crate::model::DeclarationKind;
+        let is_alias = |declaration: DeclarationId| {
+            declarations
+                .get(declaration.index())
+                .is_some_and(|value| value.kind == DeclarationKind::Alias)
+        };
+        let bindings = references
+            .iter()
+            .enumerate()
+            .filter(|(_, reference)| reference.kind == ReferenceKind::AliasBinding)
+            .map(|(index, reference)| (reference.source, index))
+            .collect::<std::collections::BTreeMap<_, _>>();
+        let original = self.outcomes.clone();
+        let follow = |start: DeclarationId| -> ResolutionStatus {
+            let mut current = start;
+            let mut seen = std::collections::BTreeSet::new();
+            while is_alias(current) {
+                if !seen.insert(current) {
+                    return ResolutionStatus::Unresolved;
+                }
+                match bindings
+                    .get(&current)
+                    .and_then(|binding| original.get(*binding).copied())
+                {
+                    Some(ResolutionStatus::Resolved(target)) => current = target,
+                    Some(other) => return other,
+                    None => return ResolutionStatus::Unresolved,
+                }
+            }
+            ResolutionStatus::Resolved(current)
+        };
+        let keeps_alias = |kind: ReferenceKind| {
+            matches!(
+                kind,
+                ReferenceKind::NamespaceImport | ReferenceKind::MembershipImport
+            )
+        };
+        for (index, reference) in references.iter().enumerate() {
+            if keeps_alias(reference.kind) {
+                continue;
+            }
+            if let Some(ResolutionStatus::Resolved(target)) = original.get(index).copied() {
+                if is_alias(target) {
+                    let followed = follow(target);
+                    if !matches!(followed, ResolutionStatus::Resolved(_)) {
+                        if let Ok(id) = AuthoredReferenceId::from_index(index) {
+                            self.alias_failures.insert(id);
+                        }
+                    }
+                    self.outcomes[index] = followed;
+                }
+            }
+            if let Ok(id) = AuthoredReferenceId::from_index(index) {
+                if let Some(hops) = self.member_access_paths.get_mut(&id) {
+                    for hop in hops.iter_mut() {
+                        if let ResolutionStatus::Resolved(target) = *hop {
+                            if is_alias(target) {
+                                *hop = follow(target);
+                            }
+                        }
+                    }
+                }
+            }
+        }
+        self
     }
 
     pub(crate) fn settle_authored_relationships(
@@ -429,12 +569,14 @@ impl ResolutionResults {
         projections: Box<[SuccessionEndpointSubsettingProjection]>,
         decision_status: SuccessionEndpointSubsettingStatus,
         merge_status: SuccessionEndpointSubsettingStatus,
+        control_node_successions: Box<[ControlNodeSuccession]>,
     ) -> Self {
         Self {
             implied_relationships,
             succession_endpoint_subsetting_projections: projections,
             decision_outgoing_subsetting_status: decision_status,
             merge_incoming_subsetting_status: merge_status,
+            control_node_successions,
             ..self
         }
     }

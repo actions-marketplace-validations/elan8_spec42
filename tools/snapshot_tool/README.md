@@ -24,8 +24,17 @@ source span is rendered in `SMG` only when the span itself is a named semantic f
 observed through those sections. This keeps formatting-only movement from obscuring semantic diffs.
 
 The canonical top-level section order is `META`, `SOURCE`, authored `EXPECTED DIAGNOSTICS` and
-`EXPECTED SEMANTICS`, `DIAGNOSTICS`, `SMG`, `TYPES`, `NAVIGATION`, with optional editor-query
-sections, `HOVER MARKDOWN`, and `GENERATED` last.
+`EXPECTED SEMANTICS`, `DIAGNOSTICS`, `SMG`, `TYPES`, `EXPRESSIONS`, `METADATA ANNOTATIONS`,
+`CONNECTIONS`, `NAVIGATION`, with optional editor-query sections, `HOVER MARKDOWN`, and
+`GENERATED` last.
+`EXPRESSIONS` is the resolved constraint / calc / value expression trees. It
+also includes contextual expression rows with the effective element, authored body provenance,
+and references rebound through canonical redefinition in each inheriting type or usage.
+The authored declaration rows remain separate. Ambiguous effective bindings do not publish a tree.
+`METADATA ANNOTATIONS` is every authored metadata annotation with its form, resolved definition, `about` targets, and
+body values; `CONNECTIONS` is every workspace `connect` / `interface` connector with its type
+and resolved ends, including one canonical outcome per segment of a dotted path. These sections
+are omitted when their published rows are empty.
 `SOURCE` is authored; generated sections are rewritten to this order with one final newline.
 Semantic and reporting-result sections use canonical `sexpr` fences. `HOVER MARKDOWN` is the
 dedicated renderer projection and contains one labelled `markdown` fence per requested probe.
@@ -37,7 +46,9 @@ the complete owned `SMG`, `DIAGNOSTICS`, and `NAVIGATION` renderings, including 
 state embedded in `SMG`, before checking or writing goldens. Sequential output is the canonical rendering only after
 this parity check succeeds; there is no strategy override that can bypass it.
 
-Fixtures are evaluated concurrently with Rayon’s bounded global worker pool. Results are sorted by
+Standard-library source admission finishes before the fixture worker pool runs. Workers share
+the admitted documents immutably; admission errors affect only fixtures requesting that library.
+Fixtures are evaluated concurrently with Rayon’s bounded worker pool. Results are sorted by
 path, errors and stale paths are reported in that order, and update writes occur only after the
 complete worker batch succeeds.
 
@@ -61,6 +72,11 @@ cargo snapshot update --fixture resolution/imports.md
 cargo snapshot check --fixture resolution/imports.md
 ```
 
+Every operation has a 600-second wall-clock budget. Override it with `--timeout-seconds N` for
+larger or heavily contended workloads. A timeout exits 124 and prints the current stage, completed
+fixture count, active fixture paths and their durations, plus Linux thread wait states when available.
+The budget covers library admission and reporting as well as the parallel fixture batch.
+
 `check` never writes files. A stale fixture is a failure and the Markdown diff is the review
 surface. `update` is deliberately explicit so generated sections cannot change as a side effect of
 normal Rust test execution.
@@ -83,6 +99,14 @@ The parser/updater unit tests cover only Markdown mechanics. Semantic behavior b
 checked-in source snapshots and their canonical S-expression sections.
 
 ## Editor and hover probes
+
+Add `features` to an editor probe to record the public effective-feature query, effective
+identification with naming provenance, and the ordered owned/nested part and view derivations.
+This projection retains authored names separately and keeps unresolved naming states explicit.
+
+```text
+probe model.sysml 4 9 features
+```
 
 `EDITOR QUERIES` uses zero-based line and UTF-16 character positions. A normal probe exercises the
 canonical editor queries. Add the `hover` option to also append the presentation-independent
@@ -164,6 +188,28 @@ searches `SMG` or `TYPES` text:
 ~~~
 ```
 
+A relationship `source` may also name an anonymous element (an `if`, `assign`, `satisfy`,
+transition, ...) by its canonical owner-scoped identity, the same `(anonymous (kind ...)
+(ordinal ...))` path segment `SMG` renders. `owner` is itself a qualified name or another
+anonymous reference, `kind` is the `ElementKind` metaclass name, and `ordinal` is the canonical
+anonymous ordinal. The runner resolves it only through
+`sysml_query::PublishedModel::inspection().resolve_anonymous_member`; an ordinal shared by two
+declaration forms of one metaclass is ambiguous rather than guessed:
+
+```sexpr
+(relationship
+  (kind subsetting)
+  (source (anonymous (owner "Model::Decision") (kind IfActionUsage) (ordinal 0)))
+  (target "Actions::ifThenActions")
+  (provenance implied)
+  (outcome resolved))
+```
+
+A relationship `kind` is one of `specialization`, `feature_typing`, `subsetting`,
+`redefinition`, `feature_chaining`, `type_featuring`, `connector_end`, `unioning`,
+`intersecting`, `differencing`, `disjoining`, or `annotation` (the Annotation a `comment ...
+about X` owns, from the Comment to its annotated element).
+
 The five exact pinned-XMI `Feature` derived-relationship collections have a separate compact
 assertion. `rule_id` is one of the five full canonical KerML IDs below; it selects the closed
 `sysml_query::FeatureDerivedRelationshipCollection` API directly, rather than deriving a query
@@ -214,8 +260,10 @@ use the closed
 
 It is evaluated only through `PublishedModel::type_derived_elements`. The resolver selects direct
 canonical Feature-membership member identities; the end-feature projection additionally reads the
-canonical `end` modifier fact. It does not materialize a public `FeatureMembership` relationship,
-infer inherited members, or recover a target from text.
+canonical `end` modifier fact. It does not infer inherited members or recover a target from text.
+The owning `FeatureMembership` relationships are the `deriveTypeOwnedFeatureMembership` fact, whose
+values carry each relationship's canonical `MembershipId`; a `type-derived-fact` target names the
+member that membership owns.
 `absent`, `incomplete`, and `unsupported` omit `target`.
 
 The remaining exact `Type` derivations use the closed `type-derived-fact` assertion. Its
@@ -321,6 +369,27 @@ The runner obtains the import identity only from `PublishedModel::namespace_impo
 it never gives an anonymous import a made-up display name. `target` outcome and provenance use the
 same closed relationship contract as other semantic assertions.
 
+`deriveViewUsageExposedElement` uses `view-exposed-element`. The query is available for every view
+usage, including views that are not typed by a standard diagram view definition. A resolved
+assertion requires that the named target occurs in the canonical, filtered exposed-element set;
+an `absent` assertion with a target requires that it does not occur. `absent` without a target
+requires an empty set. `incomplete` asserts that the query retained at least one typed expose or
+filter obstacle:
+
+```sexpr
+(view-exposed-element
+  (rule_id "sysml-2.0:8.3.26.11:deriveViewUsageExposedElement")
+  (source "Model::requirements")
+  (target "Model::Requirements::Mass")
+  (outcome resolved))
+```
+
+Namespace exposes expand the target's owned members and public imported memberships; the target
+may be any Namespace, so `expose vehicle::*` on a part usage exposes its features. Only an authored
+`private` or `protected` visibility hides a member. A recursive expose descends into every exposed
+member. Inherited memberships are not expanded. Results are deduplicated and ordered by canonical
+symbol identity before the view's effective filter conditions are applied.
+
 `outcome` is one of `resolved`, `unresolved`, `ambiguous`, `unsupported`, `absent`, or
 `incomplete`; no outcome is inferred from diagnostic text. A typed blocker whose diagnostic or
 semantic expectation starts passing is `stale` and fails, requiring `blocked_by` and eventually
@@ -407,10 +476,11 @@ sequential/parallel parity.
 
 ## Generator snapshots
 
-A fixture with `type=generate` selects a repository-owned WebAssembly plugin in `META`. Plugin
-selection is closed: fixtures cannot provide filesystem paths. Conformance fixtures use the
-canonical `conformance:<name>` form (the legacy bare name remains accepted), while diagram
-fixtures use `repository:diagram`:
+A fixture with `type=generate` selects a generator in `META`. Selection is closed: fixtures cannot
+provide filesystem paths. Conformance fixtures run a repository-owned WebAssembly plugin, named in
+the canonical `conformance:<name>` form (the legacy bare name remains accepted). Diagram fixtures
+use `native:diagram`, Spec42's built-in diagram product (`crates/diagram_product`), exactly as the
+LSP and `spec42 diagram` produce it:
 
 ```markdown
 # META
@@ -423,11 +493,11 @@ plugin=conformance:requirements_csv
 
 Diagram fixtures select one authored view with its source-document name, KerML qualified name and
 typed view kind. The semantic query owner resolves that readable reference to the canonical opaque
-identity; the runner then finds the identical catalog entry and passes its opaque handle to the
-guest. It never guesses from a display label or embeds the identity encoding in fixture metadata:
+identity; the runner then finds the identical catalog entry and projects its opaque handle. It
+never guesses from a display label or embeds the identity encoding in fixture metadata:
 
 ```ini
-plugin=repository:diagram
+plugin=native:diagram
 viewKind=general-view
 viewDocument=model.sysml
 viewQualifiedName=Example::selected
@@ -438,7 +508,7 @@ name is normalized by the same `SourceDocument` constructor used to admit fixtur
 qualified name is resolved only within that document. Unresolved, wrong-kind and ambiguous
 references are errors rather than fallback selections.
 
-The runner executes that plugin against both the sequential and parallel immutable publications.
+The runner executes that generator against both the sequential and parallel immutable publications.
 Outcome, diagnostics, artifact paths, and exact artifact bytes must agree before the canonical
 result is written. Generated files are captured in memory rather than applied to the filesystem:
 

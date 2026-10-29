@@ -1,9 +1,8 @@
+import { DIAGRAM_PRODUCT_SCHEMA_VERSION } from "../generated/diagram-product/schemaVersion";
 import * as path from "path";
+import type { DiagramProduct } from "../generated/diagram-product/DiagramProduct";
 
-export type GenerationReport = {
-  status: string;
-  model_digest: string;
-};
+export type { DiagramProduct } from "../generated/diagram-product/DiagramProduct";
 
 export type SourceNavigation = {
   uri: string;
@@ -39,70 +38,15 @@ export type DiagramSemanticReference =
   | { kind: "source-anchor"; document: string; ownerQualifiedName: string | null; metaclass: string; sourceDomain: string; range: unknown }
   | { kind: "relationship"; document: string; sourceQualifiedName: string; relationshipKind: string; ordinal: number; sourceDomain: string };
 
-export type DiagramScene =
-  | { kind: "general" }
-  | { kind: "interconnection" }
-  | { kind: "action-flow" }
-  | { kind: "sequence" }
-  | { kind: "browser" }
-  | { kind: "grid" }
-  | { kind: "geometry" }
-  | {
-      kind: "state-transition";
-      frame: { id: string; label: string; navigation: number } | null;
-      vertices: Array<{ id: string; label: string; kind: "initial" | "state" | "final"; navigation: number }>;
-      transitions: Array<{
-        id: string;
-        label: string | null;
-        source: number;
-        target: number;
-        trigger: Record<string, unknown>;
-        guard: Record<string, unknown>;
-        effect: Record<string, unknown>;
-        provenance: "authored" | "implied";
-        navigation: number;
-      }>;
-    };
-
-export type DiagramProduct = {
-  schemaVersion: 5;
-  modelDigest: string;
-  documents: Array<{ uri: string; sourceDomain: string }>;
-  sources: Array<{ document: number; range: [number, number, number, number] }>;
-  references: Array<Record<string, unknown>>;
-  selectedView: { reference: number; kind: DiagramViewId; name: string; source: number };
-  completeness: {
-    status: "complete" | "incomplete";
-    reasons: Array<{ code: string; [key: string]: unknown }>;
-  };
-  projection: {
-    kind: DiagramViewId;
-    exposedRoots: number[];
-    nodes: unknown[];
-    relationships: unknown[];
-    edges: unknown[];
-    metadata: Record<string, unknown>;
-    scene: DiagramScene;
-  };
-};
-
 const NOTATION_ROLES = new Set([
   "definition", "usage", "reference-usage", "namespace", "annotation", "unsupported",
 ]);
 
-export type LspGenerationResult = {
+/** `spec42/diagram`: the natively built diagram product of one catalog view. */
+export type LspDiagramResult = {
   modelDigest: string;
-  generatorDigest: string;
-  artifacts: Array<{ path: string; content: number[] }>;
-  timings: {
-    modulePrepareMs: number;
-    guestExecutionUs: number;
-    preparedReused: boolean;
-    compilationCacheEnabled: boolean;
-    compilationCacheHits: number;
-    compilationCacheMisses: number;
-    compilationCacheError: string | null;
-  };
+  productJson: string;
+  durationUs: number;
 };
 
 export type StateTransitionViewChoice = {
@@ -125,7 +69,8 @@ export type DiagramViewCatalog = {
     kind: DiagramViewId;
     reference: DiagramSemanticReference;
     name: string;
-    source: { uri: string };
+    namespace?: string | null;
+    source: { uri: string; range?: { startLine: number; startCharacter: number; endLine: number; endCharacter: number } };
   }>;
 };
 
@@ -143,7 +88,17 @@ export function parseDiagramViewCatalog(value: unknown): DiagramViewCatalog {
         typeof view.name !== "string" || !source || typeof source.uri !== "string") {
       throw new Error("Spec42 returned malformed diagram view identity.");
     }
-    return { handle: view.handle, kind: view.kind as DiagramViewId, reference: view.reference, name: view.name, source: { uri: source.uri } };
+    if (view.namespace !== undefined && view.namespace !== null && typeof view.namespace !== "string") {
+      throw new Error("Spec42 returned an invalid view namespace.");
+    }
+    const range = source.range as DiagramViewCatalog["views"][number]["source"]["range"];
+    if (range !== undefined && !parseSourceNavigation({ ...range, uri: source.uri })) {
+      throw new Error("Spec42 returned an invalid view definition range.");
+    }
+    return { handle: view.handle, kind: view.kind as DiagramViewId, reference: view.reference, name: view.name,
+      ...(view.namespace !== undefined ? { namespace: view.namespace as string | null } : {}),
+      source: { uri: source.uri, ...(range ? {range} : {}) } };
+
   });
   return { modelDigest: candidate.modelDigest, views };
 }
@@ -164,9 +119,11 @@ export type DiagramViewOption = {
   kind: DiagramViewId;
   name: string;
   label: string;
-  /** Workspace URI of the file that authors this view — the dropdown groups by its basename. */
+  /** Canonical definition document; grouping uses its semantic owner namespace. */
   documentUri: string;
   group: string;
+  kindLabel?: string;
+  definition?: SourceNavigation;
 };
 
 const DIAGRAM_VIEW_LABELS = new Map<DiagramViewId, string>(
@@ -189,26 +146,36 @@ function toOption(view: DiagramViewCatalog["views"][number]): DiagramViewOption 
     handle: view.handle,
     kind: view.kind,
     name: view.name,
-    label: `${view.name} · ${DIAGRAM_VIEW_LABELS.get(view.kind) ?? view.kind}`,
+    label: view.name,
+    kindLabel: DIAGRAM_VIEW_LABELS.get(view.kind) ?? view.kind,
     documentUri: view.source.uri,
-    group: basename(view.source.uri),
+    group: view.namespace === null ? "(Root namespace)"
+      : view.namespace === "" ? "(Unnamed namespace)"
+      : view.namespace ?? "(Namespace unavailable)",
+    ...(view.source.range ? { definition: { ...view.source.range, uri: view.source.uri } } : {}),
   };
 }
 
-/**
- * Every authored diagram view in the model — the Diagram view is project-scoped, not tied to one
- * source file. Ordered by file, then kind, then name so the dropdown is stable across
- * regenerations. A document may author several views of one kind, so entries are keyed by handle.
- */
+/** Namespace groups and view names sort alphabetically, independently of kind and file.
+ * Older servers without ownership metadata get an explicit unavailable group, not a guessed owner. */
 export function allDiagramViewOptions(catalog: DiagramViewCatalog): DiagramViewOption[] {
-  return catalog.views
-    .map(toOption)
-    .sort(
-      (a, b) =>
-        a.group.localeCompare(b.group) ||
-        a.kind.localeCompare(b.kind) ||
-        a.name.localeCompare(b.name),
-    );
+  const options = catalog.views.map(toOption);
+  const counts = new Map<string, number>();
+  for (const option of options) {
+    for (const key of [JSON.stringify([option.group, option.name]), JSON.stringify([option.group, option.name, option.kind])]) {
+      counts.set(key, (counts.get(key) ?? 0) + 1);
+    }
+  }
+  for (const option of options) {
+    if ((counts.get(JSON.stringify([option.group, option.name])) ?? 0) > 1) {
+      option.label = `${option.name} · ${option.kindLabel}`;
+      if ((counts.get(JSON.stringify([option.group, option.name, option.kind])) ?? 0) > 1) {
+        option.label += ` · ${basename(option.documentUri)}`;
+      }
+    }
+  }
+  const alphabetically = (a: string, b: string) => a.localeCompare(b, undefined, {sensitivity:"base", numeric:true}) || a.localeCompare(b);
+  return options.sort((a, b) => alphabetically(a.group,b.group) || alphabetically(a.name,b.name) || a.kind.localeCompare(b.kind) || a.documentUri.localeCompare(b.documentUri) || a.handle.localeCompare(b.handle));
 }
 
 /** The subset authored in `documentUri` (used to pick a sensible default when a file is active). */
@@ -295,90 +262,58 @@ export function parseStateTransitionViewCatalog(value: unknown): StateTransition
   return { modelDigest: candidate.modelDigest, views };
 }
 
-export function parseLspGenerationResult(value: unknown): LspGenerationResult {
-  if (!value || typeof value !== "object") throw new Error("Spec42 returned an invalid generation result.");
+// Says how big the view is, so the author can tell what to narrow rather than only that it failed.
+export function oversizedProductMessage(text: string, bytes: number): string {
+  const mib = (value: number) => (value / (1024 * 1024)).toFixed(1);
+  let counts = "";
+  try {
+    const projection = (JSON.parse(text) as { projection?: Record<string, unknown> }).projection ?? {};
+    const length = (value: unknown) => (Array.isArray(value) ? value.length : 0);
+    counts = ` (${length(projection.nodes)} elements, ${length(projection.edges)} edges, ` +
+      `${length(projection.relationships)} relationships)`;
+  } catch { /* The size alone still explains the refusal. */ }
+  return `This view's diagram product is ${mib(bytes)} MiB${counts}, over the ` +
+    `${mib(MAX_DIAGRAM_PRODUCT_BYTES)} MiB viewer limit. Narrow what the view exposes, ` +
+    "or split it into several views.";
+}
+
+export function parseLspDiagramResult(value: unknown): LspDiagramResult {
+  if (!value || typeof value !== "object") throw new Error("Spec42 returned an invalid diagram result.");
   const candidate = value as Record<string, unknown>;
-  if (typeof candidate.modelDigest !== "string" || typeof candidate.generatorDigest !== "string" || !Array.isArray(candidate.artifacts)) {
-    throw new Error("Spec42 generation result is missing identity or artifacts.");
-  }
-  const artifacts = candidate.artifacts.map((entry) => {
-    if (!entry || typeof entry !== "object") throw new Error("Spec42 returned an invalid artifact.");
-    const artifact = entry as Record<string, unknown>;
-    if (typeof artifact.path !== "string" || !Array.isArray(artifact.content) ||
-        artifact.content.some((byte) => !Number.isInteger(byte) || byte < 0 || byte > 255)) {
-      throw new Error("Spec42 returned malformed artifact bytes.");
-    }
-    return { path: artifact.path, content: artifact.content as number[] };
-  });
-  const timings = candidate.timings as Record<string, unknown> | undefined;
-  if (!timings || typeof timings.modulePrepareMs !== "number" || typeof timings.guestExecutionUs !== "number" ||
-      typeof timings.preparedReused !== "boolean" || typeof timings.compilationCacheEnabled !== "boolean" ||
-      typeof timings.compilationCacheHits !== "number" || typeof timings.compilationCacheMisses !== "number" ||
-      (timings.compilationCacheError !== null && typeof timings.compilationCacheError !== "string")) {
-    throw new Error("Spec42 generation result is missing timing information.");
+  if (typeof candidate.modelDigest !== "string" || typeof candidate.productJson !== "string" ||
+      typeof candidate.durationUs !== "number") {
+    throw new Error("Spec42 diagram result is missing its model digest or product.");
   }
   return {
     modelDigest: candidate.modelDigest,
-    generatorDigest: candidate.generatorDigest,
-    artifacts,
-    timings: timings as LspGenerationResult["timings"],
+    productJson: candidate.productJson,
+    durationUs: candidate.durationUs,
   };
 }
 
-export function buildGenerateArgv(
-  pluginPath: string,
-  modelPath: string,
-  outputPath: string,
-  workspaceRoot: string,
-  libraryPaths: string[]
-): string[] {
-  const args = [
-    "generate",
-    pluginPath,
-    modelPath,
-    "--output",
-    outputPath,
-    "--format",
-    "json",
-    "--timeout-seconds",
-    "30",
-    "--max-files",
-    "16",
-    "--max-total-bytes",
-    String(16 * 1024 * 1024),
-  ];
-  if (workspaceRoot) {
-    args.push("--workspace-root", workspaceRoot);
-  }
-  for (const libraryPath of libraryPaths) {
-    args.push("--library-path", libraryPath);
-  }
-  return args;
-}
+export const MAX_DIAGRAM_PRODUCT_BYTES = 16 * 1024 * 1024;
 
-export function parseGenerationReport(value: unknown): GenerationReport {
-  if (!value || typeof value !== "object") {
-    throw new Error("Spec42 returned an invalid generation report.");
+/** The sequence reasons name projected nodes; their explanations index them without guards. */
+function isCompletenessReasonShape(reason: Record<string, unknown>, nodeCount: number): boolean {
+  const nodes = (value: unknown) => Array.isArray(value) && value.every((index) => indexIn(index, nodeCount));
+  switch (reason.code) {
+    case "sequence-content-omitted":
+      return nodes(reason.elements);
+    case "sequence-ordering-cycle":
+      return Array.isArray(reason.witness) && reason.witness.every((step) => {
+        if (!step || typeof step !== "object") return false;
+        const candidate = step as Record<string, unknown>;
+        return indexIn(candidate.source, nodeCount) && indexIn(candidate.target, nodeCount) &&
+          ["authored", "implied"].includes(String(candidate.provenance)) && nodes(candidate.events);
+      });
+    default:
+      return true;
   }
-  const candidate = value as Record<string, unknown>;
-  if (typeof candidate.status !== "string" || typeof candidate.model_digest !== "string") {
-    throw new Error("Spec42 generation report is missing status or model_digest.");
-  }
-  return { status: candidate.status, model_digest: candidate.model_digest };
-}
-
-export function selectSingleDiagramJson(paths: string[]): string {
-  const jsonPaths = paths.filter((candidate) => path.extname(candidate).toLowerCase() === ".json" && !candidate.startsWith(".spec42-"));
-  if (jsonPaths.length !== 1) {
-    throw new Error(`Expected exactly one diagram JSON artifact, but generator produced ${jsonPaths.length}.`);
-  }
-  return jsonPaths[0];
 }
 
 export function parseDiagramProduct(text: string): DiagramProduct {
-  if (Buffer.byteLength(text, "utf8") > 16 * 1024 * 1024) {
-    throw new Error("Generated diagram product exceeds the 16 MiB viewer limit.");
-  }
+  const bytes = Buffer.byteLength(text, "utf8");
+  if (bytes > MAX_DIAGRAM_PRODUCT_BYTES) throw new Error(oversizedProductMessage(text, bytes));
   let value: unknown;
   try { value = JSON.parse(text); }
   catch { throw new Error("Generated diagram product is not valid JSON."); }
@@ -390,7 +325,7 @@ export function parseDiagramProduct(text: string): DiagramProduct {
   const documents = product.documents;
   const sources = product.sources;
   const references = product.references;
-  if (product.schemaVersion !== 5 || typeof product.modelDigest !== "string" ||
+  if (product.schemaVersion !== DIAGRAM_PRODUCT_SCHEMA_VERSION || typeof product.modelDigest !== "string" ||
       !Array.isArray(documents) || !documents.every(isDiagramDocument) ||
       !Array.isArray(sources) || !sources.every((source) => isDiagramSource(source, documents.length)) ||
       !Array.isArray(references) || !references.every((reference) => isProductReference(reference, documents.length, sources.length, references.length)) ||
@@ -403,7 +338,7 @@ export function parseDiagramProduct(text: string): DiagramProduct {
       !Array.isArray(projection.relationships) ||
       !Array.isArray(projection.edges) || !projection.metadata || typeof projection.metadata !== "object" ||
       !isDiagramScene(projection.scene, String(view.kind), sources.length)) {
-    throw new Error("Generated diagram product does not match schema version 5.");
+    throw new Error(`Generated diagram product does not match schema version ${DIAGRAM_PRODUCT_SCHEMA_VERSION}.`);
   }
   for (const reason of completeness.reasons) {
     if (!reason || typeof reason !== "object") throw new Error("Generated diagram product has a malformed completeness reason.");
@@ -413,6 +348,9 @@ export function parseDiagramProduct(text: string): DiagramProduct {
     }
     if (candidate.exposure !== undefined && !indexIn(candidate.exposure, references.length)) {
       throw new Error("Generated diagram product has an out-of-range completeness reference.");
+    }
+    if (!isCompletenessReasonShape(candidate, (projection.nodes as unknown[]).length)) {
+      throw new Error("Generated diagram product has a malformed completeness reason.");
     }
   }
   if (!(projection.edges as unknown[]).every((edge) => isDiagramEdge(edge, references.length, sources.length, (projection.nodes as unknown[]).length)) ||

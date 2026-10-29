@@ -10,21 +10,62 @@ use sysml_query::Services;
 use sysml_query::StandardLibraryAvailability;
 use tower_lsp::lsp_types::Url;
 
-/// One indexed document: its admitted source and the tree the syntax service parsed for it.
+/// Desired source plus an optional matching syntax lease. `None` means parsing is pending.
 ///
 /// Both are reference-counted handles, so the actor's copy-on-write clone of the whole index
 /// on every mutation costs a refcount bump per entry, not a copy of every file's text and tree.
 #[derive(Debug, Clone)]
 pub(crate) struct IndexEntry {
     pub(crate) document: SourceDocument,
-    pub(crate) parsed: ParsedSource,
+    pub(crate) parsed: Option<ParsedSource>,
     /// When `false`, the file is indexed for `sysml/librarySearch` only and is not admitted.
     pub(crate) admitted_to_publication: bool,
+    /// Editor membership, version and open-interval identity travel with their source entry.
+    /// Opening a library makes it an authoring surface without changing its provenance.
+    pub(crate) editor_revision: Option<super::editor_documents::EditorRevision>,
 }
 
 impl IndexEntry {
     pub(crate) fn content(&self) -> &str {
         self.document.content()
+    }
+
+    pub(crate) fn syntax(&self) -> tower_lsp::jsonrpc::Result<&ParsedSource> {
+        self.parsed
+            .as_ref()
+            .ok_or_else(|| tower_lsp::jsonrpc::Error {
+                code: tower_lsp::jsonrpc::ErrorCode::ContentModified,
+                message: "Source syntax is being updated".into(),
+                data: None,
+            })
+    }
+
+    pub(crate) fn is_editor_open(&self) -> bool {
+        self.editor_revision.is_some()
+    }
+
+    pub(crate) fn editor_version(&self) -> Option<i32> {
+        self.editor_revision
+            .as_ref()
+            .and_then(|revision| revision.version())
+    }
+
+    pub(crate) fn open_editor(&mut self, version: Option<i32>) -> bool {
+        let changed = !self.is_editor_open();
+        if changed || version.is_some() {
+            self.editor_revision = Some(super::editor_documents::EditorRevision::new(version));
+        }
+        changed
+    }
+
+    pub(crate) fn close_editor(&mut self) -> bool {
+        self.editor_revision.take().is_some()
+    }
+
+    pub(crate) fn rekey_editor_owner(&mut self) {
+        if let Some(revision) = &mut self.editor_revision {
+            revision.rekey_for_owner();
+        }
     }
 
     #[cfg(test)]
@@ -38,17 +79,22 @@ impl IndexEntry {
         let parsed = services.syntax.parse(&document);
         Self {
             document,
-            parsed,
+            parsed: Some(parsed),
             admitted_to_publication: true,
+            editor_revision: None,
         }
     }
 }
 
 #[derive(Debug, Clone, Default)]
 pub(crate) struct RuntimeConfig {
+    pub(crate) library_path_base: Option<std::path::PathBuf>,
     pub(crate) startup_trace_id: Option<String>,
     pub(crate) code_lens_enabled: bool,
     pub(crate) perf_logging_enabled: bool,
+    /// Opt-in semantic-token merge traces (`spec42.semanticTokens.debug`).
+    pub(crate) semantic_tokens_debug: bool,
+    pub(crate) semantic_tokens_refresh_supported: bool,
     /// Development-only: include library paths in the debounced workspace-wide diagnostics
     /// sweep. See `spec42.development.diagnoseLibraryPaths` and
     /// `publish_workspace_diagnostics`'s comment.
@@ -69,22 +115,20 @@ pub(crate) struct ServerState {
     pub(crate) services: Services,
     /// The publication lifecycle and the current immutable publication.
     pub(crate) session: PublicationSession,
+    /// Whether the host has sent readiness for this startup/library-reindex epoch.
+    pub(crate) diagnostic_readiness: super::readiness::DiagnosticReadiness,
     /// Changes only when admitted semantic inputs/reporting change. Guards model mirroring from
     /// edits that race construction without treating search-only bookkeeping as semantic change.
     pub(crate) semantic_revision: u64,
+    /// Ordered desired source state; ingestion can advance ahead of semantic construction.
     pub(crate) index: std::collections::HashMap<Url, IndexEntry>,
+    /// Opaque source/syntax handles paired with `session.current()`, replaced only at admission.
+    pub(crate) published_index: Arc<std::collections::HashMap<Url, IndexEntry>>,
+    pub(crate) published_library_paths: Arc<[Url]>,
     /// Presentation projection derived only from `session.current()` at the admission barrier.
     pub(crate) semantic_symbols: Vec<SymbolEntry>,
     /// Parser-recovery search entries for documents deliberately excluded from publication.
     pub(crate) recovery_search_symbols: Vec<SymbolEntry>,
-    /// Documents the editor currently has open.
-    ///
-    /// A library file is a library by *provenance* -- that is what decides how its names resolve.
-    /// Opening one makes it an authoring surface as well, which is a different fact and one only
-    /// the editor knows. The publication reports diagnostics for the documents named here in
-    /// addition to the workspace's own, so an author editing a library file sees its diagnostics
-    /// without every workspace inheriting the whole library's.
-    pub(crate) open_in_editor: std::collections::BTreeSet<Url>,
     /// Last explicitly observed construction failure. The last good model remains readable.
     pub(crate) publication_failure: Option<Arc<PublicationBuildFailure>>,
 }
@@ -109,13 +153,32 @@ impl ServerState {
             standard_library_availability: StandardLibraryAvailability::Unavailable,
             services,
             session,
+            diagnostic_readiness: super::readiness::DiagnosticReadiness::default(),
             semantic_revision: 0,
             index: std::collections::HashMap::new(),
+            published_index: Arc::default(),
+            published_library_paths: Arc::default(),
             semantic_symbols: Vec::new(),
             recovery_search_symbols: Vec::new(),
-            open_in_editor: std::collections::BTreeSet::new(),
             publication_failure: None,
         }
+    }
+
+    pub(crate) fn is_editor_open(&self, uri: &Url) -> bool {
+        self.index.get(uri).is_some_and(IndexEntry::is_editor_open)
+    }
+
+    pub(crate) fn editor_documents(&self) -> impl Iterator<Item = (&Url, &IndexEntry)> {
+        self.index
+            .iter()
+            .filter(|(_, entry)| entry.is_editor_open())
+    }
+
+    /// Called in the same actor turn that admits the matching model. These are source inputs,
+    /// not cached semantic derivations; failed/superseded work never changes this reader pair.
+    pub(crate) fn publish_source_snapshot(&mut self) {
+        self.published_index = Arc::new(self.index.clone());
+        self.published_library_paths = self.library_paths.clone().into();
     }
 
     /// The current immutable publication.
@@ -133,6 +196,10 @@ impl TracksRelink for ServerState {
 
     fn rekey_for_actor(&mut self) {
         self.session.rekey_for_owner();
+        self.diagnostic_readiness.rekey_for_owner();
+        for entry in self.index.values_mut() {
+            entry.rekey_editor_owner();
+        }
     }
 }
 
@@ -149,7 +216,11 @@ pub(crate) trait DocumentStore {
     fn library_roots(&self) -> (&[Url], &[Url]);
     fn standard_library_availability(&self) -> StandardLibraryAvailability;
     /// Documents the editor has open, whose diagnostics are reported whatever their provenance.
-    fn open_in_editor(&self) -> &std::collections::BTreeSet<Url>;
+    fn is_editor_open(&self, uri: &Url) -> bool {
+        self.index()
+            .get(uri)
+            .is_some_and(IndexEntry::is_editor_open)
+    }
 }
 
 impl DocumentStore for ServerState {
@@ -170,9 +241,6 @@ impl DocumentStore for ServerState {
     }
     fn standard_library_availability(&self) -> StandardLibraryAvailability {
         self.standard_library_availability
-    }
-    fn open_in_editor(&self) -> &std::collections::BTreeSet<Url> {
-        &self.open_in_editor
     }
 }
 
@@ -207,7 +275,7 @@ pub(crate) fn publication_inputs(
         let library = standard || crate::common::util::uri_under_any_library(uri, library_paths);
         // A library file the editor has open is being authored, so its diagnostics are reported
         // even though its provenance keeps it out of the workspace's own set.
-        if library && state.open_in_editor().contains(uri) {
+        if library && state.is_editor_open(uri) {
             reported.push(uri.as_str().into());
         }
         let kind = if standard {
@@ -223,6 +291,32 @@ pub(crate) fn publication_inputs(
     // A failed rebuild must not replace the last coherent publication. Readers may continue using
     // the older state until the coordinator can atomically produce a new one.
     (documents, reported, state.standard_library_availability())
+}
+
+/// The documents the debounced workspace-wide diagnostics sweep republishes.
+///
+/// The sweep is O(project files) and runs on a debounce after every edit, so library files are
+/// excluded unless `diagnose_library_paths` (the `spec42.development.diagnoseLibraryPaths`
+/// opt-in) asks for full coverage. Both root sets have to be checked: `library_paths` holds only
+/// the configured KPAR / domain libraries, while the bundled standard library lives in
+/// `standard_library_paths`. Checking `library_paths` alone let every bundled-stdlib file the
+/// startup closure parsed into the index fall through and get re-diagnosed on every keystroke.
+/// Mirrors the library classification in [`publication_inputs`].
+pub(crate) fn workspace_sweep_targets(
+    state: &impl DocumentStore,
+    diagnose_library_paths: bool,
+) -> Vec<Url> {
+    let (library_paths, standard_library_paths) = state.library_roots();
+    state
+        .index()
+        .keys()
+        .filter(|uri| {
+            diagnose_library_paths
+                || (!crate::common::util::uri_under_any_library(uri, library_paths)
+                    && !crate::common::util::uri_under_any_library(uri, standard_library_paths))
+        })
+        .cloned()
+        .collect()
 }
 
 /// Replaces the symbol projection from the committed immutable publication.
@@ -264,6 +358,42 @@ mod tests {
         assert_clone::<ServerState>();
     }
 
+    #[test]
+    fn workspace_sweep_excludes_both_library_root_sets() {
+        // `file:///libs/lib.sysml` sits under `standard_library_paths` (via `state_with`);
+        // add a generic KPAR library file under `library_paths` too.
+        let mut state = state_with("package Lib {}", "package W {}");
+        state
+            .library_paths
+            .push(Url::parse("file:///kpar/domain/").expect("kpar root"));
+        state.index.insert(
+            Url::parse("file:///kpar/domain/domain.sysml").expect("kpar uri"),
+            IndexEntry::for_test(
+                &Url::parse("file:///kpar/domain/domain.sysml").expect("kpar uri"),
+                "package Domain {}",
+            ),
+        );
+
+        // Default sweep: only the workspace document, neither library file.
+        let targets = workspace_sweep_targets(&state, false);
+        assert_eq!(
+            targets,
+            vec![Url::parse("file:///model.sysml").expect("workspace uri")],
+        );
+
+        // `diagnoseLibraryPaths` opt-in: every indexed document, libraries included.
+        let mut all = workspace_sweep_targets(&state, true);
+        all.sort();
+        assert_eq!(
+            all,
+            vec![
+                Url::parse("file:///kpar/domain/domain.sysml").expect("kpar uri"),
+                Url::parse("file:///libs/lib.sysml").expect("library uri"),
+                Url::parse("file:///model.sysml").expect("workspace uri"),
+            ],
+        );
+    }
+
     fn state_with(library: &str, workspace: &str) -> ServerState {
         let library_root = Url::parse("file:///libs/").expect("library root");
         let library_uri = Url::parse("file:///libs/lib.sysml").expect("library uri");
@@ -296,6 +426,7 @@ mod tests {
             completion.admit(&mut state.session),
             PublicationOutcome::Published
         );
+        state.publish_source_snapshot();
     }
 
     /// Without the configured libraries in the publication, every reference into them is
@@ -374,7 +505,7 @@ mod tests {
                 "package Systems { metaclass PartUsage; } }"
             ),
             concat!(
-                "package W { import StandardViewDefinitions::*; ",
+                "package W { private import StandardViewDefinitions::*; ",
                 "part def Widget; part root : Widget; ",
                 "view selected : GeneralView { expose root; filter @SysML::PartUsage; } }"
             ),

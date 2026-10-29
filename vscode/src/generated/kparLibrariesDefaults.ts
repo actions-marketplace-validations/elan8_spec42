@@ -13,19 +13,10 @@ export const KPAR_LIBRARIES_DEFAULTS: readonly KparLibraryDefaults[] = [
   {
     "id": "domain",
     "displayName": "Domain libraries",
-    "version": "0.3.0",
+    "version": "0.5.0",
     "repo": "elan8/sysml-domain-libraries",
     "format": "kpar",
-    "artifact": "elan8-domain-libraries-0.3.0.kpar",
-    "contentPath": ""
-  },
-  {
-    "id": "method",
-    "displayName": "Method libraries",
-    "version": "0.2.0",
-    "repo": "elan8/mbse-methodology",
-    "format": "kpar",
-    "artifact": "elan8-method-libraries-0.2.0.kpar",
+    "artifact": "elan8-domain-libraries-0.5.0.kpar",
     "contentPath": ""
   }
 ] as const;

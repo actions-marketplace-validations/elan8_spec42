@@ -51,11 +51,14 @@ pub(crate) fn evaluation_state(
             EvaluationState::Failed(EvaluationFailure::DivisionByZero)
         }
         EvaluatedValue::TypeMismatch => EvaluationState::Failed(EvaluationFailure::TypeMismatch),
+        EvaluatedValue::UnsupportedUnitOperation => {
+            EvaluationState::Failed(EvaluationFailure::UnsupportedUnitOperation)
+        }
     }
 }
 
 /// The scalar projection of a computed outcome, or `None` for a non-value outcome.
-fn evaluated_scalar(outcome: &EvaluatedValue) -> Option<EvaluatedScalar> {
+pub(crate) fn evaluated_scalar(outcome: &EvaluatedValue) -> Option<EvaluatedScalar> {
     match outcome {
         EvaluatedValue::Boolean(value) => Some(EvaluatedScalar::Boolean(*value)),
         EvaluatedValue::Integer(value) => Some(EvaluatedScalar::Integer(*value)),
@@ -71,6 +74,7 @@ fn evaluated_scalar(outcome: &EvaluatedValue) -> Option<EvaluatedScalar> {
         | EvaluatedValue::NonConverged
         | EvaluatedValue::DivisionByZero
         | EvaluatedValue::TypeMismatch => None,
+        EvaluatedValue::UnsupportedUnitOperation => None,
     }
 }
 

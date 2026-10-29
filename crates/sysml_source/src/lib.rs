@@ -9,6 +9,9 @@
 //! The crate knows nothing about SysML grammar. Its single dependant is the semantic authority,
 //! which re-exports these types for the query facade.
 
+mod project_scope;
+pub use project_scope::{workspace_source_selected, ProjectSourceScope, PROJECT_CONFIG_FILE};
+
 use std::fmt;
 use std::fs;
 use std::path::{Path, PathBuf};
@@ -18,6 +21,28 @@ use std::path::{Path, PathBuf};
 /// This is a source-boundary convention, not a parsed KPAR contract: source discovery only needs
 /// to know whether the marker exists. KPAR remains the authority for its schema and contents.
 pub const PROJECT_MANIFEST_FILE: &str = ".project.json";
+
+/// Nearest explicitly marked project for a batch target without a host-supplied ceiling.
+/// Editor hosts continue to use `discover_project_boundary` with their workspace ceiling.
+pub fn discover_enclosing_project_root(source: &Path) -> Option<PathBuf> {
+    let source = canonicalize_or_self(source);
+    let directory = if source.is_dir() {
+        source.as_path()
+    } else {
+        source.parent()?
+    };
+    for directory in directory.ancestors() {
+        if directory.join(PROJECT_MANIFEST_FILE).is_file()
+            || directory.join(PROJECT_CONFIG_FILE).is_file()
+        {
+            return Some(directory.to_path_buf());
+        }
+        if directory.join(".git").exists() || directory.join("sysand-lock.toml").is_file() {
+            break;
+        }
+    }
+    None
+}
 
 /// The filesystem boundary owning a source file.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -80,9 +105,18 @@ pub fn discover_project_roots(ceilings: &[PathBuf]) -> Vec<PathBuf> {
     let mut roots = Vec::new();
     for ceiling in ceilings {
         let mut builder = ignore::WalkBuilder::new(ceiling);
+        let environment = ProjectSourceScope::load(ceiling)
+            .ok()
+            .map(|scope| canonicalize_or_self(scope.sysand_dir()));
         // `.project.json` is intentionally hidden by name, so hidden-file suppression must be
         // disabled while gitignore and explicit ignore rules remain authoritative.
         builder.follow_links(false).require_git(false).hidden(false);
+        builder.filter_entry(move |entry| {
+            entry.file_name() != ".sysand"
+                && environment
+                    .as_ref()
+                    .is_none_or(|root| !canonicalize_or_self(entry.path()).starts_with(root))
+        });
         roots.extend(
             builder
                 .build()
@@ -98,6 +132,17 @@ pub fn discover_project_roots(ceilings: &[PathBuf]) -> Vec<PathBuf> {
     }
     roots.sort();
     roots.dedup();
+    // A nested project's custom environment must not become an editor-owned project either.
+    let environments = roots
+        .iter()
+        .filter_map(|root| ProjectSourceScope::load(root).ok())
+        .map(|scope| canonicalize_or_self(scope.sysand_dir()))
+        .collect::<Vec<_>>();
+    roots.retain(|root| {
+        !environments
+            .iter()
+            .any(|environment| root.starts_with(environment))
+    });
     roots
 }
 
@@ -107,7 +152,7 @@ fn canonicalize_or_self(path: &Path) -> PathBuf {
 use std::sync::Arc;
 
 pub use source_identity;
-pub use source_identity::{ContentDigest, RootDigest};
+pub use source_identity::{ContentDigest, RootDigest, SourceLanguage};
 pub use url::Url;
 
 /// Where a document comes from, which decides how the semantic authority treats it.
@@ -136,6 +181,7 @@ impl SourceKind {
 pub struct SourceDocument {
     uri: Url,
     kind: SourceKind,
+    language: SourceLanguage,
     digest: ContentDigest,
     content: Arc<str>,
     path_hint: Option<Box<str>>,
@@ -150,6 +196,13 @@ impl SourceDocument {
 
     pub fn kind(&self) -> SourceKind {
         self.kind
+    }
+
+    /// The language this document is admitted as. Admission derives it from the URI's path
+    /// ([`SourceLanguage::of_path`]); a host that knows better declares it with
+    /// [`Self::with_language`]. It is a semantic input and part of the document's identity.
+    pub fn language(&self) -> SourceLanguage {
+        self.language
     }
 
     /// The BLAKE3 digest of [`Self::content`].
@@ -192,6 +245,15 @@ impl SourceDocument {
     pub fn with_kind(&self, kind: SourceKind) -> Self {
         Self {
             kind,
+            ..self.clone()
+        }
+    }
+
+    /// The same document admitted as `language`, for a host whose identity does not carry the
+    /// language in its path (an in-memory fixture, an editor buffer with a declared language).
+    pub fn with_language(&self, language: SourceLanguage) -> Self {
+        Self {
+            language,
             ..self.clone()
         }
     }
@@ -328,9 +390,12 @@ pub fn normalize_uri(uri: &Url) -> Url {
 ///
 /// This is lexical rather than filesystem-based so it also works for unsaved documents beneath
 /// a root that does not exist yet. A root matches itself and descendants, but never a sibling
-/// whose last common path segment merely starts with the same characters.
+/// whose last common path segment merely starts with the same characters. Windows file drive
+/// letters use the same lexical policy as admitted sources, even when neither path exists.
 pub fn uri_under_any(candidate: &Url, roots: &[Url]) -> bool {
+    let candidate = lowercase_drive_letter(candidate.clone());
     roots.iter().any(|root| {
+        let root = lowercase_drive_letter(root.clone());
         if candidate.scheme() != root.scheme()
             || candidate.username() != root.username()
             || candidate.password() != root.password()
@@ -376,6 +441,9 @@ pub fn path_to_file_url(path: &Path) -> Result<Url, SourceError> {
 }
 
 fn lowercase_drive_letter(url: Url) -> Url {
+    if url.scheme() != "file" {
+        return url;
+    }
     let path = url.path();
     let bytes = path.as_bytes();
     if bytes.len() >= 3 && bytes[0] == b'/' && bytes[1].is_ascii_uppercase() && bytes[2] == b':' {
@@ -523,12 +591,19 @@ impl SourceProvider for FilesystemProvider {
                 continue;
             }
             report.roots_scanned += 1;
+            let scope = self
+                .respect_project_boundary
+                .then(|| ProjectSourceScope::load(&root))
+                .transpose()?;
             let mut admitted_here = 0usize;
             for path in self.walk(&root) {
                 if self.respect_project_boundary
                     && discover_project_boundary(&path, &root)
                         .is_some_and(|boundary| boundary.project_root() != root)
                 {
+                    continue;
+                }
+                if scope.as_ref().is_some_and(|scope| !scope.includes(&path)) {
                     continue;
                 }
                 report.candidate_files += 1;
@@ -595,8 +670,10 @@ impl SourceAuthority {
     /// Admit text under an already-parsed URL.
     pub fn admit_url(&self, uri: Url, content: &str, kind: SourceKind) -> SourceDocument {
         let content: Arc<str> = Arc::from(normalize_line_endings(content).as_ref());
+        let uri = normalize_uri(&uri);
         SourceDocument {
-            uri: normalize_uri(&uri),
+            language: SourceLanguage::of_path(uri.path()),
+            uri,
             kind,
             digest: ContentDigest::of_bytes(content.as_bytes()),
             content,
@@ -696,6 +773,23 @@ impl SourceAuthority {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn admission_derives_the_language_from_the_path_and_a_host_may_declare_it() {
+        let authority = SourceAuthority::new();
+        let kerml = authority
+            .admit_memory("scope", "lib/Base.kerml", "", SourceKind::Workspace)
+            .unwrap();
+        assert_eq!(kerml.language(), SourceLanguage::KerML);
+        let fixture = authority
+            .admit_memory("scope", "fixture.md", "", SourceKind::Workspace)
+            .unwrap();
+        assert_eq!(fixture.language(), SourceLanguage::SysML);
+        let declared = fixture.with_language(SourceLanguage::KerML);
+        assert_eq!(declared.language(), SourceLanguage::KerML);
+        assert_eq!(declared.uri(), fixture.uri());
+        assert_eq!(declared.digest(), fixture.digest());
+    }
 
     #[test]
     fn custom_uri_schemes_are_preserved() {
@@ -923,10 +1017,100 @@ mod tests {
     }
 
     #[test]
+    fn duplicate_library_contents_do_not_make_different_files_path_aliases() {
+        let directory = tempfile::tempdir().unwrap();
+        let first = directory.path().join("bundled.sysml");
+        let second = directory.path().join("checkout.sysml");
+        fs::write(&first, "package Same;").unwrap();
+        fs::write(&second, "package Same;").unwrap();
+        let authority = SourceAuthority::new();
+        let bundled = authority
+            .admit(
+                path_to_file_url(&first).unwrap().as_str(),
+                "package Same;",
+                SourceKind::Library,
+            )
+            .unwrap();
+        let checkout = authority
+            .admit(
+                path_to_file_url(&second).unwrap().as_str(),
+                "package Same;",
+                SourceKind::Workspace,
+            )
+            .unwrap();
+        assert_ne!(bundled.uri(), checkout.uri());
+        assert_eq!(bundled.digest(), checkout.digest());
+    }
+
+    #[cfg(windows)]
+    #[test]
+    fn windows_workspace_and_library_spellings_share_one_source_identity() {
+        let temp = tempfile::tempdir().unwrap();
+        let library = temp.path().join("Library Sources");
+        fs::create_dir(&library).unwrap();
+        let file = library.join("MixedCase.sysml");
+        fs::write(&file, "package Model;").unwrap();
+        let expected = path_to_file_url(&file).unwrap();
+        let root = path_to_file_url(&library).unwrap();
+        let drive = expected.path().as_bytes()[1] as char;
+        let encoded = expected.as_str().replacen(
+            &format!("file:///{drive}:"),
+            &format!("file:///{}%3A", drive.to_ascii_uppercase()),
+            1,
+        );
+        let aliases = [
+            Url::from_file_path(&file).unwrap(),
+            Url::parse(&encoded).unwrap(),
+            Url::from_file_path(file.to_string_lossy().to_uppercase()).unwrap(),
+            Url::from_file_path(PathBuf::from(file.to_string_lossy().replace('\\', "/"))).unwrap(),
+            Url::from_file_path(fs::canonicalize(&file).unwrap()).unwrap(),
+        ];
+        let authority = SourceAuthority::new();
+        for alias in aliases {
+            let normalized = normalize_uri(&alias);
+            assert_eq!(normalized, expected, "file alias {alias}");
+            assert!(uri_under_any(&normalized, std::slice::from_ref(&root)));
+            let workspace = authority
+                .admit(alias.as_str(), "package Model;", SourceKind::Workspace)
+                .unwrap();
+            let library = authority
+                .admit(expected.as_str(), "package Model;", SourceKind::Library)
+                .unwrap();
+            assert_eq!(workspace.uri(), library.uri());
+            assert_eq!(workspace.digest(), library.digest());
+        }
+    }
+
+    #[cfg(windows)]
+    #[test]
+    fn windows_junction_library_and_workspace_uris_share_one_identity() {
+        let temp = tempfile::tempdir().unwrap();
+        let real = temp.path().join("real");
+        let alias = temp.path().join("alias");
+        fs::create_dir(&real).unwrap();
+        fs::write(real.join("Model.sysml"), "package Model;").unwrap();
+        let output = std::process::Command::new("cmd")
+            .args(["/C", "mklink", "/J"])
+            .arg(&alias)
+            .arg(&real)
+            .output()
+            .expect("Windows junction creation");
+        assert!(
+            output.status.success(),
+            "junction creation: {}",
+            String::from_utf8_lossy(&output.stderr)
+        );
+        let actual = normalize_uri(&Url::from_file_path(alias.join("Model.sysml")).unwrap());
+        let expected = path_to_file_url(&real.join("Model.sysml")).unwrap();
+        assert_eq!(actual, expected);
+        assert!(uri_under_any(&actual, &[path_to_file_url(&alias).unwrap()]));
+    }
+
+    #[test]
     fn nonexistent_file_uri_keeps_its_lexical_identity() {
         let temp = tempfile::tempdir().expect("tempdir");
         let uri = Url::from_file_path(temp.path().join("Unsaved.sysml")).unwrap();
-        assert_eq!(normalize_uri(&uri), uri);
+        assert_eq!(normalize_uri(&uri), lowercase_drive_letter(uri));
     }
 
     #[test]
@@ -938,6 +1122,21 @@ mod tests {
         assert!(uri_under_any(&root, std::slice::from_ref(&root)));
         assert!(uri_under_any(&child, std::slice::from_ref(&root)));
         assert!(!uri_under_any(&sibling_prefix, &[root]));
+    }
+
+    #[test]
+    fn containment_normalizes_file_drive_letters_without_changing_custom_paths() {
+        let root = Url::parse("file:///c:/future-library").unwrap();
+        let child = Url::parse("file:///C:/future-library/Model.sysml").unwrap();
+        assert!(uri_under_any(&child, std::slice::from_ref(&root)));
+        assert!(uri_under_any(
+            &root,
+            &[Url::parse("file:///C:/future-library").unwrap()]
+        ));
+        let root = Url::parse("memory:///c:/future-library").unwrap();
+        let child = Url::parse("memory:///C:/future-library/Model.sysml").unwrap();
+        assert!(!uri_under_any(&child, &[root]));
+        assert_eq!(normalize_uri(&child), child);
     }
 
     #[test]

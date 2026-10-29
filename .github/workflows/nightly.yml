@@ -11,7 +11,7 @@ permissions:
 jobs:
   audit:
     name: Dependency audit (full tree)
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     # The advisory gate: a new RustSec advisory against an existing dependency fails here rather
     # than blocking an unrelated PR. CI's `audit` job still runs on any lockfile change.
     steps:
@@ -25,9 +25,26 @@ jobs:
       - name: cargo audit
         run: cargo audit
 
+  npm-audit:
+    name: npm dependency audit (shipped packages)
+    runs-on: ubuntu-24.04
+    # The advisory gate for the npm side: a new advisory against a shipped dependency fails here
+    # rather than blocking an unrelated PR. CI's `npm-audit` job still runs on any npm lockfile
+    # change.
+    steps:
+      - uses: actions/checkout@v6
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v6
+        with:
+          node-version: "24"
+
+      - name: npm audit (production dependencies)
+        run: bash scripts/npm-audit.sh
+
   sysml-release-validation:
     name: SysML release validation (informational)
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     continue-on-error: true
     steps:
       - uses: actions/checkout@v6
@@ -47,7 +64,7 @@ jobs:
           echo "SPEC42_STDLIB_KPAR_DIR=${{ github.workspace }}/.cache/sysml-stdlib-kpar-${VERSION}" >> $GITHUB_ENV
 
       - name: Restore SysML stdlib bundle cache
-        uses: actions/cache/restore@v4
+        uses: actions/cache/restore@v5
         id: stdlib-cache
         with:
           path: .cache/sysml-stdlib-kpar-${{ env.SPEC42_STDLIB_VERSION }}
@@ -59,7 +76,7 @@ jobs:
 
       - name: Save SysML stdlib bundle cache
         if: steps.stdlib-cache.outputs.cache-hit != 'true'
-        uses: actions/cache/save@v4
+        uses: actions/cache/save@v5
         with:
           path: .cache/sysml-stdlib-kpar-${{ env.SPEC42_STDLIB_VERSION }}
           key: sysml-stdlib-${{ env.SPEC42_STDLIB_VERSION }}
@@ -67,20 +84,16 @@ jobs:
       - name: Prepare KPAR library bundles
         run: |
           DOMAIN_VERSION=$(node -p "require('./config/libraries/domain.json').version")
-          METHOD_VERSION=$(node -p "require('./config/libraries/method.json').version")
           echo "SPEC42_DOMAIN_LIBRARIES_VERSION=${DOMAIN_VERSION}" >> $GITHUB_ENV
-          echo "SPEC42_METHOD_LIBRARIES_VERSION=${METHOD_VERSION}" >> $GITHUB_ENV
           echo "SPEC42_KPAR_LIBRARY_BUNDLE_DOMAIN=${{ github.workspace }}/.cache/elan8-domain-libraries-${DOMAIN_VERSION}.kpar" >> $GITHUB_ENV
-          echo "SPEC42_KPAR_LIBRARY_BUNDLE_METHOD=${{ github.workspace }}/.cache/elan8-method-libraries-${METHOD_VERSION}.kpar" >> $GITHUB_ENV
 
       - name: Restore KPAR library bundles cache
-        uses: actions/cache/restore@v4
+        uses: actions/cache/restore@v5
         id: kpar-libraries-cache
         with:
           path: |
             .cache/elan8-domain-libraries-${{ env.SPEC42_DOMAIN_LIBRARIES_VERSION }}.kpar
-            .cache/elan8-method-libraries-${{ env.SPEC42_METHOD_LIBRARIES_VERSION }}.kpar
-          key: kpar-libraries-domain-${{ env.SPEC42_DOMAIN_LIBRARIES_VERSION }}-method-${{ env.SPEC42_METHOD_LIBRARIES_VERSION }}
+          key: kpar-libraries-domain-${{ env.SPEC42_DOMAIN_LIBRARIES_VERSION }}
 
       - name: Fetch KPAR library bundles
         if: steps.kpar-libraries-cache.outputs.cache-hit != 'true'
@@ -88,12 +101,11 @@ jobs:
 
       - name: Save KPAR library bundles cache
         if: steps.kpar-libraries-cache.outputs.cache-hit != 'true'
-        uses: actions/cache/save@v4
+        uses: actions/cache/save@v5
         with:
           path: |
             .cache/elan8-domain-libraries-${{ env.SPEC42_DOMAIN_LIBRARIES_VERSION }}.kpar
-            .cache/elan8-method-libraries-${{ env.SPEC42_METHOD_LIBRARIES_VERSION }}.kpar
-          key: kpar-libraries-domain-${{ env.SPEC42_DOMAIN_LIBRARIES_VERSION }}-method-${{ env.SPEC42_METHOD_LIBRARIES_VERSION }}
+          key: kpar-libraries-domain-${{ env.SPEC42_DOMAIN_LIBRARIES_VERSION }}
 
       - name: Clone SysML-v2-Release
         run: git clone --depth 1 --branch 2026-04 https://github.com/Systems-Modeling/SysML-v2-Release.git sysml-v2-release
@@ -102,6 +114,9 @@ jobs:
         env:
           SYSML_V2_RELEASE_DIR: ${{ github.workspace }}/sysml-v2-release
         run: node scripts/generate-notation-inventory.mjs --check
+
+      - name: Check SysML/KerML textual syntax inventory
+        run: node scripts/generate-textual-syntax-inventory.mjs --check
 
       - name: Run workspace scan test with SysML release
         env:
@@ -115,7 +130,7 @@ jobs:
 
   language-and-generator-exploratory:
     name: Language and generator fuzzing (exploratory)
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     timeout-minutes: 45
     # Informational, not a gate. Neither fuzzing nor a mutation score can gate a PR: they are
     # not reproducible from the same inputs twice, and required CI must be. What lasts from a
@@ -174,7 +189,7 @@ jobs:
 
       - name: Upload exploratory artifacts
         if: always()
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v6
         with:
           name: language-and-generator-exploratory
           if-no-files-found: ignore

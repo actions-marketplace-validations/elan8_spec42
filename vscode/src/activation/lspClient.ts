@@ -1,3 +1,5 @@
+import { ANALYSIS_STATUS_CHANGED_METHOD } from "../generated/editor-status";
+import { analysisRequestMiddleware } from "./pendingAnalysis";
 import * as fs from "fs";
 import * as path from "path";
 import * as vscode from "vscode";
@@ -30,6 +32,7 @@ import {
   getServerHealthDetail,
   getServerHealthState,
   setServerHealth,
+  updateStatusBar,
 } from "./statusBar";
 
 type RawSysandStatus = {
@@ -373,9 +376,13 @@ export function startLanguageClient(
   };
 
   const clientOptions: LanguageClientOptions = {
+    middleware: analysisRequestMiddleware,
     documentSelector: [{ language: "sysml" }, { language: "kerml" }],
     synchronize: {
-      fileEvents: vscode.workspace.createFileSystemWatcher("**/*.{sysml,kerml}"),
+      fileEvents: [
+        vscode.workspace.createFileSystemWatcher("**/*.{sysml,kerml}"),
+        vscode.workspace.createFileSystemWatcher("**/{.project.json,syside.toml,sysand-lock.toml,env.toml}"),
+      ],
     },
     initializationOptions: {
       libraryPaths,
@@ -385,6 +392,9 @@ export function startLanguageClient(
       },
       performanceLogging: {
         enabled: getConfigBoolean("performanceLogging.enabled", false),
+      },
+      semanticTokens: {
+        debug: getConfigBoolean("semanticTokens.debug", false),
       },
       diagnostics: {
         includeLibraryPaths: getConfigBoolean("development.diagnoseLibraryPaths", false),
@@ -433,6 +443,10 @@ export function startLanguageClient(
     })
   );
 
+  context.subscriptions.push(
+    client.onNotification(ANALYSIS_STATUS_CHANGED_METHOD, () => updateStatusBar(context)),
+    client.onNotification("spec42/publicationChanged", () => updateStatusBar(context))
+  );
   const clientReadyPromise = client.start().then(() => {
       restartCount = 0;
       crashDialogShown = false;
@@ -629,6 +643,7 @@ export function registerServerConfigChangeHandler(
       const performanceLoggingConfigChanged =
         event.affectsConfiguration("spec42.performanceLogging.enabled") ||
         event.affectsConfiguration("sysml-language-server.performanceLogging.enabled") ||
+        event.affectsConfiguration("spec42.semanticTokens.debug") ||
         event.affectsConfiguration("spec42.disabledLibraries") ||
         event.affectsConfiguration("spec42.kparLibraryPaths") ||
         event.affectsConfiguration("spec42.development.diagnoseLibraryPaths");

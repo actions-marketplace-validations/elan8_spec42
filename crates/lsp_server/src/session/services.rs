@@ -124,86 +124,54 @@ pub(crate) fn store_parsed_document_text(
     context: &str,
     _evaluate: bool,
 ) -> Option<String> {
+    let editor_revision = state
+        .index()
+        .get(uri_norm)
+        .and_then(|entry| entry.editor_revision.clone());
+    state.index_mut().insert(
+        uri_norm.clone(),
+        IndexEntry {
+            document,
+            parsed: Some(parsed),
+            admitted_to_publication: true,
+            editor_revision,
+        },
+    );
+    warning_from_parse_errors(uri_norm, parse_errors, diagnostic_count, context)
+}
+
+/// Admit desired source immediately. The bounded analysis worker owns parsing and publication.
+pub(crate) fn store_document_text_fast(
+    state: &mut impl DocumentStore,
+    uri_norm: &Url,
+    text: String,
+) -> Option<String> {
+    let kind = state
+        .index()
+        .get(uri_norm)
+        .map_or(SourceKind::Workspace, |entry| entry.document.kind());
+    let document = state
+        .services()
+        .source
+        .admit_url(uri_norm.clone(), &text, kind);
+    let previous = state.index().get(uri_norm);
+    let parsed = previous
+        .filter(|entry| {
+            entry.document.digest() == document.digest()
+                && entry.document.language() == document.language()
+        })
+        .and_then(|entry| entry.parsed.clone());
+    let editor_revision = previous.and_then(|entry| entry.editor_revision.clone());
     state.index_mut().insert(
         uri_norm.clone(),
         IndexEntry {
             document,
             parsed,
             admitted_to_publication: true,
+            editor_revision,
         },
     );
-    warning_from_parse_errors(uri_norm, parse_errors, diagnostic_count, context)
-}
-
-pub(crate) fn store_document_text(
-    state: &mut impl DocumentStore,
-    uri_norm: &Url,
-    text: String,
-) -> Option<String> {
-    let document =
-        state
-            .services()
-            .source
-            .admit_url(uri_norm.clone(), &text, SourceKind::Workspace);
-    let parsed = state.services().syntax.parse(&document);
-    let parse_errors = parsed
-        .diagnostics()
-        .iter()
-        .take(5)
-        .map(|e| e.message.clone())
-        .collect::<Vec<_>>();
-    let diagnostic_count = parsed.diagnostics().len();
-    store_parsed_document_text(
-        state,
-        uri_norm,
-        document,
-        parsed,
-        &parse_errors,
-        diagnostic_count,
-        "store_document_text",
-        true,
-    )
-}
-
-/// Like `store_document_text` but skips the expensive cross-document evaluation
-/// pass (`evaluate: false`). The caller is responsible for scheduling an async
-/// relink to rebuild cross-document edges and expression evaluation.
-pub(crate) fn store_document_text_fast(
-    state: &mut impl DocumentStore,
-    uri_norm: &Url,
-    text: String,
-) -> Option<String> {
-    let document =
-        state
-            .services()
-            .source
-            .admit_url(uri_norm.clone(), &text, SourceKind::Workspace);
-    let parsed = state.services().syntax.parse(&document);
-    let parse_errors = parsed
-        .diagnostics()
-        .iter()
-        .take(5)
-        .map(|e| e.message.clone())
-        .collect::<Vec<_>>();
-    let diagnostic_count = parsed.diagnostics().len();
-    store_parsed_document_text(
-        state,
-        uri_norm,
-        document,
-        parsed,
-        &parse_errors,
-        diagnostic_count,
-        "store_document_text_fast",
-        false,
-    )
-}
-
-pub(crate) fn refresh_document(
-    state: &mut impl DocumentStore,
-    uri_norm: &Url,
-    content: String,
-) -> Option<String> {
-    store_document_text(state, uri_norm, content)
+    None
 }
 
 pub(crate) fn ingest_parsed_scan_entries(
@@ -237,12 +205,17 @@ pub(crate) fn ingest_parsed_scan_entries_batch(
     let mut loaded = Vec::with_capacity(entries.len());
     for entry in entries {
         let uri_norm = util::normalize_file_uri(&entry.uri);
+        let editor_revision = state
+            .index()
+            .get(&uri_norm)
+            .and_then(|entry| entry.editor_revision.clone());
         state.index_mut().insert(
             uri_norm.clone(),
             IndexEntry {
                 document: entry.document,
-                parsed: entry.parsed,
+                parsed: Some(entry.parsed),
                 admitted_to_publication: true,
+                editor_revision,
             },
         );
         let warning = warning_from_parse_errors(
@@ -262,5 +235,5 @@ pub(crate) fn ingest_parsed_scan_entries_batch(
 /// can decide whether a (potentially slow) parse is needed.
 mod edits;
 mod rebuild;
-pub(crate) use edits::{apply_content_changes, apply_parsed_document_update, remove_document};
+pub(crate) use edits::{apply_content_changes, remove_document};
 pub(crate) use rebuild::{clear_documents_under_roots, index_library_paths_for_search};

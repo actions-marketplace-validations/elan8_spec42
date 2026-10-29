@@ -36,7 +36,7 @@ package P {
 # SMG
 ~~~sexpr
 (semantic-model
-  (publication (phase resolved) (completeness complete) (has-evaluation false) (source-digest "blake3:8daf4c591c114554419cd04fef02b44bb7e071afff1d8f48c66a9a5f0962231b"))
+  (publication (phase resolved) (completeness complete) (has-evaluation false) (source-digest "blake3:a989f99b26fbb4f6f1c07ebb4eaf0ba41ca2b59f01d98bc6103a868f82756c89"))
   (declarations
     (declaration (id (node (document "memory://snapshot/cyclic_alias_non_convergence.md") (qualified-name "P"))) (kind package) (membership (kind owning) (visibility default)))
     (declaration (id (node (document "memory://snapshot/cyclic_alias_non_convergence.md") (qualified-name "P::A"))) (kind alias) (membership (kind alias) (visibility default)) (authored (membership (kind alias) (visibility default)) (relationships (aliasBinding (reference "B")))))
@@ -53,10 +53,9 @@ package P {
       (outcome (status nonConverged)))
     (reference (id (source (node (document "memory://snapshot/cyclic_alias_non_convergence.md") (qualified-name "P::uses"))) (kind featureTyping) (ordinal 0))
       (authored-target "A")
-      (outcome (status resolved) (target (node (document "memory://snapshot/cyclic_alias_non_convergence.md") (qualified-name "P::A")))))
+      (outcome (status nonConverged)))
   )
   (relationships
-    (relationship (kind typing) (source (node (document "memory://snapshot/cyclic_alias_non_convergence.md") (qualified-name "P::uses"))) (target (node (document "memory://snapshot/cyclic_alias_non_convergence.md") (qualified-name "P::A"))) (provenance authored) (authored-reference (source (node (document "memory://snapshot/cyclic_alias_non_convergence.md") (qualified-name "P::uses"))) (kind featureTyping) (ordinal 0)))
   )
   (evaluation
   )
@@ -65,14 +64,6 @@ package P {
 # TYPES
 ~~~sexpr
 (types
-    (declaration (id (node (document "memory://snapshot/cyclic_alias_non_convergence.md") (qualified-name "P::A")))
-      (subtype (node (document "memory://snapshot/cyclic_alias_non_convergence.md") (qualified-name "P::uses")) (scopes any))
-    )
-    (declaration (id (node (document "memory://snapshot/cyclic_alias_non_convergence.md") (qualified-name "P::uses")))
-      (type (node (document "memory://snapshot/cyclic_alias_non_convergence.md") (qualified-name "P::A")) (provenance authored))
-      (effective-type (node (document "memory://snapshot/cyclic_alias_non_convergence.md") (qualified-name "P::A")) (source direct))
-      (supertype (node (document "memory://snapshot/cyclic_alias_non_convergence.md") (qualified-name "P::A")) (scopes any))
-    )
 )
 ~~~
 # NAVIGATION
@@ -90,7 +81,7 @@ package P {
   )
   (query (document "memory://snapshot/cyclic_alias_non_convergence.md") (range (start 4 16) (end 4 17)) (probe (position 4 16))
     (reference (id (source (node (document "memory://snapshot/cyclic_alias_non_convergence.md") (qualified-name "P::uses"))) (kind featureTyping) (ordinal 0) (authored-target "A")
-      (outcome (status resolved) (target (node (document "memory://snapshot/cyclic_alias_non_convergence.md") (qualified-name "P::A")))))
+      (outcome (status nonConverged)))
     )
   )
 )

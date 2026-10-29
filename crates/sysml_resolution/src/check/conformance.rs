@@ -26,20 +26,18 @@
 
 use crate::lower::facts::AuthoredReference;
 use crate::lower::facts::MultiplicityBound;
+use crate::lower::facts::MultiplicityRecord;
+use crate::model::element_kind::element_kind;
 use crate::model::render as writer;
 use crate::model::resolver::SemanticModel;
 use crate::model::resolver::RELATED_AMBIGUOUS_CANDIDATE;
 use crate::model::span::document_range;
 use crate::model::AuthoredReferenceId;
 use crate::model::DeclarationId;
-use crate::model::DeclarationKind;
 use crate::model::DocumentIdx;
 use crate::model::ReferenceKind;
 use crate::resolve::implied::conditional_library_specialization_anchor_branch;
-use crate::resolve::implied::conditional_library_specialization_predicate_holds;
-use crate::resolve::implied::conditional_library_specialization_rules;
-use crate::resolve::implied::library_specialization_metaclass;
-use crate::resolve::implied::library_specialization_rules;
+use crate::resolve::implied::conditional_library_specialization_predicate_holds_with_variants;
 use crate::resolve::implied::LibrarySpecializationAnchor;
 use crate::resolve::implied::LibrarySpecializationDiagnosticKey;
 use crate::resolve::results::ResolutionError;
@@ -51,244 +49,36 @@ use crate::DiagnosticLocation;
 use crate::DiagnosticOrigin;
 use crate::DiagnosticSeverity;
 use crate::RelatedLocation;
+use sysml_contract::ElementKind;
 
-/// The SysML metaclass family a declaration belongs to.
-///
-/// One variant per definition/usage pair the language provides. Two declarations in the same
-/// family are the definition and usage halves of one concept (`part def` / `part`), which is what
-/// makes a family the right key for every rule below.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub(crate) enum Family {
-    Part,
-    Attribute,
-    Enumeration,
-    Item,
-    Occurrence,
-    Action,
-    State,
-    Port,
-    Requirement,
-    Concern,
-    UseCase,
-    Case,
-    AnalysisCase,
-    VerificationCase,
-    View,
-    Viewpoint,
-    Rendering,
-    Metadata,
-    Connection,
-    Interface,
-    Flow,
-    Allocation,
-    Constraint,
-    Calc,
+pub(crate) use crate::model::metaclass::{
+    classify, descends_from, descends_from_occurrence, Family, Role,
+};
+
+/// Which of the KerML classifier metaclasses the specialization rules distinguish a metaclass
+/// conforms to, read from the canonical metaclass hierarchy [`ElementKind::conforms_to`]: an
+/// attribute definition is a DataType, an occurrence definition a Class, an item or part
+/// definition a Structure, an action definition a Behavior, a connection definition an
+/// AssociationStructure, and so on.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+pub(crate) struct ClassifierMetaclass {
+    pub(crate) data_type: bool,
+    pub(crate) class: bool,
+    pub(crate) association: bool,
+    pub(crate) structure: bool,
+    pub(crate) behavior: bool,
 }
 
-/// Which half of its family a declaration is.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub(crate) enum Role {
-    Definition,
-    Usage,
-}
-
-/// The family and role of one declaration, or `None` when it is outside the SysML metaclass space.
-///
-/// Exhaustive by construction: a new `DeclarationKind` fails to compile until it is classified, so
-/// a kind cannot silently acquire "no conformance rule applies" by omission.
-pub(crate) fn classify(kind: DeclarationKind) -> Option<(Family, Role)> {
-    use DeclarationKind as K;
-    use Family as F;
-    use Role::{Definition, Usage};
-    Some(match kind {
-        K::PartDefinition => (F::Part, Definition),
-        K::PartUsage => (F::Part, Usage),
-        K::AttributeDefinition => (F::Attribute, Definition),
-        K::AttributeUsage => (F::Attribute, Usage),
-        K::EnumerationDefinition => (F::Enumeration, Definition),
-        K::EnumerationUsage => (F::Enumeration, Usage),
-        K::ItemDefinition => (F::Item, Definition),
-        K::ItemUsage => (F::Item, Usage),
-        K::OccurrenceDefinition => (F::Occurrence, Definition),
-        K::OccurrenceUsage => (F::Occurrence, Usage),
-        K::ActionDefinition => (F::Action, Definition),
-        K::ActionUsage => (F::Action, Usage),
-        K::AcceptActionUsage | K::SendActionUsage | K::TerminateActionUsage => (F::Action, Usage),
-        K::StateDefinition => (F::State, Definition),
-        K::StateUsage => (F::State, Usage),
-        K::PortDefinition => (F::Port, Definition),
-        K::PortUsage => (F::Port, Usage),
-        K::RequirementDefinition => (F::Requirement, Definition),
-        K::RequirementUsage => (F::Requirement, Usage),
-        K::ConcernDefinition => (F::Concern, Definition),
-        K::ConcernUsage => (F::Concern, Usage),
-        K::UseCaseDefinition => (F::UseCase, Definition),
-        K::UseCaseUsage => (F::UseCase, Usage),
-        K::CaseDefinition => (F::Case, Definition),
-        K::CaseUsage => (F::Case, Usage),
-        K::AnalysisCaseDefinition => (F::AnalysisCase, Definition),
-        K::AnalysisCaseUsage => (F::AnalysisCase, Usage),
-        K::VerificationCaseDefinition => (F::VerificationCase, Definition),
-        K::VerificationCaseUsage => (F::VerificationCase, Usage),
-        K::ViewDefinition => (F::View, Definition),
-        K::ViewUsage => (F::View, Usage),
-        K::ViewpointDefinition => (F::Viewpoint, Definition),
-        K::ViewpointUsage => (F::Viewpoint, Usage),
-        K::RenderingDefinition => (F::Rendering, Definition),
-        K::RenderingUsage => (F::Rendering, Usage),
-        K::MetadataDefinition => (F::Metadata, Definition),
-        K::MetadataUsage => (F::Metadata, Usage),
-        K::ConnectionDefinition => (F::Connection, Definition),
-        K::ConnectionUsage => (F::Connection, Usage),
-        K::InterfaceDefinition => (F::Interface, Definition),
-        K::InterfaceUsage => (F::Interface, Usage),
-        K::FlowDefinition => (F::Flow, Definition),
-        K::Flow => (F::Flow, Usage),
-        K::AllocationDefinition => (F::Allocation, Definition),
-        K::Allocate => (F::Allocation, Usage),
-        K::ConstraintDefinition => (F::Constraint, Definition),
-        K::ConstraintUsage => (F::Constraint, Usage),
-        K::CalcDefinition => (F::Calc, Definition),
-        K::CalcUsage => (F::Calc, Usage),
-
-        // Outside the definition/usage kind space this family of rules describes.
-        //
-        // Namespaces and their members are not typed. The KerML metaclasses are `Type`s, but the
-        // SysML family tables do not describe them, and the SysML families bottom out in them --
-        // reporting against a table that does not model KerML would flag most of the standard
-        // library. The remaining entries are usage forms whose metaclass is fixed by their
-        // syntax (`subject`, `actor`, a constraint assertion), anonymous scopes the lowering mints
-        // to give nested references somewhere to resolve, and control-flow members that carry
-        // references rather than a typing of their own.
-        K::Namespace
-        | K::Package
-        | K::LibraryPackage
-        | K::Import
-        | K::Expose
-        | K::Alias
-        | K::EnumerationLiteral
-        | K::ClassDefinition
-        | K::ExtendedDefinition
-        | K::IndividualDefinition
-        | K::Succession
-        | K::EntryActionBinding
-        | K::DoActionBinding
-        | K::ExitActionBinding
-        | K::InitialState
-        | K::FinalState
-        | K::ParameterUsage
-        | K::SubjectUsage
-        | K::PerformActionUsage
-        | K::Transition
-        | K::Satisfy
-        | K::Bind
-        | K::ReferenceUsage
-        | K::Decide
-        | K::Merge
-        | K::Fork
-        | K::Join
-        | K::ThenContinuation
-        | K::StakeholderUsage
-        | K::RequirementActor
-        | K::CaseActor
-        | K::Frame
-        | K::VerifyRequirement
-        | K::AssertConstraintUsage
-        | K::AssumeConstraintUsage
-        | K::RequireConstraintUsage
-        | K::DefaultReferenceUsage
-        | K::ExtendedUsage
-        | K::Assign
-        | K::While
-        | K::Loop
-        | K::If
-        | K::ForLoop
-        | K::ForLoopVariable
-        | K::Dependency
-        | K::BareConnect
-        | K::PerformParameterBinding
-        | K::KermlType
-        | K::KermlClassifier
-        | K::KermlStructure
-        | K::KermlAssociation
-        | K::KermlAssociationStructure
-        | K::KermlDataType
-        | K::KermlMetaclass
-        | K::KermlBehavior
-        | K::KermlFunction
-        | K::KermlPredicate
-        | K::KermlInteraction
-        | K::KermlMultiplicity
-        | K::KermlFeature
-        | K::KermlStep
-        | K::KermlExpression
-        | K::KermlBooleanExpression
-        | K::KermlConnector
-        | K::KermlBinding
-        | K::KermlInvariant
-        | K::KermlEnd => return None,
-    })
-}
-
-/// The family a family specialises in the SysML metamodel, or `None` at a root.
-///
-/// This is the metamodel's own generalization hierarchy -- SysML §7's `PartUsage :> ItemUsage :>
-/// OccurrenceUsage`, `StateUsage :> ActionUsage`, `RequirementUsage :> ConstraintUsage` and so on.
-/// It is a static property of the language, not of any admitted library, so reading it here is not
-/// a name lookup: nothing consults what `Occurrence` happens to be called or where it is declared.
-///
-/// A flat per-family allowlist could not express it. `action substates : StateAction[0..*];` types
-/// an action usage with a state definition, which is well-formed precisely because a state *is* an
-/// action; a list that did not happen to name `State` under `Action` reported it as a violation.
-pub(crate) fn parent(family: Family) -> Option<Family> {
-    use Family as F;
-    Some(match family {
-        F::Occurrence
-        | F::Attribute
-        | F::Port
-        | F::Metadata
-        | F::View
-        | F::Viewpoint
-        | F::Rendering
-        | F::Constraint
-        | F::Calc => return None,
-        F::Item => F::Occurrence,
-        F::Part => F::Item,
-        F::Action => F::Occurrence,
-        F::State => F::Action,
-        F::Case => F::Action,
-        F::UseCase => F::Case,
-        F::AnalysisCase => F::Case,
-        F::VerificationCase => F::Case,
-        F::Connection => F::Occurrence,
-        F::Interface => F::Connection,
-        F::Flow => F::Connection,
-        F::Allocation => F::Connection,
-        F::Enumeration => F::Attribute,
-        F::Requirement => F::Constraint,
-        F::Concern => F::Requirement,
-    })
-}
-
-/// Whether `family` is an occurrence family: `Occurrence` itself or one specialising it.
-///
-/// SysML's flow payload rule is about occurrences, and the occurrence families are exactly those
-/// under `Occurrence` in the hierarchy above -- part, item, action, state, connection and the rest.
-/// Asking the hierarchy keeps the rule from naming a library type.
-pub(crate) fn descends_from_occurrence(family: Family) -> bool {
-    descends_from(family, Family::Occurrence)
-}
-
-/// Whether `descendant` is `ancestor` or specialises it, transitively.
-pub(crate) fn descends_from(descendant: Family, ancestor: Family) -> bool {
-    let mut cursor = Some(descendant);
-    while let Some(current) = cursor {
-        if current == ancestor {
-            return true;
-        }
-        cursor = parent(current);
-    }
-    false
+/// The classifier metaclasses `kind` conforms to, or `None` when it is not a Classifier.
+pub(crate) fn classifier_metaclass(kind: ElementKind) -> Option<ClassifierMetaclass> {
+    kind.conforms_to(ElementKind::Classifier)
+        .then(|| ClassifierMetaclass {
+            data_type: kind.conforms_to(ElementKind::DataType),
+            class: kind.conforms_to(ElementKind::Class),
+            association: kind.conforms_to(ElementKind::Association),
+            structure: kind.conforms_to(ElementKind::Structure),
+            behavior: kind.conforms_to(ElementKind::Behavior),
+        })
 }
 
 /// Whether a reference from a `source`-family declaration may target a `target`-family one.
@@ -374,13 +164,20 @@ impl<D> SemanticModel<D> {
             return Ok(());
         }
         let mut affected = std::collections::BTreeMap::new();
+        // One scan of the memberships for every conditional predicate below, rather than one per
+        // predicate call; a storage error is reported instead of reading as "does not hold".
+        let variant_members =
+            crate::resolve::usage_composition::variant_member_flags(&self.storage)?;
         for declaration in declared.iter().copied() {
             let Some(declaration_record) = self.storage.declaration(declaration) else {
                 return Err(ResolutionError::InvalidStorage);
             };
-            for rule in library_specialization_rules(library_specialization_metaclass(
+            let metaclasses = crate::resolve::implied::applicable_library_metaclasses(
+                &self.storage,
+                declaration,
                 declaration_record.kind,
-            )) {
+            );
+            for rule in metaclasses.iter().flat_map(|metaclass| metaclass.rules()) {
                 let Some(outcome) = self.resolution.library_specialization_anchor(rule.rule_id)
                 else {
                     return Err(ResolutionError::InvalidStorage);
@@ -399,11 +196,13 @@ impl<D> SemanticModel<D> {
                         crate::LibrarySpecializationAnchorBranch::Default,
                     ));
             }
-            for rule in conditional_library_specialization_rules(library_specialization_metaclass(
-                declaration_record.kind,
-            )) {
-                if !conditional_library_specialization_predicate_holds(
+            for rule in metaclasses
+                .iter()
+                .flat_map(|metaclass| metaclass.conditional_rules())
+            {
+                if !conditional_library_specialization_predicate_holds_with_variants(
                     &self.storage,
+                    &variant_members,
                     declaration,
                     rule,
                 ) {
@@ -433,6 +232,27 @@ impl<D> SemanticModel<D> {
                 affected
                     .entry(LibrarySpecializationDiagnosticKey { anchor, document })
                     .or_insert((declaration, rule.rule_id, branch));
+            }
+            if self.storage.individual_multiplicity(declaration).is_some() {
+                let rule = crate::resolve::implied::specialization_check_rule(
+                    crate::specialization_query::SpecializationCheckKind::OccurrenceDefinitionMultiplicity,
+                ).ok_or(ResolutionError::InvalidStorage)?;
+                let outcome = self
+                    .resolution
+                    .library_specialization_anchor(rule.rule_id)
+                    .ok_or(ResolutionError::InvalidStorage)?;
+                if !matches!(outcome, LibrarySpecializationAnchor::Resolved(_)) {
+                    affected
+                        .entry(LibrarySpecializationDiagnosticKey {
+                            anchor: crate::resolve::implied::INDIVIDUAL_MULTIPLICITY_ANCHOR,
+                            document,
+                        })
+                        .or_insert((
+                            declaration,
+                            rule.rule_id,
+                            crate::LibrarySpecializationAnchorBranch::Default,
+                        ));
+                }
             }
         }
 
@@ -507,10 +327,10 @@ impl<D> SemanticModel<D> {
                 // Counted over authored references rather than settled operands: whether the
                 // author wrote one target does not depend on whether it resolved.
                 let mut authored = self
-                    .storage
-                    .references
+                    .outgoing_reference_ids(id)
                     .iter()
-                    .filter(|reference| reference.source == id && reference.kind == kind);
+                    .filter_map(|reference| self.storage.references.get(reference.index()))
+                    .filter(|reference| reference.kind == kind);
                 let Some(only) = authored.next() else {
                     continue;
                 };
@@ -618,6 +438,20 @@ impl<D> SemanticModel<D> {
             let Some(ResolutionStatus::Resolved(target)) = self.resolution.outcome(id) else {
                 continue;
             };
+            // KerML 8.3.3.1.10 `validateType{Unioning,Intersecting,Differencing}TypesNotSelf`:
+            // a type-relationship operand is never the declaring type itself.
+            if matches!(
+                reference.kind,
+                ReferenceKind::Unioning | ReferenceKind::Intersecting | ReferenceKind::Differencing
+            ) && target == reference.source
+            {
+                diagnostics.push(self.reference_diagnostic(
+                    reference,
+                    DiagnosticCode::TypeRelationshipOperandIsSelf,
+                    DiagnosticSeverity::Error,
+                    None,
+                )?);
+            }
             self.check_reference_kind(reference, target, diagnostics)?;
             self.check_reference_conformance(reference, target, diagnostics)?;
         }
@@ -630,6 +464,101 @@ impl<D> SemanticModel<D> {
         target: DeclarationId,
         diagnostics: &mut Vec<Diagnostic>,
     ) -> Result<(), ResolutionError> {
+        // KerML 8.3.4.1.2/8.3.4.2.2/8.3.4.3.2/8.3.4.6.2 `validate{DataType,Class,Structure,
+        // Behavior}Specialization` are metaclass tests over an owned Specialization's general,
+        // and apply to every KerML and SysML classifier alike.
+        if reference.kind == ReferenceKind::Subclassification
+            && self.kerml_specialization_incompatible(reference.source, target)
+        {
+            diagnostics.push(self.reference_diagnostic(
+                reference,
+                DiagnosticCode::IncompatibleSpecializationKind,
+                DiagnosticSeverity::Warning,
+                Some(target),
+            )?);
+            return Ok(());
+        }
+        let metaclass = |declaration: DeclarationId| {
+            self.storage
+                .declaration(declaration)
+                .map(|declaration| element_kind(declaration.kind))
+        };
+        let conforms = |declaration: DeclarationId, general: ElementKind| {
+            metaclass(declaration).is_some_and(|kind| kind.conforms_to(general))
+        };
+        // KerML 8.3.3.2 `Subclassification::superclassifier : Classifier`. `part def V8 :>
+        // engine;`, where `engine` is a part usage, names a feature where a classifier's `:>`
+        // names the classifiers it specializes.
+        if reference.kind == ReferenceKind::Subclassification
+            && conforms(reference.source, ElementKind::Classifier)
+            && conforms(target, ElementKind::Feature)
+        {
+            diagnostics.push(self.reference_message_diagnostic(
+                reference,
+                DiagnosticCode::IncompatibleSpecializationKind,
+                DiagnosticSeverity::Error,
+                format!(
+                    "A definition specializes definitions, but '{}' is a usage. Specialize its \
+                     definition, or declare a usage that subsets it.",
+                    self.display_name(target)
+                ),
+                Some((target, RELATED_DECLARED)),
+            )?);
+            return Ok(());
+        }
+        // KerML 8.3.3.3.10 `Subsetting::subsettedFeature : Feature`, which `Redefinition`,
+        // `ReferenceSubsetting` and `CrossSubsetting` inherit. `part engine :> Engine;`, where
+        // `Engine` is a part definition, names a classifier where a usage's `:>` names the
+        // features it subsets.
+        if matches!(
+            reference.kind,
+            ReferenceKind::Subsetting
+                | ReferenceKind::Redefinition
+                | ReferenceKind::References
+                | ReferenceKind::Crosses
+        ) && conforms(reference.source, ElementKind::Feature)
+            && conforms(target, ElementKind::Classifier)
+        {
+            let relationship = match reference.kind {
+                ReferenceKind::Redefinition => "redefines",
+                ReferenceKind::References => "references",
+                ReferenceKind::Crosses => "crosses",
+                _ => "subsets",
+            };
+            diagnostics.push(self.reference_message_diagnostic(
+                reference,
+                DiagnosticCode::IncompatibleSubsettingKind,
+                DiagnosticSeverity::Error,
+                format!(
+                    "A usage {relationship} usages, but '{}' is a definition. Use ':' to type \
+                     it by the definition.",
+                    self.display_name(target)
+                ),
+                Some((target, RELATED_DECLARED)),
+            )?);
+            return Ok(());
+        }
+        // SysML `Usage::definition : Classifier` redefines `Feature::type`, so every type of a
+        // usage is a classifier. `out power : electricPower;`, where `electricPower` is an
+        // attribute usage, types a feature by a feature. KerML has no such restriction (a
+        // Feature is a Type), so this applies to SysML usages only.
+        if reference.kind == ReferenceKind::FeatureTyping
+            && conforms(reference.source, ElementKind::Usage)
+            && conforms(target, ElementKind::Feature)
+        {
+            diagnostics.push(self.reference_message_diagnostic(
+                reference,
+                DiagnosticCode::IncompatibleTypeKind,
+                DiagnosticSeverity::Error,
+                format!(
+                    "A usage is typed by a definition, but '{}' is a usage. Use ':>' to \
+                     specialize it, or type by its definition.",
+                    self.display_name(target)
+                ),
+                Some((target, RELATED_DECLARED)),
+            )?);
+            return Ok(());
+        }
         let (Some((source_family, source_role)), Some((target_family, target_role))) = (
             self.declaration_family(reference.source),
             self.declaration_family(target),
@@ -639,8 +568,6 @@ impl<D> SemanticModel<D> {
 
         let code = match reference.kind {
             ReferenceKind::FeatureTyping => {
-                // A usage is typed by a definition. A typing whose target is another usage is a
-                // different relationship shape, not a kind violation this rule can judge.
                 if source_role != Role::Usage || target_role != Role::Definition {
                     return Ok(());
                 }
@@ -690,6 +617,33 @@ impl<D> SemanticModel<D> {
             Some(target),
         )?);
         Ok(())
+    }
+
+    /// Whether `specific`'s metaclass may not specialize `general`'s under the KerML classifier
+    /// specialization rules: a DataType specializes no Class or Association, a Class no DataType
+    /// and no Association unless it is one, a Structure no Behavior, and a Behavior no Structure.
+    pub(crate) fn kerml_specialization_incompatible(
+        &self,
+        specific: DeclarationId,
+        general: DeclarationId,
+    ) -> bool {
+        let (Some(specific), Some(general)) = (
+            self.storage.declaration(specific),
+            self.storage.declaration(general),
+        ) else {
+            return false;
+        };
+        let (Some(specific), Some(general)) = (
+            classifier_metaclass(element_kind(specific.kind)),
+            classifier_metaclass(element_kind(general.kind)),
+        ) else {
+            return false;
+        };
+        (specific.data_type && (general.class || general.association))
+            || (specific.class
+                && (general.data_type || (general.association && !specific.association)))
+            || (specific.structure && general.behavior)
+            || (specific.behavior && general.structure)
     }
 
     /// KerML §8.3.3.3.10 and §8.4.3.4: a specializing feature's co-domain and multiplicity must
@@ -770,17 +724,27 @@ impl<D> SemanticModel<D> {
         &self,
         declaration: DeclarationId,
     ) -> Option<(i64, Option<i64>)> {
-        let multiplicity = self
-            .storage
-            .declaration_facts(declaration)?
-            .multiplicity
-            .as_ref()?;
+        Self::literal_bounds(
+            self.storage
+                .declaration_facts(declaration)?
+                .multiplicity
+                .as_ref()?,
+        )
+    }
+
+    /// The `[lower..upper]` of one authored multiplicity when both bounds fold to literals, with
+    /// `None` as the upper bound standing for unbounded. `None` when a bound is an expression or
+    /// the literal bounds admit nothing, so the question stays unanswered rather than guessed.
+    pub(crate) fn literal_bounds(multiplicity: &MultiplicityRecord) -> Option<(i64, Option<i64>)> {
         // The single-bound spelling `[3]` reaches this fact family already expanded to `[3..3]`,
         // so an `Unbounded` upper here is always an authored `*`, never an omitted bound.
         let (lower, upper) = match (multiplicity.lower, multiplicity.upper) {
             // An expression bound needs operand resolution to compare, which this fact family does
             // not perform, so the question stays unanswered on either side.
-            (MultiplicityBound::Expression, _) | (_, MultiplicityBound::Expression) => return None,
+            (MultiplicityBound::Expression | MultiplicityBound::NonIntegerLiteral, _)
+            | (_, MultiplicityBound::Expression | MultiplicityBound::NonIntegerLiteral) => {
+                return None
+            }
             (MultiplicityBound::Literal(lower), MultiplicityBound::Unbounded) => (lower, None),
             (MultiplicityBound::Literal(lower), MultiplicityBound::Literal(upper)) => {
                 (lower, Some(upper))
@@ -794,17 +758,18 @@ impl<D> SemanticModel<D> {
         Some((lower, upper))
     }
 
-    /// Reports every declaration in `document` that reaches itself through specialization.
+    /// Reports every declaration in `document` whose specialization cycle is entirely closed and
+    /// does not include `Base::Anything`.
     ///
-    /// The closure already computed this while it saturated; the legacy check rediscovered it with
-    /// a depth-first search per node over the whole graph.
+    /// KerML 7.3.2.3 allows other specialization cycles as shared extent (the SelfLink ends
+    /// idiom). The closure already classified each declaration while it saturated.
     pub(crate) fn collect_specialization_cycles(
         &self,
         declared: &[DeclarationId],
         diagnostics: &mut Vec<Diagnostic>,
     ) -> Result<(), ResolutionError> {
         for id in declared.iter().copied() {
-            if !self.types.specialization().is_cyclic(id) {
+            if !self.types.specialization().is_invalid_closed_cycle(id) {
                 continue;
             }
             diagnostics.push(self.declaration_diagnostic(

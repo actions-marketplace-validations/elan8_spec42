@@ -113,7 +113,6 @@ For normal embedded builds, fetch or place KPAR archives under the unified local
 .cache/
   sysml-stdlib-kpar-<version>/     # OMG .kpar files (one per library)
   elan8-domain-libraries-<version>.kpar
-  elan8-method-libraries-<version>.kpar
 ```
 
 Refresh the OMG stdlib and managed library archives with:
@@ -275,7 +274,7 @@ cargo test -p server --test integration kitchen_timer_check -- --include-ignored
 
 | Integration test | Surface |
 | --- | --- |
-| `cli_ai_tools` | CLI JSON output for `explain-diagnostic` / `model-summary` |
+| `cli_ai_tools` | CLI JSON output for `explain-diagnostic` / `model-export` |
 | `kitchen_timer_check` | `perform_check` smoke on bundled example |
 | `kpar_stdlib_embed_smoke` | Embedded OMG KPAR stdlib resolves `ScalarValues::Real` |
 | `multi_file_check` | Multi-file workspace import smoke |
@@ -285,11 +284,16 @@ CI runs core and agent CLI layers as separate jobs (see `.github/workflows/ci.ym
 Focused LSP integration tests:
 
 ```bash
-cargo test -p lsp_server --test lsp_integration
+cargo test -p lsp_server --test lsp_integration -- --test-threads=1
 ```
 
 The LSP integration test modules live under `crates/lsp_server/tests/integration/`. Use
 `harness::TestSession` for new tests to avoid duplicated initialize/open/request boilerplate.
+The harness terminates and waits for every spawned server on exit, including test panics.
+Synthetic file URIs use `file:///c:/spec42-lsp-tests/`: the drive-qualified path is valid on
+Windows and remains an absolute path on Unix. For real files, use `Url::from_file_path` and
+compare returned identities with the facade's `source::normalize_uri`.
+Run one Cargo invocation at a time per target directory to avoid Windows executable locks.
 
 ### SysML v2 validation suite
 
@@ -347,6 +351,51 @@ Spec42 emits structured performance logs when `spec42.performanceLogging.enabled
 Performance measurements are gathered locally on controlled hardware and reviewed with the change;
 they are not CI gates.
 
+### Editor notification baseline
+
+Build the optimized normal LSP host with its pinned libraries, then measure single full-text edits and bursts without
+writing the edited source file:
+
+```powershell
+cargo build --offline --release -p server --bin spec42
+python scripts/benchmark-editor.py --server target/release/spec42.exe --server-arg=lsp --profile release --workspace ../sysml-robot-vacuum-cleaner --document ../sysml-robot-vacuum-cleaner/model/Root.sysml --iterations 20 --burst-size 10 --output target/editor-robot-vacuum.json
+```
+
+Choose an existing source document in the workspace for `--document`.
+Use `--change-kind incremental` to send ordered UTF-16 range edits instead of full-text updates.
+For another host, use `--server-arg` for its LSP command-line arguments.
+The report keeps raw messages, per-version samples, p50/p95/max, binary/input/configuration hashes,
+revision, dirty-tree state, build-profile label and host metadata. Check the profile against the
+actual binary build; the runner does not build or download anything.
+The normal host's `sysml/libraryStatus` response is retained and must confirm the pinned standard
+library is available. Missing-library-context diagnostics fail a representative run. The core test
+host intentionally has no libraries by default: use `--allow-missing-libraries` only for explicitly
+labelled discovery/negative-control runs, which do not establish representative editor performance.
+
+The #192 probe records edit ingestion separately from version-correlated diagnostic delivery.
+By default, each single edit and the final version of each burst must receive matching versioned
+`publishDiagnostics` and a publication phase record. Intermediate burst versions without an observed
+notification remain `coalesced_or_unobserved`; their diagnostic latency is `null`, never the final
+version's latency. `--completion-scope handler` explicitly retains the older handler-only baseline
+scope for binaries that predate versioned diagnostic delivery.
+
+Hosts emit `backend:publication` records with a complete `editorVersions` map and model digest, plus
+preparation and queue time, construction wall time, canonical parse/lower/resolve/evaluate/index/check
+costs, admission and diagnostic fanout. The construction `resolutionTotalMs` contains its
+resolve/evaluate/index/check subphases; do not add it to those subphases. `namespaceChecksMs` is
+measured inside `checksMs`; do not add it to the containing check duration. Missing phase records
+remain explicit `null` values.
+
+On Windows the runner records cumulative process user/kernel CPU time, working set, commit charge
+and process-lifetime peaks after receiving each completion. The resource observation has its own
+timestamp; it is not synchronized with a semantic phase. Unsupported platforms or counter errors
+stay explicit as unavailable. Compare CPU deltas with `resources_before_edits`, rather than treating
+the cumulative counters as per-edit CPU time.
+
+Representative version-correlated diagnostic measurements and VS Code view-refresh costs remain
+release acceptance work. Failed or timed-out runs retain a failed report and stderr; timings from debug runs are
+smoke-test evidence only.
+
 ### Query benchmarks
 
 A representation change is admitted with a benchmark showing it neutral-or-better on the bundled standard-library corpus. The six cases are the cold build, the warm relink one keystroke costs, and the four keystroke-path queries:
@@ -369,7 +418,7 @@ metadata. The divan set remains the admission benchmark; none of these host timi
 
 ## AI assistants
 
-**VS Code extension (Copilot Agent):** requires `engines.vscode` **^1.99.0** for Language Model Tools. Four tools in `vscode/package.json` `contributes.languageModelTools` are registered from `vscode/src/lmTools/` and invoke the same `spec42` binary as the LSP (`check`, `doctor`, `explain-diagnostic`, `model-summary` with `--format json`).
+**VS Code extension (Copilot Agent):** requires `engines.vscode` **^1.99.0** for Language Model Tools. Four tools in `vscode/package.json` `contributes.languageModelTools` are registered from `vscode/src/lmTools/` and invoke the same `spec42` binary as the LSP (`check`, `doctor`, `explain-diagnostic`, `model-export` with `--format json`).
 
 **Other AI hosts (Copilot, Cursor, …):** use the CLI directly plus a per-host skill/instructions doc. Setup: [`docs/user/AI-ASSISTANTS.md`](docs/user/AI-ASSISTANTS.md).
 
@@ -381,7 +430,7 @@ cargo test -p server --test integration kitchen_timer_check -- --include-ignored
 cd vscode && npm run compile && npm run test:lm-cli-unit
 ```
 
-`cli_ai_tools` asserts CLI JSON output for `explain-diagnostic` / `model-summary` on the KitchenTimer fixture.
+`cli_ai_tools` asserts CLI JSON output for `explain-diagnostic` / `model-export` on the KitchenTimer fixture.
 
 ## Validation Pipeline
 
@@ -401,21 +450,24 @@ Example workspaces are versioned as a Git submodule at the **repository root**:
 
 - `examples/` → [elan8/sysml-examples](https://github.com/elan8/sysml-examples)
 
-Elan8 domain and method libraries are **bundled inside the Spec42 server binary** as separate **KPAR** archives. Pins live in [`config/libraries/`](config/libraries) (`domain.json`, `method.json`). CI fetches or packs them with `scripts/fetch-kpar-libraries-bundle.sh` before building.
+Elan8 domain libraries are **bundled inside the Spec42 server binary** as a **KPAR** archive. Pins live in [`config/libraries/`](config/libraries) (`domain.json`). CI fetches or packs them with `scripts/fetch-kpar-libraries-bundle.sh` before building.
 
 The OMG standard library is bundled from `sysml.library.kpar` at the pinned SysML v2 Release tag (see `config/standard-library.json`). CI fetches only that directory via sparse git checkout in `scripts/fetch-stdlib-bundle.sh` before building.
 
 For local development, `build.rs` prefers, in order (per managed library):
 
-1. `SPEC42_KPAR_LIBRARY_BUNDLE_<ID>` (path to `.kpar`, CI/release; legacy `SPEC42_DOMAIN_LIBRARIES_BUNDLE_ZIP` still maps to domain)
-2. `SPEC42_KPAR_LIBRARY_SOURCE_DIR_<ID>` (pack on the fly with `spec42 bundle`; the source root must contain its authoritative `.project.json`)
-3. A sibling checkout from `pack.siblingRelative` in the library config (packed when no cached bundle exists)
-4. Cached `.cache/<artifact>` from the library pin
+1. `SPEC42_KPAR_LIBRARY_SOURCE_DIR_<ID>`, packed on the fly. The source root must contain its authoritative `.project.json` at the pinned version; anything else fails the build.
+2. A sibling checkout from `pack.siblingRelative` in the library config, packed the same way. A sibling without `.project.json` or at another version is skipped with a build warning.
+3. The archive an earlier build embedded, when it is still usable.
+4. `SPEC42_KPAR_LIBRARY_BUNDLE_<ID>` (path to `.kpar`, CI/release; legacy `SPEC42_DOMAIN_LIBRARIES_BUNDLE_ZIP` still maps to domain), then the cached `.cache/<artifact>` from the library pin.
+
+Packing from source is always `spec42 bundle` of the checkout, with the config's `pack.archivePrefix` and `pack.exclude`. The library's own release workflow packs the same way, so a local pack of a release tag is byte-identical to the published archive. `scripts/fetch-kpar-libraries-bundle.sh` uses the same fields when no release asset can be downloaded.
 
 Domain library releases are published from [elan8/sysml-domain-libraries](https://github.com/elan8/sysml-domain-libraries) via the `release-kpar` GitHub Action when a `v*` tag is pushed. Pack locally with:
 
 ```bash
-cargo run -p server --no-default-features --bin spec42 -- bundle ../sysml-domain-libraries -o elan8-domain-libraries-0.3.0.kpar
+cargo run -p server --no-default-features --bin spec42 -- bundle ../sysml-domain-libraries -o elan8-domain-libraries-0.4.0.kpar \
+  --exclude .git --exclude docs --exclude scripts --exclude examples --exclude model/Examples.sysml
 ```
 
 `vscode/.gitignore` ignores `vscode/examples` so duplicate checkouts under `vscode/` are not committed. If you see the same example folders twice in the Spec42 **Examples** view, remove the extra copy under `vscode/examples` and keep the root submodule.
@@ -445,3 +497,28 @@ For the lighter Extension Development Host workflow:
 3. Press F5 to launch the Extension Development Host.
 4. Open a folder containing `.sysml` or `.kerml` files.
 5. Use Feature Inspector, hover, definition, references, and `spec42 check` to compare editor and CLI behavior.
+
+## Concurrent publication stress
+
+Build the real workloads explicitly, then repeat the full snapshot corpus and full LSP integration
+suite together. The runner performs no builds or downloads. Cargo's JSON output identifies the
+integration executable without guessing a hashed filename:
+
+```sh
+cargo build --release -p spec42-snapshot
+cargo test -p lsp_server --test lsp_integration --no-run --message-format=json > target/lsp-test-artifacts.json
+python3 scripts/stress-publication.py --lsp-artifacts target/lsp-test-artifacts.json --repetitions 25 --jobs 2 --cpu-workers 2
+```
+
+`--cpu-workers` adds independent busy processes; use the local CPU count to reproduce full CPU
+contention. Each workload has a 900-second outer budget by default. The snapshot operation gets a
+30-second shorter budget so its active-fixture dump reaches the log before outer termination. The
+LSP harness additionally ends each stalled server after 300 seconds and reports its thread states
+and stderr. A timeout ends the owned process tree, returns a failure and retains the diagnostic log.
+`target/publication-stress/summary.json` records the commit, workload, concurrency, repetitions,
+budgets, exit codes, durations and per-run log paths. Any failed repetition makes the command fail.
+
+The required **Rust tests (pinned SysML release)** job reads the repository and tag from
+`config/standard-library.json`, checks out that exact release and runs
+`lsp_workspace_scan_sysml_release`. Its result participates in **Rust core checks**; missing release
+input is a gate failure rather than a skipped test.

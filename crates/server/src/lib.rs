@@ -1,12 +1,9 @@
-#![recursion_limit = "256"]
-
 //! Spec42 CLI and MCP shared implementation.
 
 pub mod ai_tools;
 pub mod cli;
 pub mod diagnostic_catalog;
-#[cfg(test)]
-pub mod elk_layout;
+pub mod diagram;
 pub mod environment;
 pub mod generation;
 pub mod headless_renderer;
@@ -14,6 +11,7 @@ pub mod host_snapshot;
 pub mod kpar_libraries;
 pub mod library_bundle;
 pub mod library_status_rpc;
+pub mod model_projection;
 pub mod reports;
 pub mod starter_workspace;
 pub mod stdlib;
@@ -23,17 +21,20 @@ use std::path::PathBuf;
 use std::process::ExitCode;
 use std::sync::Arc;
 
-use ai_tools::{perform_explain_diagnostic, perform_model_summary};
+use ai_tools::{perform_explain_diagnostic, perform_model_export};
 use cli::{
     BundleArgs, CheckArgs, Cli, Command, DoctorArgs, ExplainDiagnosticArgs, InitArgs,
-    LibrariesCommand, ModelSummaryArgs, OutputFormat, StdlibCommand, SysandCommand, UnbundleArgs,
+    LibrariesCommand, ModelExportArgs, OutputFormat, StdlibCommand, SysandCommand, UnbundleArgs,
 };
 pub use environment::DoctorReport;
 use environment::{build_doctor_report, build_engine, resolve_environment};
 use reports::{apply_baseline, emit_validation_report};
 use serde::Serialize;
 use stdlib::{managed_status, remove_standard_library};
-use workspace::{validate_paths, HostValidationReport, HostValidationSummary, ValidationRequest};
+use sysml_query::resolved_slice::PublishedModel;
+use workspace::{
+    validate_and_publish_paths, HostValidationReport, HostValidationSummary, ValidationRequest,
+};
 
 /// Run validation for the given CLI environment and [`CheckArgs`] (same logic as `spec42 check`).
 ///
@@ -41,9 +42,18 @@ use workspace::{validate_paths, HostValidationReport, HostValidationSummary, Val
 /// nothing to it: a workspace that needs library roots says so through the diagnostics the
 /// publication settled, which is what the advice is derived from.
 pub fn perform_check(cli: &Cli, args: &CheckArgs) -> Result<HostValidationReport, String> {
+    Ok(perform_check_with_publication(cli, args)?.0)
+}
+
+/// Like [`perform_check`], but also returns the publication the report was assembled from, for a
+/// caller that needs the resolved structure (`model-export`'s typed projection).
+pub fn perform_check_with_publication(
+    cli: &Cli,
+    args: &CheckArgs,
+) -> Result<(HostValidationReport, Arc<PublishedModel>), String> {
     let environment = resolve_environment(cli)?;
     let engine = build_engine(cli)?;
-    validate_paths(
+    validate_and_publish_paths(
         &engine,
         &[],
         ValidationRequest {
@@ -62,38 +72,28 @@ pub fn perform_doctor(cli: &Cli) -> Result<DoctorReport, String> {
     build_doctor_report("doctor", &environment)
 }
 
-#[derive(Debug, Clone, Serialize)]
-pub struct ModelSummaryTruncation {
-    pub nodes_total: usize,
-    pub nodes_returned: usize,
-    pub relationships_total: usize,
-    pub relationships_returned: usize,
-}
-
-#[derive(Debug, Clone, Serialize)]
-pub struct ModelSummaryResponse {
+#[derive(Debug, Serialize)]
+pub struct ModelExportResponse {
     pub workspace_root: Option<String>,
     pub summary: HostValidationSummary,
-    pub truncation: ModelSummaryTruncation,
+    /// The typed, `schema_version`-stamped projection of the publication's workspace-authored
+    /// structure, including its own `truncation` record. Read-only; see `sysml_query`'s
+    /// `projection` contract.
+    pub projection: model_projection::ModelProjectionJson,
 }
 
-/// Narrow summary while a typed model-summary projection is defined.
-pub fn build_model_summary(
+/// The bounded typed model export: the validation summary plus the read-only projection of the
+/// publication (#157). `max_nodes` bounds the projected element list.
+pub fn build_model_export(
     report: HostValidationReport,
-    _max_nodes: usize,
-) -> ModelSummaryResponse {
-    // TODO(follow-up): expose a bounded typed summary from PublishedModel. Do not recreate the
-    // retired graph DTO here; until that owner exists, diagnostics are the complete supported
-    // result and semantic nodes/relationships are explicitly absent.
-    ModelSummaryResponse {
+    model: &PublishedModel,
+    max_nodes: usize,
+) -> ModelExportResponse {
+    let projection = model_projection::model_projection_json(model, max_nodes);
+    ModelExportResponse {
         workspace_root: report.workspace_root,
         summary: report.summary,
-        truncation: ModelSummaryTruncation {
-            nodes_total: 0,
-            nodes_returned: 0,
-            relationships_total: 0,
-            relationships_returned: 0,
-        },
+        projection,
     }
 }
 
@@ -108,9 +108,10 @@ pub async fn run_cli(cli: Cli) -> Result<ExitCode, String> {
         Some(Command::Check(args)) => run_check(&cli, args),
         Some(Command::Init(args)) => run_init(&cli, args),
         Some(Command::Generate(args)) => generation::run_generate(&cli, args),
+        Some(Command::Diagram(args)) => diagram::run_diagram(&cli, args),
         Some(Command::Doctor(args)) => run_doctor(&cli, args),
         Some(Command::ExplainDiagnostic(args)) => run_explain_diagnostic(&cli, args),
-        Some(Command::ModelSummary(args)) => run_model_summary(&cli, args),
+        Some(Command::ModelExport(args)) => run_model_export(&cli, args),
         Some(Command::Bundle(args)) => run_bundle(args),
         Some(Command::Unbundle(args)) => run_unbundle(args),
         Some(Command::Sysand { command }) => run_sysand(command),
@@ -154,25 +155,16 @@ fn run_bundle(args: &BundleArgs) -> Result<ExitCode, String> {
         .output
         .clone()
         .unwrap_or_else(|| PathBuf::from(format!("{}-{}.kpar", project.name, project.version)));
-    kpar::build_kpar(
-        &kpar::PackOptions {
-            project,
-            source_roots: Vec::new(),
-            named_source_roots: vec![(
-                (args.archive_prefix.clone().unwrap_or_default()),
-                args.directory.clone(),
-            )],
-            excludes: args.excludes.clone(),
-            timestamp: kpar::ArchiveTimestamp::default(),
-            compression: if args.no_compress {
-                kpar::ArchiveCompression::Stored
-            } else {
-                kpar::ArchiveCompression::Deflated
-            },
-        },
-        &output,
-    )
-    .map_err(|error| error.to_string())?;
+    let mut options = kpar::PackOptions::bundle(
+        project,
+        args.directory.clone(),
+        args.archive_prefix.clone(),
+        args.excludes.clone(),
+    );
+    if args.no_compress {
+        options.compression = kpar::ArchiveCompression::Stored;
+    }
+    kpar::build_kpar(&options, &output).map_err(|error| error.to_string())?;
     println!(
         "Bundled {} into {}",
         args.directory.display(),
@@ -302,10 +294,10 @@ fn run_explain_diagnostic(cli: &Cli, args: &ExplainDiagnosticArgs) -> Result<Exi
     Ok(ExitCode::SUCCESS)
 }
 
-fn run_model_summary(cli: &Cli, args: &ModelSummaryArgs) -> Result<ExitCode, String> {
-    let summary = perform_model_summary(
+fn run_model_export(cli: &Cli, args: &ModelExportArgs) -> Result<ExitCode, String> {
+    let export = perform_model_export(
         cli,
-        &ai_tools::ModelSummaryArgs {
+        &ai_tools::ModelExportArgs {
             path: args.path.clone(),
             workspace_root: args.workspace_root.clone(),
             max_nodes: args.max_nodes,
@@ -315,14 +307,14 @@ fn run_model_summary(cli: &Cli, args: &ModelSummaryArgs) -> Result<ExitCode, Str
         OutputFormat::Json => {
             println!(
                 "{}",
-                serde_json::to_string_pretty(&summary)
-                    .map_err(|err| format!("Failed to serialize model-summary as JSON: {err}"))?
+                serde_json::to_string_pretty(&export)
+                    .map_err(|err| format!("Failed to serialize model-export as JSON: {err}"))?
             );
         }
-        OutputFormat::Text => print_model_summary(&summary),
+        OutputFormat::Text => print_model_export(&export),
         other => {
             return Err(format!(
-                "model-summary supports text and json output, not {other:?}."
+                "model-export supports text and json output, not {other:?}."
             ));
         }
     }
@@ -701,20 +693,38 @@ fn print_explain_diagnostic(response: &ai_tools::ExplainDiagnosticResponse) {
     }
 }
 
-fn print_model_summary(summary: &ModelSummaryResponse) {
+fn print_model_export(export: &ModelExportResponse) {
     println!(
         "summary: {} error(s), {} warning(s), {} info",
-        summary.summary.error_count,
-        summary.summary.warning_count,
-        summary.summary.information_count
+        export.summary.error_count, export.summary.warning_count, export.summary.information_count
+    );
+    let envelope = &export.projection.envelope;
+    println!(
+        "publication: {}{}, evaluation {}",
+        if envelope.complete {
+            "complete"
+        } else {
+            "incomplete"
+        },
+        if envelope.obstacles.is_empty() {
+            String::new()
+        } else {
+            format!(" ({})", envelope.obstacles.join(","))
+        },
+        if envelope.has_evaluation { "on" } else { "off" },
+    );
+    let truncation = &export.projection.truncation;
+    println!(
+        "elements: {}/{}, incomplete: {}, connectors: {} (projection schema v{})",
+        truncation.elements_returned,
+        truncation.elements_total,
+        truncation.elements_incomplete,
+        export.projection.connectors.len(),
+        export.projection.schema_version,
     );
     println!(
-        "nodes: {}/{} (truncated)",
-        summary.truncation.nodes_returned, summary.truncation.nodes_total
-    );
-    println!(
-        "relationships: {}/{}",
-        summary.truncation.relationships_returned, summary.truncation.relationships_total
+        "admitted libraries: standard {} / library {} / external {}",
+        envelope.admitted.standard_library, envelope.admitted.library, envelope.admitted.external,
     );
 }
 

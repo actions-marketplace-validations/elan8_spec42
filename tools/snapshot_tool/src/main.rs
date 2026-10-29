@@ -9,14 +9,15 @@
 //! The library sources are then admitted as `StandardLibrary`-role documents, so the fixture's
 //! references resolve against them while the owned projections keep reporting only the fixture's
 //! own authored documents.
-#![recursion_limit = "256"]
+
+mod watchdog;
 
 use std::collections::{BTreeMap, BTreeSet, HashSet};
 use std::fmt::Write as _;
 use std::fs;
 use std::io::Write as _;
 use std::path::{Path, PathBuf};
-use std::sync::{Arc, OnceLock};
+use std::sync::Arc;
 
 use clap::{Parser, Subcommand};
 use generator_api::{ArtifactLimits, DiagramSemanticReference, GeneratorModelView, QueryLimits};
@@ -37,20 +38,21 @@ use spec42_constraint_manifest::{
     TypeDerivedRelationshipKind,
 };
 use sysml_query::resolved_slice::{
-    ActionDerivedFactCollection, ActionDerivedFactOutcome, AnnotationForm,
-    BindingConnectorValidationOutcome, BindingConnectorValidationPrerequisite,
-    DefinitionUsageDerivedOutcome, DefinitionUsageDerivedPrerequisite, DerivedElementOwner,
-    Documentation, EditorProbe, ElementDerivedDocumentationCollection, ElementKind,
-    FeatureDerivedRelationshipCollection, NamespaceDerivedElementCollection, PublishedModel,
-    QualifiedElementReference, QualifiedReferenceOutcome, QualifiedReferenceProbe, QueryAnswer,
-    QueryOutcome, RedefinitionCheckOutcome, RedefinitionCheckPrerequisite, RelationshipProvenance,
+    ActionDerivedFactCollection, ActionDerivedFactOutcome, ActionDerivedFactPrerequisite,
+    AnnotationForm, AnonymousElementReference, BindingConnectorValidationOutcome,
+    BindingConnectorValidationPrerequisite, DefinitionUsageDerivedOutcome,
+    DefinitionUsageDerivedPrerequisite, DerivedElementOwner, Documentation, EditorProbe,
+    ElementDerivedDocumentationCollection, ElementKind, FeatureDerivedRelationshipCollection,
+    NamespaceDerivedElementCollection, PublishedModel, QualifiedElementReference,
+    QualifiedReferenceOutcome, QualifiedReferenceProbe, QueryAnswer, QueryOutcome,
+    RedefinitionCheckOutcome, RedefinitionCheckPrerequisite, RelationshipProvenance,
     RelationshipTarget, RequirementDerivedFactCollection, RequirementDerivedFactOutcome,
     RequirementDerivedFactPrerequisite, SourceKind, SpecializationCheckOutcome,
     SpecializationCheckPrerequisite, SymbolId, TextPosition, TypeDerivedElementCollection,
     TypeDerivedFactCollection, TypeDerivedFactOutcome, TypeDerivedFactValue,
     TypeDerivedRelationshipCollection,
 };
-use sysml_query::source::{SourceDocument as AdmittedDocument, SourceService};
+use sysml_query::source::{SourceDocument as AdmittedDocument, SourceLanguage, SourceService};
 type QuerySourceDocument = AdmittedDocument;
 
 #[derive(Debug, Parser)]
@@ -67,6 +69,9 @@ struct Cli {
     /// Restrict the operation to one path relative to --root (or an explicit path).
     #[arg(long, global = true)]
     fixture: Option<PathBuf>,
+    /// Wall-clock budget for the complete operation; timeout prints active workers and exits 124.
+    #[arg(long, default_value = "600", global = true)]
+    timeout_seconds: std::num::NonZeroU64,
 }
 
 #[derive(Debug, Subcommand)]
@@ -92,6 +97,9 @@ enum ReportFormat {
 #[derive(Debug, Clone, PartialEq, Eq)]
 struct SourceDocument {
     name: String,
+    /// Declared by the SOURCE fence's info string (`~~~kerml` / `~~~sysml`): fixture document
+    /// names do not carry the language, so the fixture declares it and admission records it.
+    language: SourceLanguage,
     text: String,
 }
 
@@ -116,7 +124,7 @@ enum LibrarySelection {
 #[derive(Debug, Clone, PartialEq, Eq)]
 enum GeneratorPlugin {
     Conformance(String),
-    RepositoryDiagram,
+    NativeDiagram,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -325,6 +333,7 @@ struct SemanticExpectations {
     element_derived_documentation: Vec<ElementDerivedDocumentationExpectation>,
     namespace_derived_elements: Vec<NamespaceDerivedElementExpectation>,
     namespace_import_derived_elements: Vec<NamespaceImportDerivedElementExpectation>,
+    view_exposed_elements: Vec<ViewExposedElementExpectation>,
     binding_connector_checks: Vec<BindingConnectorCheckExpectation>,
     redefinition_checks: Vec<RedefinitionCheckExpectation>,
     specialization_checks: Vec<SpecializationCheckExpectation>,
@@ -333,10 +342,145 @@ struct SemanticExpectations {
 #[derive(Debug, Clone, PartialEq, Eq)]
 struct RelationshipExpectation {
     kind: SemanticRelationshipKind,
-    source: String,
+    source: ElementReferenceExpectation,
     target: Option<String>,
     provenance: Option<RelationshipProvenance>,
     outcome: SemanticRelationshipOutcome,
+}
+
+/// An authored semantic source: a KerML qualified name, or an anonymous member addressed by its
+/// canonical owner-scoped identity `(anonymous (owner <reference>) (kind <ElementKind>) (ordinal
+/// <n>))`. Both resolve only through `sysml_query`; no display name is invented for an anonymous
+/// element.
+#[derive(Debug, Clone, PartialEq, Eq)]
+enum ElementReferenceExpectation {
+    Qualified(String),
+    Anonymous {
+        owner: Box<ElementReferenceExpectation>,
+        kind: ElementKind,
+        ordinal: u32,
+    },
+}
+
+impl std::fmt::Display for ElementReferenceExpectation {
+    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            Self::Qualified(name) => formatter.write_str(name),
+            Self::Anonymous {
+                owner,
+                kind,
+                ordinal,
+            } => write!(
+                formatter,
+                "(anonymous (owner {owner}) (kind {kind}) (ordinal {ordinal}))"
+            ),
+        }
+    }
+}
+
+fn parse_element_reference_expectation(
+    expression: &AuthoredSexpr,
+    fallback_name: &str,
+) -> Result<ElementReferenceExpectation, String> {
+    let items = match expression {
+        AuthoredSexpr::Atom(value) | AuthoredSexpr::String(value) if !value.is_empty() => {
+            return Ok(ElementReferenceExpectation::Qualified(value.clone()));
+        }
+        AuthoredSexpr::Atom(_) | AuthoredSexpr::String(_) => {
+            return Err(format!(
+                "{fallback_name}: element reference must not be empty"
+            ));
+        }
+        AuthoredSexpr::List(items) => items,
+    };
+    if items.first().and_then(authored_atom) != Some("anonymous") {
+        return Err(format!(
+            "{fallback_name}: element reference list must be (anonymous (owner ...) (kind ...) (ordinal ...))"
+        ));
+    }
+    let mut owner = None;
+    let mut kind = None;
+    let mut ordinal = None;
+    for field in &items[1..] {
+        let AuthoredSexpr::List(field_items) = field else {
+            return Err(format!(
+                "{fallback_name}: anonymous reference field must be a list"
+            ));
+        };
+        let [key, value] = field_items.as_slice() else {
+            return Err(format!(
+                "{fallback_name}: anonymous reference fields require exactly one value"
+            ));
+        };
+        let duplicate = match authored_atom(key) {
+            Some("owner") => owner
+                .replace(parse_element_reference_expectation(value, fallback_name)?)
+                .is_some(),
+            Some("kind") => {
+                let text = authored_value(value).unwrap_or_default();
+                let parsed = ElementKind::parse(text).ok_or_else(|| {
+                    format!("{fallback_name}: unknown anonymous reference kind {text:?}")
+                })?;
+                kind.replace(parsed).is_some()
+            }
+            Some("ordinal") => {
+                let text = authored_value(value).unwrap_or_default();
+                let parsed = text.parse::<u32>().map_err(|_| {
+                    format!("{fallback_name}: anonymous reference ordinal {text:?} is not a u32")
+                })?;
+                ordinal.replace(parsed).is_some()
+            }
+            other => {
+                return Err(format!(
+                    "{fallback_name}: unknown anonymous reference field {other:?}"
+                ))
+            }
+        };
+        if duplicate {
+            return Err(format!(
+                "{fallback_name}: duplicate anonymous reference field"
+            ));
+        }
+    }
+    match (owner, kind, ordinal) {
+        (Some(owner), Some(kind), Some(ordinal)) => Ok(ElementReferenceExpectation::Anonymous {
+            owner: Box::new(owner),
+            kind,
+            ordinal,
+        }),
+        _ => Err(format!(
+            "{fallback_name}: anonymous reference requires owner, kind, and ordinal"
+        )),
+    }
+}
+
+/// Removes the one `(name <value>)` field whose value may be a structured element reference, so
+/// the remaining scalar fields keep the shared parser.
+fn take_element_reference_field(
+    fields: &[AuthoredSexpr],
+    name: &str,
+    fallback_name: &str,
+) -> Result<(Option<ElementReferenceExpectation>, Vec<AuthoredSexpr>), String> {
+    let mut reference = None;
+    let mut rest = Vec::new();
+    for field in fields {
+        if let AuthoredSexpr::List(items) = field {
+            if items.len() == 2 && authored_atom(&items[0]) == Some(name) {
+                if reference
+                    .replace(parse_element_reference_expectation(
+                        &items[1],
+                        fallback_name,
+                    )?)
+                    .is_some()
+                {
+                    return Err(format!("{fallback_name}: duplicate field {name:?}"));
+                }
+                continue;
+            }
+        }
+        rest.push(field.clone());
+    }
+    Ok((reference, rest))
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -353,6 +497,10 @@ enum SemanticRelationshipKind {
     Intersecting,
     Differencing,
     Disjoining,
+    Annotation,
+    FeatureInverting,
+    ReferenceSubsetting,
+    CrossSubsetting,
 }
 
 impl SemanticRelationshipKind {
@@ -369,8 +517,12 @@ impl SemanticRelationshipKind {
             "intersecting" => Ok(Self::Intersecting),
             "differencing" => Ok(Self::Differencing),
             "disjoining" => Ok(Self::Disjoining),
+            "annotation" => Ok(Self::Annotation),
+            "feature_inverting" => Ok(Self::FeatureInverting),
+            "reference_subsetting" => Ok(Self::ReferenceSubsetting),
+            "cross_subsetting" => Ok(Self::CrossSubsetting),
             _ => Err(format!(
-                "{fixture}: unknown semantic relationship kind {value:?} (expected specialization, feature_typing, subsetting, redefinition, feature_chaining, type_featuring, connector_end, unioning, intersecting, differencing, or disjoining)"
+                "{fixture}: unknown semantic relationship kind {value:?} (expected specialization, feature_typing, subsetting, redefinition, feature_chaining, type_featuring, connector_end, unioning, intersecting, differencing, disjoining, annotation, feature_inverting, reference_subsetting, or cross_subsetting)"
             )),
         }
     }
@@ -389,6 +541,10 @@ impl SemanticRelationshipKind {
             Self::Intersecting => "intersecting",
             Self::Differencing => "differencing",
             Self::Disjoining => "disjoining",
+            Self::Annotation => "annotation",
+            Self::FeatureInverting => "featureInverting",
+            Self::ReferenceSubsetting => "referenceSubsetting",
+            Self::CrossSubsetting => "crossSubsetting",
         }
     }
 }
@@ -413,6 +569,18 @@ fn feature_collection(
         }
         FeatureDerivedRelationshipKind::OwnedTypeFeaturing => {
             FeatureDerivedRelationshipCollection::OwnedTypeFeaturing
+        }
+        FeatureDerivedRelationshipKind::ChainingFeature => {
+            FeatureDerivedRelationshipCollection::ChainingFeature
+        }
+        FeatureDerivedRelationshipKind::OwnedFeatureInverting => {
+            FeatureDerivedRelationshipCollection::OwnedFeatureInverting
+        }
+        FeatureDerivedRelationshipKind::OwnedReferenceSubsetting => {
+            FeatureDerivedRelationshipCollection::OwnedReferenceSubsetting
+        }
+        FeatureDerivedRelationshipKind::OwnedCrossSubsetting => {
+            FeatureDerivedRelationshipCollection::OwnedCrossSubsetting
         }
     }
 }
@@ -473,6 +641,9 @@ fn type_collection(kind: TypeDerivedRelationshipKind) -> TypeDerivedRelationship
         }
         TypeDerivedRelationshipKind::DifferencingType => {
             TypeDerivedRelationshipCollection::DifferencingType
+        }
+        TypeDerivedRelationshipKind::OwnedSubclassification => {
+            TypeDerivedRelationshipCollection::OwnedSubclassification
         }
     }
 }
@@ -547,6 +718,215 @@ fn action_fact_collection(kind: ActionDerivedFactKind) -> ActionDerivedFactColle
         ActionDerivedFactKind::IfThenAction => ActionDerivedFactCollection::IfThenAction,
         ActionDerivedFactKind::IfElseAction => ActionDerivedFactCollection::IfElseAction,
         ActionDerivedFactKind::IfArgument => ActionDerivedFactCollection::IfArgument,
+        ActionDerivedFactKind::StateDefinitionEntryAction => {
+            ActionDerivedFactCollection::StateDefinitionEntryAction
+        }
+        ActionDerivedFactKind::StateDefinitionDoAction => {
+            ActionDerivedFactCollection::StateDefinitionDoAction
+        }
+        ActionDerivedFactKind::StateDefinitionExitAction => {
+            ActionDerivedFactCollection::StateDefinitionExitAction
+        }
+        ActionDerivedFactKind::StateUsageEntryAction => {
+            ActionDerivedFactCollection::StateUsageEntryAction
+        }
+        ActionDerivedFactKind::StateUsageDoAction => {
+            ActionDerivedFactCollection::StateUsageDoAction
+        }
+        ActionDerivedFactKind::StateUsageExitAction => {
+            ActionDerivedFactCollection::StateUsageExitAction
+        }
+        ActionDerivedFactKind::StateDefinitionState => {
+            ActionDerivedFactCollection::StateDefinitionState
+        }
+        ActionDerivedFactKind::CalculationDefinitionCalculation => {
+            ActionDerivedFactCollection::CalculationDefinitionCalculation
+        }
+        ActionDerivedFactKind::AllocationDefinitionAllocation => {
+            ActionDerivedFactCollection::AllocationDefinitionAllocation
+        }
+        ActionDerivedFactKind::RenderingDefinitionRendering => {
+            ActionDerivedFactCollection::RenderingDefinitionRendering
+        }
+        ActionDerivedFactKind::ViewDefinitionView => {
+            ActionDerivedFactCollection::ViewDefinitionView
+        }
+        ActionDerivedFactKind::ViewDefinitionViewRendering => {
+            ActionDerivedFactCollection::ViewDefinitionViewRendering
+        }
+        ActionDerivedFactKind::ViewUsageViewRendering => {
+            ActionDerivedFactCollection::ViewUsageViewRendering
+        }
+        ActionDerivedFactKind::ViewDefinitionSatisfiedViewpoint => {
+            ActionDerivedFactCollection::ViewDefinitionSatisfiedViewpoint
+        }
+        ActionDerivedFactKind::ViewUsageSatisfiedViewpoint => {
+            ActionDerivedFactCollection::ViewUsageSatisfiedViewpoint
+        }
+        ActionDerivedFactKind::PortDefinitionConjugatedPortDefinition => {
+            ActionDerivedFactCollection::PortDefinitionConjugatedPortDefinition
+        }
+        ActionDerivedFactKind::FeatureCrossFeature => {
+            ActionDerivedFactCollection::FeatureCrossFeature
+        }
+        ActionDerivedFactKind::FeatureFeatureTarget => {
+            ActionDerivedFactCollection::FeatureFeatureTarget
+        }
+        ActionDerivedFactKind::FunctionResult => ActionDerivedFactCollection::FunctionResult,
+        ActionDerivedFactKind::ExpressionResult => ActionDerivedFactCollection::ExpressionResult,
+        ActionDerivedFactKind::BehaviorStep => ActionDerivedFactCollection::BehaviorStep,
+        ActionDerivedFactKind::MultiplicityRangeLowerBound => {
+            ActionDerivedFactCollection::MultiplicityRangeLowerBound
+        }
+        ActionDerivedFactKind::MultiplicityRangeUpperBound => {
+            ActionDerivedFactCollection::MultiplicityRangeUpperBound
+        }
+        ActionDerivedFactKind::MultiplicityRangeBound => {
+            ActionDerivedFactCollection::MultiplicityRangeBound
+        }
+        ActionDerivedFactKind::ItemUsageItemDefinition => {
+            ActionDerivedFactCollection::ItemUsageItemDefinition
+        }
+        ActionDerivedFactKind::PartUsagePartDefinition => {
+            ActionDerivedFactCollection::PartUsagePartDefinition
+        }
+        ActionDerivedFactKind::OccurrenceUsageIndividualDefinition => {
+            ActionDerivedFactCollection::OccurrenceUsageIndividualDefinition
+        }
+        ActionDerivedFactKind::ConjugatedPortTypingPortDefinition => {
+            ActionDerivedFactCollection::ConjugatedPortTypingPortDefinition
+        }
+        ActionDerivedFactKind::TransitionUsageSuccession => {
+            ActionDerivedFactCollection::TransitionUsageSuccession
+        }
+        ActionDerivedFactKind::TransitionUsageTarget => {
+            ActionDerivedFactCollection::TransitionUsageTarget
+        }
+        ActionDerivedFactKind::TransitionUsageTriggerAction => {
+            ActionDerivedFactCollection::TransitionUsageTriggerAction
+        }
+        ActionDerivedFactKind::AssertConstraintUsageAssertedConstraint => {
+            ActionDerivedFactCollection::AssertConstraintUsageAssertedConstraint
+        }
+        ActionDerivedFactKind::EventOccurrenceUsageEventOccurrence => {
+            ActionDerivedFactCollection::EventOccurrenceUsageEventOccurrence
+        }
+        ActionDerivedFactKind::VerificationCaseDefinitionVerifiedRequirement => {
+            ActionDerivedFactCollection::VerificationCaseDefinitionVerifiedRequirement
+        }
+        ActionDerivedFactKind::VerificationCaseUsageVerifiedRequirement => {
+            ActionDerivedFactCollection::VerificationCaseUsageVerifiedRequirement
+        }
+        ActionDerivedFactKind::UseCaseDefinitionIncludedUseCase => {
+            ActionDerivedFactCollection::UseCaseDefinitionIncludedUseCase
+        }
+        ActionDerivedFactKind::UseCaseUsageIncludedUseCase => {
+            ActionDerivedFactCollection::UseCaseUsageIncludedUseCase
+        }
+        ActionDerivedFactKind::ViewDefinitionViewCondition => {
+            ActionDerivedFactCollection::ViewDefinitionViewCondition
+        }
+        ActionDerivedFactKind::ViewUsageViewCondition => {
+            ActionDerivedFactCollection::ViewUsageViewCondition
+        }
+        ActionDerivedFactKind::ElementIsLibraryElement => {
+            ActionDerivedFactCollection::ElementIsLibraryElement
+        }
+        ActionDerivedFactKind::ElementName => ActionDerivedFactCollection::ElementName,
+        ActionDerivedFactKind::ElementShortName => ActionDerivedFactCollection::ElementShortName,
+        ActionDerivedFactKind::ElementQualifiedName => {
+            ActionDerivedFactCollection::ElementQualifiedName
+        }
+        ActionDerivedFactKind::ElementOwnedElement => {
+            ActionDerivedFactCollection::ElementOwnedElement
+        }
+        ActionDerivedFactKind::ElementOwnedAnnotation => {
+            ActionDerivedFactCollection::ElementOwnedAnnotation
+        }
+        ActionDerivedFactKind::ElementOwningNamespace => {
+            ActionDerivedFactCollection::ElementOwningNamespace
+        }
+        ActionDerivedFactKind::RelationshipRelatedElement => {
+            ActionDerivedFactCollection::RelationshipRelatedElement
+        }
+        ActionDerivedFactKind::AnnotatingElementAnnotatedElement => {
+            ActionDerivedFactCollection::AnnotatingElementAnnotatedElement
+        }
+        ActionDerivedFactKind::AnnotatingElementAnnotation => {
+            ActionDerivedFactCollection::AnnotatingElementAnnotation
+        }
+        ActionDerivedFactKind::AnnotatingElementOwnedAnnotatingRelationship => {
+            ActionDerivedFactCollection::AnnotatingElementOwnedAnnotatingRelationship
+        }
+        ActionDerivedFactKind::AnnotationOwnedAnnotatingElement => {
+            ActionDerivedFactCollection::AnnotationOwnedAnnotatingElement
+        }
+        ActionDerivedFactKind::MembershipImportImportedElement => {
+            ActionDerivedFactCollection::MembershipImportImportedElement
+        }
+        ActionDerivedFactKind::NamespaceImportedMembership => {
+            ActionDerivedFactCollection::NamespaceImportedMembership
+        }
+        ActionDerivedFactKind::NamespaceMember => ActionDerivedFactCollection::NamespaceMember,
+        ActionDerivedFactKind::NamespaceOwnedMembership => {
+            ActionDerivedFactCollection::NamespaceOwnedMembership
+        }
+        ActionDerivedFactKind::OwningMembershipOwnedMemberName => {
+            ActionDerivedFactCollection::OwningMembershipOwnedMemberName
+        }
+        ActionDerivedFactKind::OwningMembershipOwnedMemberShortName => {
+            ActionDerivedFactCollection::OwningMembershipOwnedMemberShortName
+        }
+        ActionDerivedFactKind::PackageFilterCondition => {
+            ActionDerivedFactCollection::PackageFilterCondition
+        }
+        ActionDerivedFactKind::FeatureFeaturingType => {
+            ActionDerivedFactCollection::FeatureFeaturingType
+        }
+        ActionDerivedFactKind::AssociationRelatedType => {
+            ActionDerivedFactCollection::AssociationRelatedType
+        }
+        ActionDerivedFactKind::AssociationSourceType => {
+            ActionDerivedFactCollection::AssociationSourceType
+        }
+        ActionDerivedFactKind::AssociationTargetType => {
+            ActionDerivedFactCollection::AssociationTargetType
+        }
+        ActionDerivedFactKind::ConnectorRelatedFeature => {
+            ActionDerivedFactCollection::ConnectorRelatedFeature
+        }
+        ActionDerivedFactKind::ConnectorSourceFeature => {
+            ActionDerivedFactCollection::ConnectorSourceFeature
+        }
+        ActionDerivedFactKind::ConnectorTargetFeature => {
+            ActionDerivedFactCollection::ConnectorTargetFeature
+        }
+        ActionDerivedFactKind::ConnectorDefaultFeaturingType => {
+            ActionDerivedFactCollection::ConnectorDefaultFeaturingType
+        }
+        ActionDerivedFactKind::StepBehavior => ActionDerivedFactCollection::StepBehavior,
+        ActionDerivedFactKind::LiteralExpressionIsModelLevelEvaluable => {
+            ActionDerivedFactCollection::LiteralExpressionIsModelLevelEvaluable
+        }
+        ActionDerivedFactKind::MetadataAccessExpressionReferencedElement => {
+            ActionDerivedFactCollection::MetadataAccessExpressionReferencedElement
+        }
+        ActionDerivedFactKind::FeatureChainExpressionTargetFeature => {
+            ActionDerivedFactCollection::FeatureChainExpressionTargetFeature
+        }
+        ActionDerivedFactKind::FeatureReferenceExpressionReferent => {
+            ActionDerivedFactCollection::FeatureReferenceExpressionReferent
+        }
+        ActionDerivedFactKind::InstantiationExpressionInstantiatedType => {
+            ActionDerivedFactCollection::InstantiationExpressionInstantiatedType
+        }
+        ActionDerivedFactKind::FlowFlowEnd => ActionDerivedFactCollection::FlowFlowEnd,
+        ActionDerivedFactKind::FlowSourceOutputFeature => {
+            ActionDerivedFactCollection::FlowSourceOutputFeature
+        }
+        ActionDerivedFactKind::FlowTargetInputFeature => {
+            ActionDerivedFactCollection::FlowTargetInputFeature
+        }
     }
 }
 
@@ -611,14 +991,17 @@ fn action_fact_collection_for_rule(
     manifest: Option<&ConstraintManifest>,
     rule_id: &str,
     fixture: &str,
-) -> Result<ActionDerivedFactCollection, String> {
+) -> Result<Option<ActionDerivedFactCollection>, String> {
     let manifest = manifest
         .ok_or_else(|| format!("{fixture}: semantic Action fact requires a loaded manifest"))?;
     let entry = manifest.find_rule(rule_id).ok_or_else(|| {
         format!("{fixture}: semantic Action fact rule_id {rule_id:?} is absent from the manifest")
     })?;
     match entry.query_family() {
-        Some(ConstraintQueryFamily::ActionDerivedFact(kind)) => Ok(action_fact_collection(kind)),
+        Some(ConstraintQueryFamily::ActionDerivedFact(kind)) => {
+            Ok(Some(action_fact_collection(kind)))
+        }
+        None if entry.family == ConstraintFamily::Derive => Ok(None),
         _ => Err(format!(
             "{fixture}: semantic Action fact rule_id {rule_id:?} does not own an exact Action fact query"
         )),
@@ -669,6 +1052,12 @@ fn requirement_derived_fact_collection_for_rule(
             RequirementDerivedFactKind::UsageRequiredConstraint => RequirementDerivedFactCollection::UsageRequiredConstraint,
             RequirementDerivedFactKind::UsageAssumedConstraint => RequirementDerivedFactCollection::UsageAssumedConstraint,
             RequirementDerivedFactKind::UsageFramedConcern => RequirementDerivedFactCollection::UsageFramedConcern,
+            RequirementDerivedFactKind::CaseDefinitionActorParameter => RequirementDerivedFactCollection::CaseDefinitionActorParameter,
+            RequirementDerivedFactKind::CaseDefinitionSubjectParameter => RequirementDerivedFactCollection::CaseDefinitionSubjectParameter,
+            RequirementDerivedFactKind::CaseUsageActorParameter => RequirementDerivedFactCollection::CaseUsageActorParameter,
+            RequirementDerivedFactKind::CaseUsageSubjectParameter => RequirementDerivedFactCollection::CaseUsageSubjectParameter,
+            RequirementDerivedFactKind::CaseDefinitionObjectiveRequirement => RequirementDerivedFactCollection::CaseDefinitionObjectiveRequirement,
+            RequirementDerivedFactKind::CaseUsageObjectiveRequirement => RequirementDerivedFactCollection::CaseUsageObjectiveRequirement,
         }),
         _ => Err(format!(
             "{fixture}: semantic Requirements derivation rule_id {rule_id:?} does not own an exact Requirements query"
@@ -858,10 +1247,15 @@ struct TypeDerivedFactExpectation {
 /// asserted without inventing a declaration identity.
 #[derive(Debug, Clone, PartialEq, Eq)]
 struct ActionDerivedFactExpectation {
-    collection: ActionDerivedFactCollection,
-    source: String,
-    target: Option<String>,
+    /// `None` for a manifest derive rule that owns no exact contract because its pinned body is
+    /// not evaluable. Such an expectation is always observed as unpublished, so it can only be
+    /// carried by a fixture blocked on the normative gap.
+    collection: Option<ActionDerivedFactCollection>,
+    source: ElementReferenceExpectation,
+    target: Option<ElementReferenceExpectation>,
     position: Option<u32>,
+    /// The expected value of a String- or Boolean-valued property.
+    value: Option<String>,
     outcome: TypeDerivedElementOutcome,
 }
 
@@ -937,6 +1331,13 @@ struct NamespaceImportDerivedElementExpectation {
     target: Option<String>,
     provenance: Option<RelationshipProvenance>,
     outcome: SemanticRelationshipOutcome,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+struct ViewExposedElementExpectation {
+    source: String,
+    target: Option<String>,
+    outcome: NamespaceDerivedElementOutcome,
 }
 
 /// An exact named BindingConnector check selected by the manifest-owned query family.
@@ -1040,29 +1441,8 @@ fn parse_binding_connector_prerequisite(
     fixture: &str,
 ) -> Result<BindingConnectorValidationPrerequisite, String> {
     match value {
-        "feature_reference_expression_target_and_result" => {
-            Ok(BindingConnectorValidationPrerequisite::FeatureReferenceExpressionTargetAndResult)
-        }
-        "feature_value_endpoint_facts" => {
-            Ok(BindingConnectorValidationPrerequisite::FeatureValueEndpointFacts)
-        }
-        "expression_result_endpoint_facts" => {
-            Ok(BindingConnectorValidationPrerequisite::ExpressionResultEndpointFacts)
-        }
-        "function_result_endpoint_facts" => {
-            Ok(BindingConnectorValidationPrerequisite::FunctionResultEndpointFacts)
-        }
-        "invocation_expression_behavior_endpoint_facts" => {
-            Ok(BindingConnectorValidationPrerequisite::InvocationExpressionBehaviorEndpointFacts)
-        }
         "accept_action_usage_receiver_endpoint_facts" => {
             Ok(BindingConnectorValidationPrerequisite::AcceptActionUsageReceiverEndpointFacts)
-        }
-        "transition_usage_source_endpoint_facts" => {
-            Ok(BindingConnectorValidationPrerequisite::TransitionUsageSourceEndpointFacts)
-        }
-        "transition_usage_succession_endpoint_facts" => {
-            Ok(BindingConnectorValidationPrerequisite::TransitionUsageSuccessionEndpointFacts)
         }
         "satisfy_requirement_usage_endpoint_facts" => {
             Ok(BindingConnectorValidationPrerequisite::SatisfyRequirementUsageEndpointFacts)
@@ -1128,43 +1508,11 @@ fn parse_redefinition_check_prerequisite(
     fixture: &str,
 ) -> Result<RedefinitionCheckPrerequisite, String> {
     match value {
-        "end_feature_position_and_inherited_ends" => {
-            Ok(RedefinitionCheckPrerequisite::EndFeaturePositionAndInheritedEnds)
-        }
-        "flow_end_ordinal_and_library_anchors" => {
-            Ok(RedefinitionCheckPrerequisite::FlowEndOrdinalAndLibraryAnchors)
-        }
-        "cross_feature_and_subsetting_endpoints" => {
-            Ok(RedefinitionCheckPrerequisite::CrossFeatureAndSubsettingEndpoints)
-        }
-        "parameter_direction_and_inherited_position" => {
-            Ok(RedefinitionCheckPrerequisite::ParameterDirectionAndInheritedPosition)
-        }
-        "function_or_expression_result" => {
-            Ok(RedefinitionCheckPrerequisite::FunctionOrExpressionResult)
-        }
-        "constructor_result_and_instantiated_type_features" => {
-            Ok(RedefinitionCheckPrerequisite::ConstructorResultAndInstantiatedTypeFeatures)
-        }
-        "feature_chain_source_target" => {
-            Ok(RedefinitionCheckPrerequisite::FeatureChainSourceTarget)
-        }
-        "feature_chain_source_target_and_library_anchor" => {
-            Ok(RedefinitionCheckPrerequisite::FeatureChainSourceTargetAndLibraryAnchor)
-        }
+        "grammar_parameters" => Ok(RedefinitionCheckPrerequisite::GrammarParameters),
+        "expression_elements" => Ok(RedefinitionCheckPrerequisite::ExpressionElements),
         "state_subaction_membership_and_kind" => {
             Ok(RedefinitionCheckPrerequisite::StateSubactionMembershipAndKind)
         }
-        "assignment_action_input_parameter_endpoints" => {
-            Ok(RedefinitionCheckPrerequisite::AssignmentActionInputParameterEndpoints)
-        }
-        "for_loop_variable_projection" => {
-            Ok(RedefinitionCheckPrerequisite::ForLoopVariableProjection)
-        }
-        "objective_membership_and_case_objective" => {
-            Ok(RedefinitionCheckPrerequisite::ObjectiveMembershipAndCaseObjective)
-        }
-        "view_rendering_membership" => Ok(RedefinitionCheckPrerequisite::ViewRenderingMembership),
         "rule_not_published" => Ok(RedefinitionCheckPrerequisite::RuleNotPublished),
         _ => Err(format!(
             "{fixture}: unknown redefinition check prerequisite {value:?}"
@@ -1232,9 +1580,6 @@ fn parse_specialization_check_prerequisite(
             Ok(SpecializationCheckPrerequisite::UseCaseOwnerAndLibraryAnchor)
         }
         "usage_variation_owner" => Ok(SpecializationCheckPrerequisite::UsageVariationOwner),
-        "individual_multiplicity_and_library_anchor" => {
-            Ok(SpecializationCheckPrerequisite::IndividualMultiplicityAndLibraryAnchor)
-        }
         "occurrence_owner_typing_and_library_anchor" => {
             Ok(SpecializationCheckPrerequisite::OccurrenceOwnerTypingAndLibraryAnchor)
         }
@@ -2035,17 +2380,20 @@ impl ManifestAuditReport {
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
 struct GeneratedArtifacts {
     files: BTreeMap<String, String>,
+    /// Disposable collision index using the generator path owner's filesystem normalization.
+    folded_paths: BTreeSet<String>,
 }
 
 impl GeneratedArtifacts {
     fn insert_utf8(&mut self, path: impl Into<String>, contents: String) -> Result<(), String> {
         let path = path.into();
-        validate_artifact_path(&path)?;
-        if self.files.insert(path.clone(), contents).is_some() {
+        let canonical = validate_artifact_path(&path)?;
+        if !self.folded_paths.insert(canonical.folded()) {
             return Err(format!(
                 "generator emitted duplicate artifact path {path:?}"
             ));
         }
+        self.files.insert(path, contents);
         Ok(())
     }
 }
@@ -2057,30 +2405,30 @@ impl GeneratedArtifacts {
 /// sections, so they are the admission input as well as fixtures in their own right.
 const STANDARD_LIBRARY_DIRECTORY: &str = "sysml.library";
 
-/// Lazily loaded library sources, shared by every fixture that admits them.
+/// Library sources loaded before fixture workers start, then shared immutably.
 struct LibraryCorpus {
-    root: PathBuf,
     services: sysml_query::Services,
-    standard_documents: OnceLock<Result<Vec<AdmittedDocument>, String>>,
+    standard_documents: Result<Vec<AdmittedDocument>, String>,
 }
 
 impl LibraryCorpus {
     fn new(root: PathBuf) -> Self {
+        let services = sysml_query::Services::new();
+        // Remove the worker-side OnceLock hazard identified in #237: if admission invokes
+        // nested Rayon work, stolen fixture jobs could re-enter initialization and deadlock.
+        // Complete admission before installing fixture jobs; workers only read it.
+        // Retain failures so only fixtures selecting the standard library report them.
+        let standard_documents = load_standard_library_documents(&root, &services.source);
         Self {
-            root,
-            services: sysml_query::Services::new(),
-            standard_documents: OnceLock::new(),
+            services,
+            standard_documents,
         }
     }
 
     fn documents(&self, selection: LibrarySelection) -> Result<&[AdmittedDocument], String> {
         match selection {
             LibrarySelection::None => Ok(&[]),
-            LibrarySelection::Standard => self
-                .standard_documents
-                .get_or_init(|| load_standard_library_documents(&self.root, &self.services.source))
-                .as_deref()
-                .map_err(Clone::clone),
+            LibrarySelection::Standard => self.standard_documents.as_deref().map_err(Clone::clone),
         }
     }
 }
@@ -2117,6 +2465,7 @@ fn load_standard_library_documents(
                         document.text,
                         SourceKind::StandardLibrary,
                     )
+                    .map(|admitted| admitted.with_language(document.language))
                     .map_err(|error| error.to_string())?,
             );
         }
@@ -2312,7 +2661,10 @@ fn validate_registry_references(registry: &IssueRegistry, paths: &[PathBuf]) -> 
 
 fn main() -> Result<(), String> {
     let cli = Cli::parse();
+    let watchdog =
+        watchdog::Watchdog::start(std::time::Duration::from_secs(cli.timeout_seconds.get()), 0);
     let paths = snapshot_paths(&cli.root, cli.fixture.as_deref())?;
+    watchdog.total(paths.len());
     if paths.is_empty() {
         return Err(format!(
             "no Markdown snapshots found under {}",
@@ -2322,6 +2674,7 @@ fn main() -> Result<(), String> {
     let registry = IssueRegistry::load(&cli.root)?;
     let registry_paths = snapshot_paths(&cli.root, None)?;
     validate_registry_references(&registry, &registry_paths)?;
+    watchdog.stage(watchdog::Stage::LibraryAdmission);
     let libraries = LibraryCorpus::new(cli.root.clone());
     let manifest_path = Path::new(env!("CARGO_MANIFEST_DIR"))
         .join("../..")
@@ -2338,15 +2691,20 @@ fn main() -> Result<(), String> {
         .stack_size(16 * 1024 * 1024)
         .build()
         .map_err(|error| format!("snapshot fixture worker pool failed: {error}"))?;
+    watchdog.stage(watchdog::Stage::Evaluation);
     let mut results: Vec<_> = fixture_pool.install(|| {
         paths
             .par_iter()
-            .map(|path| FixtureWorkResult {
-                path: path.clone(),
-                result: evaluate_fixture(path, &libraries, &registry, semantic_manifest),
+            .map(|path| {
+                let _active = watchdog.fixture(path);
+                FixtureWorkResult {
+                    path: path.clone(),
+                    result: evaluate_fixture(path, &libraries, &registry, semantic_manifest),
+                }
             })
             .collect()
     });
+    watchdog.stage(watchdog::Stage::Publication);
     sort_work_results(&mut results);
 
     let mut expectation_failures = Vec::new();
@@ -2622,6 +2980,7 @@ fn regenerate_snapshot(
                         SourceKind::Workspace
                     },
                 )
+                .map(|admitted| admitted.with_language(document.language))
                 .map_err(|error| error.to_string())
         })
         .collect::<Result<Vec<_>, _>>()?;
@@ -2665,6 +3024,9 @@ fn regenerate_snapshot(
         &hover_workspace,
         &probes,
         &qualified_reference_probes,
+        // The projection section is opt-in and its composition is not free, so it is rendered
+        // only for the fixtures that declare a `# PROJECTION` section.
+        raw_section(fixture, "PROJECTION").is_some(),
     )?;
     ensure_sections_balanced(&canonical).map_err(|error| format!("{}: {error}", path.display()))?;
 
@@ -2733,6 +3095,41 @@ fn regenerate_snapshot(
         .ok_or_else(|| format!("{}: missing SOURCE section", path.display()))?;
     let fixture = replace_or_insert_section(&fixture, "TYPES", &canonical.types)
         .ok_or_else(|| format!("{}: missing SOURCE section", path.display()))?;
+    // A fixture that authors no constraint / calc / value expression carries no EXPRESSIONS
+    // section, so the fixtures that have nothing to show are not all rewritten.
+    let fixture = if canonical.has_expressions() {
+        replace_or_insert_section(&fixture, "EXPRESSIONS", &canonical.expressions)
+            .ok_or_else(|| format!("{}: missing SOURCE section", path.display()))?
+    } else {
+        replace_section(&fixture, "EXPRESSIONS", &canonical.expressions).unwrap_or(fixture)
+    };
+    // Same policy for metadata annotations: only fixtures that author one carry the section.
+    let fixture = if canonical.has_metadata_annotations() {
+        replace_or_insert_section(
+            &fixture,
+            "METADATA ANNOTATIONS",
+            &canonical.metadata_annotations,
+        )
+        .ok_or_else(|| format!("{}: missing SOURCE section", path.display()))?
+    } else {
+        replace_section(
+            &fixture,
+            "METADATA ANNOTATIONS",
+            &canonical.metadata_annotations,
+        )
+        .unwrap_or(fixture)
+    };
+    // Same policy for the connect / interface topology.
+    let fixture = if canonical.has_connections() {
+        replace_or_insert_section(&fixture, "CONNECTIONS", &canonical.connections)
+            .ok_or_else(|| format!("{}: missing SOURCE section", path.display()))?
+    } else {
+        replace_section(&fixture, "CONNECTIONS", &canonical.connections).unwrap_or(fixture)
+    };
+    // The whole-model projection section is opt-in: a fixture carries it only if it already
+    // declares a `# PROJECTION` section. It is not corpus-wide -- the deep content is covered by
+    // the sibling sections, and this one exists for the composition, ordering and envelope.
+    let fixture = replace_section(&fixture, "PROJECTION", &canonical.projection).unwrap_or(fixture);
     let fixture = replace_or_insert_section(&fixture, "NAVIGATION", &canonical.navigation)
         .ok_or_else(|| format!("{}: missing SOURCE section", path.display()))?;
     let fixture = if probes.queries.is_empty() {
@@ -2811,7 +3208,20 @@ fn check_fixture_expectation(
             fixture_path,
         );
     }
-    check_untagged_diagnostics(fixture, actual, fallback_name)
+    // A snapshot may pin authored expectations without claiming a manifest rule. Those
+    // expectations still fail the run; they just do not count as normative coverage.
+    let mut checked = check_untagged_diagnostics(fixture, actual, fallback_name)?;
+    if let Some(error) = semantic_mismatch {
+        if checked.failure.is_none() {
+            checked = CheckedExpectation {
+                state: ExpectationState::Failed,
+                failure: Some(error.to_string()),
+            };
+        }
+    } else if has_semantic_expectations && checked.state == ExpectationState::NotApplicable {
+        checked.state = ExpectationState::Passed;
+    }
+    Ok(checked)
 }
 
 fn validate_source_intent(
@@ -3232,6 +3642,7 @@ fn parse_expected_semantics_with_manifest(
     let mut element_derived_documentation = Vec::new();
     let mut namespace_derived_elements = Vec::new();
     let mut namespace_import_derived_elements = Vec::new();
+    let mut view_exposed_elements = Vec::new();
     let mut binding_connector_checks = Vec::new();
     let mut redefinition_checks = Vec::new();
     let mut specialization_checks = Vec::new();
@@ -3278,6 +3689,9 @@ fn parse_expected_semantics_with_manifest(
             "namespace-import-derived-element" => namespace_import_derived_elements.push(
                 parse_namespace_import_derived_element_expectation(item, fallback_name, manifest)?,
             ),
+            "view-exposed-element" => view_exposed_elements.push(
+                parse_view_exposed_element_expectation(item, fallback_name, manifest)?,
+            ),
             "binding-connector-check" => binding_connector_checks.push(
                 parse_binding_connector_check_expectation(item, fallback_name, manifest)?,
             ),
@@ -3308,6 +3722,7 @@ fn parse_expected_semantics_with_manifest(
         && element_derived_documentation.is_empty()
         && namespace_derived_elements.is_empty()
         && namespace_import_derived_elements.is_empty()
+        && view_exposed_elements.is_empty()
         && binding_connector_checks.is_empty()
         && redefinition_checks.is_empty()
         && specialization_checks.is_empty()
@@ -3329,6 +3744,7 @@ fn parse_expected_semantics_with_manifest(
         element_derived_documentation,
         namespace_derived_elements,
         namespace_import_derived_elements,
+        view_exposed_elements,
         binding_connector_checks,
         redefinition_checks,
         specialization_checks,
@@ -3374,9 +3790,12 @@ fn parse_relationship_expectation(
             "{fallback_name}: EXPECTED SEMANTICS only accepts relationship expectations"
         ));
     }
+    let (source, rest) = take_element_reference_field(&items[1..], "source", fallback_name)?;
+    let source =
+        source.ok_or_else(|| format!("{fallback_name}: semantic relationship requires source"))?;
     let fields = parse_semantic_assertion_fields(
-        &items[1..],
-        &["kind", "source", "target", "provenance", "outcome"],
+        &rest,
+        &["kind", "target", "provenance", "outcome"],
         "semantic relationship",
         fallback_name,
     )?;
@@ -3386,11 +3805,6 @@ fn parse_relationship_expectation(
             .ok_or_else(|| format!("{fallback_name}: semantic relationship requires kind"))?,
         fallback_name,
     )?;
-    let source = fields
-        .get("source")
-        .filter(|value| !value.is_empty())
-        .cloned()
-        .ok_or_else(|| format!("{fallback_name}: semantic relationship requires source"))?;
     let outcome = SemanticRelationshipOutcome::parse(
         fields
             .get("outcome")
@@ -3723,9 +4137,13 @@ fn parse_action_derived_fact_expectation(
             "{fallback_name}: Action fact expectation must be a list"
         ));
     };
+    let (source, rest) = take_element_reference_field(&items[1..], "source", fallback_name)?;
+    let source =
+        source.ok_or_else(|| format!("{fallback_name}: semantic Action fact requires source"))?;
+    let (target, rest) = take_element_reference_field(&rest, "target", fallback_name)?;
     let fields = parse_semantic_assertion_fields(
-        &items[1..],
-        &["rule_id", "source", "target", "position", "outcome"],
+        &rest,
+        &["rule_id", "position", "value", "outcome"],
         "semantic Action fact",
         fallback_name,
     )?;
@@ -3736,18 +4154,17 @@ fn parse_action_derived_fact_expectation(
             .ok_or_else(|| format!("{fallback_name}: semantic Action fact requires rule_id"))?,
         fallback_name,
     )?;
-    let source = fields
-        .get("source")
-        .filter(|value| !value.is_empty())
-        .cloned()
-        .ok_or_else(|| format!("{fallback_name}: semantic Action fact requires source"))?;
     let outcome = TypeDerivedElementOutcome::parse(
         fields
             .get("outcome")
             .ok_or_else(|| format!("{fallback_name}: semantic Action fact requires outcome"))?,
         fallback_name,
     )?;
-    let target = fields.get("target").cloned();
+    if collection.is_none() && outcome == TypeDerivedElementOutcome::Unsupported {
+        return Err(format!(
+            "{fallback_name}: a semantic Action fact for a rule without an exact contract states the specified outcome, not unsupported"
+        ));
+    }
     let position = fields
         .get("position")
         .map(|value| {
@@ -3778,11 +4195,23 @@ fn parse_action_derived_fact_expectation(
             "{fallback_name}: semantic Action fact must not declare both target and position"
         ));
     }
+    let value = fields.get("value").cloned();
+    if value.is_some() && (target.is_some() || position.is_some()) {
+        return Err(format!(
+            "{fallback_name}: semantic Action fact value excludes target and position"
+        ));
+    }
+    if value.is_some() && outcome != TypeDerivedElementOutcome::Resolved {
+        return Err(format!(
+            "{fallback_name}: semantic Action fact value requires outcome resolved"
+        ));
+    }
     Ok(ActionDerivedFactExpectation {
         collection,
         source,
         target,
         position,
+        value,
         outcome,
     })
 }
@@ -4226,6 +4655,75 @@ fn parse_namespace_import_derived_element_expectation(
     })
 }
 
+fn parse_view_exposed_element_expectation(
+    expression: &AuthoredSexpr,
+    fallback_name: &str,
+    manifest: Option<&ConstraintManifest>,
+) -> Result<ViewExposedElementExpectation, String> {
+    let AuthoredSexpr::List(items) = expression else {
+        return Err(format!(
+            "{fallback_name}: View exposed-element expectation must be a list"
+        ));
+    };
+    let fields = parse_semantic_assertion_fields(
+        &items[1..],
+        &["rule_id", "source", "target", "outcome"],
+        "semantic View exposed element",
+        fallback_name,
+    )?;
+    let rule_id = fields.get("rule_id").ok_or_else(|| {
+        format!("{fallback_name}: semantic View exposed element requires rule_id")
+    })?;
+    let entry = manifest
+        .ok_or_else(|| {
+            format!("{fallback_name}: semantic View exposed element requires a loaded manifest")
+        })?
+        .find_rule(rule_id)
+        .ok_or_else(|| {
+            format!(
+                "{fallback_name}: semantic View exposed element rule_id {rule_id:?} is absent from the manifest"
+            )
+        })?;
+    if entry.metaclass != "ViewUsage" || entry.constraint != "deriveViewUsageExposedElement" {
+        return Err(format!(
+            "{fallback_name}: semantic View exposed element rule_id {rule_id:?} does not select deriveViewUsageExposedElement"
+        ));
+    }
+    let source = fields
+        .get("source")
+        .filter(|value| !value.is_empty())
+        .cloned()
+        .ok_or_else(|| format!("{fallback_name}: semantic View exposed element requires source"))?;
+    let outcome = NamespaceDerivedElementOutcome::parse(
+        fields.get("outcome").ok_or_else(|| {
+            format!("{fallback_name}: semantic View exposed element requires outcome")
+        })?,
+        fallback_name,
+    )?;
+    let target = fields.get("target").cloned();
+    match outcome {
+        NamespaceDerivedElementOutcome::Resolved if target.as_deref().is_none_or(str::is_empty) => {
+            return Err(format!(
+                "{fallback_name}: resolved semantic View exposed element requires target"
+            ));
+        }
+        NamespaceDerivedElementOutcome::Incomplete
+        | NamespaceDerivedElementOutcome::Unsupported
+            if target.is_some() =>
+        {
+            return Err(format!(
+                "{fallback_name}: {outcome:?} semantic View exposed element must not declare target"
+            ));
+        }
+        _ => {}
+    }
+    Ok(ViewExposedElementExpectation {
+        source,
+        target,
+        outcome,
+    })
+}
+
 fn parse_binding_connector_check_expectation(
     expression: &AuthoredSexpr,
     fallback_name: &str,
@@ -4539,6 +5037,7 @@ struct SemanticExpectationObservations {
     element_derived_documentation: Vec<ElementDerivedDocumentationObservation>,
     namespace_derived_elements: Vec<NamespaceDerivedElementObservation>,
     namespace_import_derived_elements: Vec<SemanticRelationshipObservation>,
+    view_exposed_elements: Vec<NamespaceDerivedElementObservation>,
     binding_connector_checks: Vec<BindingConnectorCheckObservation>,
     redefinition_checks: Vec<RedefinitionCheckObservation>,
     specialization_checks: Vec<SpecializationCheckObservation>,
@@ -4691,6 +5190,11 @@ fn observe_semantic_expectations(
             .iter()
             .map(|expectation| observe_namespace_import_derived_element(model, expectation))
             .collect::<Result<_, _>>()?,
+        view_exposed_elements: expectations
+            .view_exposed_elements
+            .iter()
+            .map(|expectation| observe_view_exposed_element(model, expectation))
+            .collect::<Result<_, _>>()?,
         binding_connector_checks: expectations
             .binding_connector_checks
             .iter()
@@ -4713,7 +5217,7 @@ fn observe_semantic_relationship(
     model: &PublishedModel,
     expectation: &RelationshipExpectation,
 ) -> Result<SemanticRelationshipObservation, String> {
-    let source = match resolve_semantic_identity(model, &expectation.source) {
+    let source = match resolve_element_reference(model, &expectation.source) {
         Ok(source) => source,
         Err(SemanticIdentityStatus::Incomplete) => {
             return Ok(SemanticRelationshipObservation::Incomplete)
@@ -4903,18 +5407,22 @@ fn observe_action_derived_fact(
     model: &PublishedModel,
     expectation: &ActionDerivedFactExpectation,
 ) -> Result<ActionDerivedFactObservation, String> {
-    let source = match resolve_semantic_identity(model, &expectation.source) {
+    let source = match resolve_element_reference(model, &expectation.source) {
         Ok(source) => source,
         Err(SemanticIdentityStatus::Incomplete) => {
             return Ok(ActionDerivedFactObservation::Incomplete)
         }
         Err(status) => return Err(format!("source reference is {}", status.description())),
     };
-    let value = match snapshot_answer(
-        model
-            .inspection()
-            .action_derived_fact(source, expectation.collection),
-    ) {
+    let Some(collection) = expectation.collection else {
+        return Ok(ActionDerivedFactObservation::Outcome {
+            value: ActionDerivedFactOutcome::Unsupported {
+                prerequisite: ActionDerivedFactPrerequisite::RuleNotPublished,
+            },
+            expected: None,
+        });
+    };
+    let value = match snapshot_answer(model.inspection().action_derived_fact(source, collection)) {
         QueryAnswer::Resolved(value) => value,
         QueryAnswer::Incomplete => return Ok(ActionDerivedFactObservation::Incomplete),
         QueryAnswer::Unresolved => return Err("Action fact query is unresolved".to_string()),
@@ -4924,9 +5432,9 @@ fn observe_action_derived_fact(
     };
     let expected = expectation
         .target
-        .as_deref()
+        .as_ref()
         .map(|target| {
-            resolve_semantic_identity(model, target)
+            resolve_element_reference(model, target)
                 .map_err(|status| format!("target reference is {}", status.description()))
         })
         .transpose()?;
@@ -5187,6 +5695,46 @@ fn observe_namespace_import_derived_element(
     )
 }
 
+fn observe_view_exposed_element(
+    model: &PublishedModel,
+    expectation: &ViewExposedElementExpectation,
+) -> Result<NamespaceDerivedElementObservation, String> {
+    let source = match resolve_semantic_identity(model, &expectation.source) {
+        Ok(source) => source,
+        Err(SemanticIdentityStatus::Incomplete) => {
+            return Ok(NamespaceDerivedElementObservation::Incomplete)
+        }
+        Err(status) => return Err(format!("source reference is {}", status.description())),
+    };
+    let exposed = match snapshot_answer(model.inspection().exposed_elements(source)) {
+        QueryAnswer::Resolved(exposed) => exposed,
+        QueryAnswer::Incomplete => return Ok(NamespaceDerivedElementObservation::Incomplete),
+        QueryAnswer::Unsupported => return Ok(NamespaceDerivedElementObservation::Unsupported),
+        QueryAnswer::Unresolved => {
+            return Err("View exposed-element query is unresolved".to_string())
+        }
+        QueryAnswer::Ambiguous(_) => {
+            return Err("View exposed-element query is ambiguous".to_string())
+        }
+        QueryAnswer::Recovery => return Err("View exposed-element query is recovery".to_string()),
+    };
+    if !exposed.obstacles.is_empty() {
+        return Ok(NamespaceDerivedElementObservation::Incomplete);
+    }
+    let expected = expectation
+        .target
+        .as_deref()
+        .map(|target| {
+            resolve_semantic_identity(model, target)
+                .map_err(|status| format!("target reference is {}", status.description()))
+        })
+        .transpose()?;
+    Ok(NamespaceDerivedElementObservation::Values {
+        values: exposed.elements,
+        expected,
+    })
+}
+
 fn observe_binding_connector_check(
     model: &PublishedModel,
     expectation: &BindingConnectorCheckExpectation,
@@ -5288,17 +5836,48 @@ fn observe_expected_relationship(
     })
 }
 
+fn resolve_element_reference(
+    model: &PublishedModel,
+    reference: &ElementReferenceExpectation,
+) -> Result<SymbolId, SemanticIdentityStatus> {
+    match reference {
+        ElementReferenceExpectation::Qualified(name) => resolve_semantic_identity(model, name),
+        ElementReferenceExpectation::Anonymous {
+            owner,
+            kind,
+            ordinal,
+        } => {
+            let owner = resolve_element_reference(model, owner)?;
+            reference_identity(model.inspection().resolve_anonymous_member(
+                &AnonymousElementReference {
+                    owner,
+                    kind: *kind,
+                    ordinal: *ordinal,
+                },
+            ))
+        }
+    }
+}
+
 fn resolve_semantic_identity(
     model: &PublishedModel,
     qualified_name: &str,
 ) -> Result<SymbolId, SemanticIdentityStatus> {
-    match model
-        .inspection()
-        .resolve_qualified_reference(&QualifiedElementReference {
-            document: None,
-            qualified_name: qualified_name.into(),
-            expected_kind: None,
-        }) {
+    reference_identity(
+        model
+            .inspection()
+            .resolve_qualified_reference(&QualifiedElementReference {
+                document: None,
+                qualified_name: qualified_name.into(),
+                expected_kind: None,
+            }),
+    )
+}
+
+fn reference_identity(
+    outcome: QualifiedReferenceOutcome,
+) -> Result<SymbolId, SemanticIdentityStatus> {
+    match outcome {
         QualifiedReferenceOutcome::Resolved(target)
         | QualifiedReferenceOutcome::Recovered(target)
         | QualifiedReferenceOutcome::UnsupportedWith(target) => Ok(target.identity),
@@ -5322,7 +5901,7 @@ fn compare_semantic_expectations(
     {
         compare_semantic_relationship_observation(
             expectation.outcome,
-            &expectation.source,
+            &expectation.source.to_string(),
             expectation.kind,
             observation,
         )?;
@@ -5418,6 +5997,13 @@ fn compare_semantic_expectations(
             SemanticRelationshipKind::NamespaceImport,
             observation,
         )?;
+    }
+    for (expectation, observation) in expectations
+        .view_exposed_elements
+        .iter()
+        .zip(&observations.view_exposed_elements)
+    {
+        compare_view_exposed_element_observation(expectation, observation)?;
     }
     for (expectation, observation) in expectations
         .binding_connector_checks
@@ -5613,6 +6199,47 @@ fn compare_namespace_derived_element_observation(
     }
 }
 
+fn compare_view_exposed_element_observation(
+    expectation: &ViewExposedElementExpectation,
+    observation: &NamespaceDerivedElementObservation,
+) -> Result<(), String> {
+    match (expectation.outcome, observation) {
+        (
+            NamespaceDerivedElementOutcome::Incomplete,
+            NamespaceDerivedElementObservation::Incomplete,
+        )
+        | (
+            NamespaceDerivedElementOutcome::Unsupported,
+            NamespaceDerivedElementObservation::Unsupported,
+        ) => Ok(()),
+        (
+            NamespaceDerivedElementOutcome::Absent,
+            NamespaceDerivedElementObservation::Values {
+                values,
+                expected: None,
+            },
+        ) if values.is_empty() => Ok(()),
+        (
+            NamespaceDerivedElementOutcome::Absent,
+            NamespaceDerivedElementObservation::Values {
+                values,
+                expected: Some(expected),
+            },
+        ) if !values.iter().any(|actual| actual == expected) => Ok(()),
+        (
+            NamespaceDerivedElementOutcome::Resolved,
+            NamespaceDerivedElementObservation::Values {
+                values,
+                expected: Some(expected),
+            },
+        ) if values.iter().any(|actual| actual == expected) => Ok(()),
+        _ => Err(format!(
+            "semantic View exposed-element expectation for {} did not match its typed outcome",
+            expectation.source
+        )),
+    }
+}
+
 fn compare_type_derived_element_observation(
     expectation: &TypeDerivedElementExpectation,
     observation: &TypeDerivedElementObservation,
@@ -5668,9 +6295,9 @@ fn compare_type_derived_fact_observation(
             },
         ) if values.iter().any(|value| match value {
             TypeDerivedFactValue::Feature(actual) => actual == expected,
-            TypeDerivedFactValue::FeatureMembership { member } => member == expected,
+            TypeDerivedFactValue::FeatureMembership { member, .. } => member == expected,
             TypeDerivedFactValue::Conjugator { original_type } => original_type == expected,
-            TypeDerivedFactValue::Multiplicity(_) => false,
+            TypeDerivedFactValue::Multiplicity { element } => element == expected,
         }) =>
         {
             Ok(())
@@ -5680,11 +6307,12 @@ fn compare_type_derived_fact_observation(
             TypeDerivedFactObservation::Outcome {
                 value: TypeDerivedFactOutcome::Values(values),
                 expected: None,
+                ..
             },
         ) if expectation.collection == TypeDerivedFactCollection::Multiplicity
             && values
                 .iter()
-                .any(|value| matches!(value, TypeDerivedFactValue::Multiplicity(_))) =>
+                .any(|value| matches!(value, TypeDerivedFactValue::Multiplicity { .. })) =>
         {
             Ok(())
         }
@@ -5736,6 +6364,46 @@ fn compare_action_derived_fact_observation(
                 ..
             },
         ) if values.is_empty() => Ok(()),
+        (
+            TypeDerivedElementOutcome::Absent,
+            ActionDerivedFactObservation::Outcome {
+                value: ActionDerivedFactOutcome::FilterConditions(values),
+                ..
+            },
+        ) if values.is_empty() => Ok(()),
+        (
+            TypeDerivedElementOutcome::Absent,
+            ActionDerivedFactObservation::Outcome {
+                value: ActionDerivedFactOutcome::Text(None),
+                ..
+            },
+        ) => Ok(()),
+        (
+            TypeDerivedElementOutcome::Resolved,
+            ActionDerivedFactObservation::Outcome {
+                value: ActionDerivedFactOutcome::Text(Some(actual)),
+                ..
+            },
+        ) if expectation.value.as_deref() == Some(actual.as_ref()) => Ok(()),
+        (
+            TypeDerivedElementOutcome::Resolved,
+            ActionDerivedFactObservation::Outcome {
+                value: ActionDerivedFactOutcome::Flag(actual),
+                ..
+            },
+        ) if expectation.value.as_deref() == Some(if *actual { "true" } else { "false" }) => Ok(()),
+        (
+            TypeDerivedElementOutcome::Resolved,
+            ActionDerivedFactObservation::Outcome {
+                value: ActionDerivedFactOutcome::FilterConditions(values),
+                expected: None,
+            },
+        ) if expectation
+            .position
+            .is_some_and(|position| values.iter().any(|actual| actual.position == position)) =>
+        {
+            Ok(())
+        }
         (
             TypeDerivedElementOutcome::Resolved,
             ActionDerivedFactObservation::Outcome {
@@ -6566,6 +7234,7 @@ fn load_repository_sources(
         })?;
         documents.push(SourceDocument {
             name: relative.clone(),
+            language: SourceLanguage::of_path(relative),
             text,
         });
     }
@@ -6577,15 +7246,6 @@ fn execute_generation(
     request: &GenerationRequest,
     fixture_path: &Path,
 ) -> Result<GeneratedArtifacts, String> {
-    let plugin_path = generator_plugin_path(&request.plugin);
-    let module = fs::read(&plugin_path).map_err(|error| {
-        format!(
-            "{}: failed to read generator plugin `{}` at {}: {error}; run scripts/build-generator-plugins.sh",
-            fixture_path.display(),
-            generator_plugin_label(&request.plugin),
-            plugin_path.display()
-        )
-    })?;
     let model_digest = publication.publication().model_digest();
     let model = Arc::new(
         GeneratorModelView::new(
@@ -6607,6 +7267,22 @@ fn execute_generation(
         "snapshot evidence must record the exact publication completeness"
     );
     let args = generation_arguments(request, &publication, &model, fixture_path)?;
+    let name = match &request.plugin {
+        // The diagram product is built natively, as the LSP and CLI build it.
+        GeneratorPlugin::NativeDiagram => {
+            return native_diagram_artifacts(&model, &args, fixture_path)
+        }
+        GeneratorPlugin::Conformance(name) => name,
+    };
+    let plugin_path = conformance_plugin_path(name);
+    let module = fs::read(&plugin_path).map_err(|error| {
+        format!(
+            "{}: failed to read generator plugin `{}` at {}: {error}; run scripts/build-generator-plugins.sh",
+            fixture_path.display(),
+            generator_plugin_label(&request.plugin),
+            plugin_path.display()
+        )
+    })?;
     let runtime = GeneratorRuntime::new().map_err(|error| {
         format!(
             "{}: generator runtime failed: {error}",
@@ -6646,20 +7322,43 @@ fn execute_generation(
 fn generator_plugin_label(plugin: &GeneratorPlugin) -> String {
     match plugin {
         GeneratorPlugin::Conformance(name) => format!("conformance:{name}"),
-        GeneratorPlugin::RepositoryDiagram => "repository:diagram".to_string(),
+        GeneratorPlugin::NativeDiagram => "native:diagram".to_string(),
     }
 }
 
-fn generator_plugin_path(plugin: &GeneratorPlugin) -> PathBuf {
-    let root = Path::new(env!("CARGO_MANIFEST_DIR")).join("../..");
-    match plugin {
-        GeneratorPlugin::Conformance(name) => root
-            .join("generator-tests/plugins/target/wasm32-unknown-unknown/release")
-            .join(format!("spec42_conformance_{name}.wasm")),
-        GeneratorPlugin::RepositoryDiagram => root
-            .join("generator-plugins/target/wasm32-unknown-unknown/release")
-            .join("spec42_diagram_generator.wasm"),
-    }
+fn conformance_plugin_path(name: &str) -> PathBuf {
+    Path::new(env!("CARGO_MANIFEST_DIR"))
+        .join("../../generator-tests/plugins/target/wasm32-unknown-unknown/release")
+        .join(format!("spec42_conformance_{name}.wasm"))
+}
+
+/// `diagram.json` for the catalog view whose handle is `args[0]`.
+fn native_diagram_artifacts(
+    model: &GeneratorModelView,
+    args: &[String],
+    fixture_path: &Path,
+) -> Result<GeneratedArtifacts, String> {
+    let [handle] = args else {
+        return Err(format!(
+            "{}: diagram generation requires exactly one view selection",
+            fixture_path.display()
+        ));
+    };
+    let projection = model
+        .diagram_view(handle)
+        .map_err(|error| format!("{}: diagram view failed: {error}", fixture_path.display()))?;
+    let product = diagram_product::diagram_product_json(&projection).map_err(|error| {
+        format!(
+            "{}: diagram product failed: {error}",
+            fixture_path.display()
+        )
+    })?;
+    let mut artifacts = GeneratedArtifacts::default();
+    artifacts.insert_utf8(
+        diagram_product::ARTIFACT_PATH,
+        String::from_utf8(product).expect("serde_json writes UTF-8"),
+    )?;
+    Ok(artifacts)
 }
 
 fn generation_arguments(
@@ -6782,12 +7481,37 @@ fn diagram_kind_id(kind: generator_api::DiagramViewKind) -> &'static str {
 struct OwnedSections {
     smg: String,
     types: String,
+    expressions: String,
+    metadata_annotations: String,
+    connections: String,
+    projection: String,
     diagnostics: String,
     navigation: String,
     editor_queries: String,
     hover_reports: String,
     hover_markdown: String,
     qualified_references: String,
+}
+
+impl OwnedSections {
+    /// Whether the resolved-expression projection has any content. An empty `(expressions\n)`
+    /// section is omitted so the fixtures that author no constraint / calc / value expression are
+    /// not all rewritten.
+    fn has_expressions(&self) -> bool {
+        self.expressions.contains("(declaration")
+    }
+
+    /// Whether the metadata-annotation projection has any content. Same omission policy as
+    /// [`Self::has_expressions`].
+    fn has_metadata_annotations(&self) -> bool {
+        self.metadata_annotations.contains("(annotation ")
+    }
+
+    /// Whether the connection-topology projection has any content. Same omission policy as
+    /// [`Self::has_expressions`].
+    fn has_connections(&self) -> bool {
+        self.connections.contains("(connector ")
+    }
 }
 
 fn render_owned_sections(
@@ -6797,6 +7521,7 @@ fn render_owned_sections(
     hover_workspace: &InMemoryWorkspace,
     probes: &EditorProbes,
     qualified_reference_probes: &[QualifiedReferenceProbe],
+    render_projection: bool,
 ) -> Result<OwnedSections, String> {
     // Both strings are complete owner-defined projections. The SMG includes publication phase,
     // completeness, evaluation state, and all owned facts; diagnostics includes canonical order.
@@ -6807,6 +7532,28 @@ fn render_owned_sections(
         .debug()
         .write_types_sexpr(&mut types)
         .map_err(|error| format!("type rendering failed: {error}"))?;
+    let mut expressions = String::new();
+    model
+        .debug()
+        .write_expressions_sexpr(&mut expressions)
+        .map_err(|error| format!("expression rendering failed: {error}"))?;
+    let mut metadata_annotations = String::new();
+    model
+        .debug()
+        .write_metadata_annotations_sexpr(&mut metadata_annotations)
+        .map_err(|error| format!("metadata-annotation rendering failed: {error}"))?;
+    let mut connections = String::new();
+    model
+        .debug()
+        .write_connections_sexpr(&mut connections)
+        .map_err(|error| format!("connection rendering failed: {error}"))?;
+    let mut projection = String::new();
+    if render_projection {
+        model
+            .debug()
+            .write_projection_sexpr(&mut projection)
+            .map_err(|error| format!("projection rendering failed: {error}"))?;
+    }
     let mut navigation = String::new();
     model
         .debug()
@@ -6829,6 +7576,10 @@ fn render_owned_sections(
     Ok(OwnedSections {
         smg,
         types,
+        expressions,
+        metadata_annotations,
+        connections,
+        projection,
         diagnostics,
         navigation,
         editor_queries,
@@ -6930,6 +7681,10 @@ fn ensure_balanced(name: &str, text: &str) -> Result<(), String> {
 fn ensure_sections_balanced(sections: &OwnedSections) -> Result<(), String> {
     ensure_balanced("SMG", &sections.smg)?;
     ensure_balanced("TYPES", &sections.types)?;
+    ensure_balanced("EXPRESSIONS", &sections.expressions)?;
+    ensure_balanced("METADATA ANNOTATIONS", &sections.metadata_annotations)?;
+    ensure_balanced("CONNECTIONS", &sections.connections)?;
+    ensure_balanced("PROJECTION", &sections.projection)?;
     ensure_balanced("DIAGNOSTICS", &sections.diagnostics)?;
     ensure_balanced("NAVIGATION", &sections.navigation)?;
     ensure_balanced("EDITOR RESULTS", &sections.editor_queries).and_then(|()| {
@@ -6983,6 +7738,7 @@ fn parse_source_documents(
         };
         named.push(SourceDocument {
             name: name.trim().to_string(),
+            language: source_fence_language(rest, fallback_name)?,
             text,
         });
         cursor = after;
@@ -6990,14 +7746,31 @@ fn parse_source_documents(
     if !named.is_empty() {
         return Ok(named);
     }
+    let language = source_fence_language(source, fallback_name)?;
     fenced_block(source)
         .map(|(text, _)| {
             vec![SourceDocument {
                 name: fallback_name.to_string(),
+                language,
                 text,
             }]
         })
         .ok_or_else(|| format!("{fallback_name}: malformed SOURCE fence"))
+}
+
+/// The language a SOURCE fence declares by its info string. Every SOURCE fence must name one.
+fn source_fence_language(input: &str, fallback_name: &str) -> Result<SourceLanguage, String> {
+    let info = input
+        .find("~~~")
+        .and_then(|start| input[start + 3..].split_once('\n'))
+        .map(|(info, _)| info.trim());
+    match info {
+        Some("sysml") => Ok(SourceLanguage::SysML),
+        Some("kerml") => Ok(SourceLanguage::KerML),
+        other => Err(format!(
+            "{fallback_name}: SOURCE fence must declare `sysml` or `kerml`, found {other:?}"
+        )),
+    }
 }
 
 /// Reads execution-affecting META keys. Descriptive keys remain open-ended, but malformed lines,
@@ -7208,9 +7981,9 @@ fn parse_fixture_meta(fixture: &str, fallback_name: &str) -> Result<FixtureMeta,
                     ))
                 }
             };
-            if diagram_selection.is_some() && plugin != GeneratorPlugin::RepositoryDiagram {
+            if diagram_selection.is_some() && plugin != GeneratorPlugin::NativeDiagram {
                 return Err(format!(
-                    "{fallback_name}: typed view selection is only valid with plugin=repository:diagram"
+                    "{fallback_name}: typed view selection is only valid with plugin=native:diagram"
                 ));
             }
             Some(GenerationRequest {
@@ -7316,8 +8089,8 @@ fn parse_meta_bool(value: &str, key: &str, fallback_name: &str) -> Result<bool, 
 }
 
 fn parse_generator_plugin(value: &str, fallback_name: &str) -> Result<GeneratorPlugin, String> {
-    if value == "repository:diagram" {
-        return Ok(GeneratorPlugin::RepositoryDiagram);
+    if value == "native:diagram" {
+        return Ok(GeneratorPlugin::NativeDiagram);
     }
     let name = value.strip_prefix("conformance:").unwrap_or(value);
     if name.is_empty()
@@ -7332,20 +8105,11 @@ fn parse_generator_plugin(value: &str, fallback_name: &str) -> Result<GeneratorP
     Ok(GeneratorPlugin::Conformance(name.to_string()))
 }
 
-fn validate_artifact_path(path: &str) -> Result<(), String> {
-    let candidate = Path::new(path);
-    if path.is_empty()
-        || candidate.is_absolute()
-        || candidate.components().any(|part| {
-            matches!(
-                part,
-                std::path::Component::ParentDir | std::path::Component::CurDir
-            )
-        })
-    {
-        return Err(format!("invalid generated artifact path {path:?}"));
-    }
-    Ok(())
+/// Reuse the generator boundary's portable path policy, including Windows device names and
+/// filesystem aliases. Host `Path` rules alone accept different names on different platforms.
+fn validate_artifact_path(path: &str) -> Result<generator_api::ArtifactPath, String> {
+    generator_api::ArtifactPath::parse(path)
+        .map_err(|error| format!("invalid generated artifact path {path:?}: {error}"))
 }
 
 fn artifact_fence_language(path: &str) -> &'static str {
@@ -7465,11 +8229,19 @@ fn parse_editor_probes(
         let mut qualifier = None;
         let mut rename_to = None;
         let probe_index = probes.len();
+        let mut features = false;
         for option in fields {
             if let Some(value) = option.strip_prefix("qualifier=") {
                 qualifier = Some(value.to_string());
             } else if let Some(value) = option.strip_prefix("rename=") {
                 rename_to = Some(value.to_string());
+            } else if option == "features" {
+                if features {
+                    return Err(format!(
+                        "{fallback_name}: duplicate editor probe option {option:?}"
+                    ));
+                }
+                features = true;
             } else if option == "hover" {
                 if !hover.insert(probe_index) {
                     return Err(format!(
@@ -7487,6 +8259,7 @@ fn parse_editor_probes(
             position: TextPosition { line, character },
             qualifier,
             rename_to,
+            features,
         });
     }
     Ok(EditorProbes {
@@ -7589,7 +8362,10 @@ fn replace_or_insert_section(fixture: &str, name: &str, replacement: &str) -> Op
         return Some(updated);
     }
     let insertion = fixture.find("\n# ").unwrap_or(fixture.len());
-    let section = format!("\n# {name}\n~~~sexpr\n{replacement}\n~~~");
+    let section = format!(
+        "\n# {name}\n~~~sexpr\n{}\n~~~",
+        replacement.trim_end_matches('\n')
+    );
     let mut updated = String::with_capacity(fixture.len() + section.len());
     updated.push_str(&fixture[..insertion]);
     updated.push_str(&section);
@@ -7618,6 +8394,10 @@ const SECTION_ORDER: &[&str] = &[
     "DIAGNOSTICS",
     "SMG",
     "TYPES",
+    "EXPRESSIONS",
+    "METADATA ANNOTATIONS",
+    "CONNECTIONS",
+    "PROJECTION",
     "NAVIGATION",
     "EDITOR RESULTS",
     "HOVER RESULTS",
@@ -7721,6 +8501,46 @@ fn fenced_block(input: &str) -> Option<(String, &str)> {
 mod tests {
     use super::*;
     use spec42_constraint_manifest::{SpecificationManifest, SCHEMA_VERSION};
+
+    #[test]
+    fn library_corpus_is_admitted_before_parallel_fixture_reads() {
+        let directory = tempfile::tempdir().unwrap();
+        let library = directory.path().join(STANDARD_LIBRARY_DIRECTORY);
+        fs::create_dir(&library).unwrap();
+        let fixture = library.join("library.md");
+        fs::write(&fixture, "# SOURCE\n~~~sysml\npackage Library {}\n~~~\n").unwrap();
+        let corpus = LibraryCorpus::new(directory.path().to_path_buf());
+        assert_eq!(corpus.standard_documents.as_ref().unwrap().len(), 1);
+        // Subsequent fixture reads cannot perform source I/O or trigger admission.
+        fs::remove_file(fixture).unwrap();
+        for threads in [1, 2, 4] {
+            let pool = rayon::ThreadPoolBuilder::new()
+                .num_threads(threads)
+                .build()
+                .unwrap();
+            pool.install(|| {
+                (0..32).into_par_iter().for_each(|_| {
+                    assert_eq!(
+                        corpus.documents(LibrarySelection::Standard).unwrap().len(),
+                        1
+                    );
+                    assert!(corpus.documents(LibrarySelection::None).unwrap().is_empty());
+                });
+            });
+        }
+    }
+
+    #[test]
+    fn library_admission_failure_only_affects_standard_library_fixtures() {
+        let directory = tempfile::tempdir().unwrap();
+        let corpus = LibraryCorpus::new(directory.path().to_path_buf());
+        let admission_error = corpus.standard_documents.as_ref().unwrap_err();
+        assert_eq!(
+            corpus.documents(LibrarySelection::Standard).unwrap_err(),
+            *admission_error
+        );
+        assert!(corpus.documents(LibrarySelection::None).unwrap().is_empty());
+    }
 
     #[test]
     fn snapshot_replacement_is_atomic_per_file() {
@@ -7993,14 +8813,18 @@ mod tests {
                 relationships: vec![
                     RelationshipExpectation {
                         kind: SemanticRelationshipKind::Specialization,
-                        source: "Model::Component".to_string(),
+                        source: ElementReferenceExpectation::Qualified(
+                            "Model::Component".to_string()
+                        ),
                         target: Some("Parts::Part".to_string()),
                         provenance: Some(RelationshipProvenance::Implied),
                         outcome: SemanticRelationshipOutcome::Resolved,
                     },
                     RelationshipExpectation {
                         kind: SemanticRelationshipKind::Specialization,
-                        source: "Model::Equivalent".to_string(),
+                        source: ElementReferenceExpectation::Qualified(
+                            "Model::Equivalent".to_string()
+                        ),
                         target: None,
                         provenance: Some(RelationshipProvenance::Implied),
                         outcome: SemanticRelationshipOutcome::Absent,
@@ -8017,6 +8841,7 @@ mod tests {
                 element_derived_documentation: Vec::new(),
                 namespace_derived_elements: Vec::new(),
                 namespace_import_derived_elements: Vec::new(),
+                view_exposed_elements: Vec::new(),
                 binding_connector_checks: Vec::new(),
                 redefinition_checks: Vec::new(),
                 specialization_checks: Vec::new(),
@@ -8044,7 +8869,7 @@ mod tests {
 
     #[test]
     fn parses_manifest_scoped_binding_connector_check_expectations_strictly() {
-        let fixture = "# EXPECTED SEMANTICS\n~~~sexpr\n(fixture-semantics\n  (binding-connector-check\n    (rule_id \"kerml-1.0:8.3.4.8.5:checkFeatureReferenceExpressionBindingConnector\")\n    (outcome unsupported)\n    (prerequisite feature_reference_expression_target_and_result))\n  (binding-connector-check\n    (rule_id \"kerml-1.0:8.3.4.8.3:checkConstructorExpressionResultDefaultValueBindingConnector\")\n    (outcome satisfied)))\n~~~\n";
+        let fixture = "# EXPECTED SEMANTICS\n~~~sexpr\n(fixture-semantics\n  (binding-connector-check\n    (rule_id \"sysml-2.0:8.3.17.2:checkAcceptActionUsageReceiverBindingConnector\")\n    (outcome unsupported)\n    (prerequisite accept_action_usage_receiver_endpoint_facts))\n  (binding-connector-check\n    (rule_id \"kerml-1.0:8.3.4.8.3:checkConstructorExpressionResultDefaultValueBindingConnector\")\n    (outcome satisfied)))\n~~~\n";
         let parsed = parse_expected_semantics(fixture, "fixture.md")
             .unwrap()
             .expect("semantic expectations");
@@ -8052,9 +8877,9 @@ mod tests {
             parsed.binding_connector_checks,
             vec![
                 BindingConnectorCheckExpectation {
-                    rule: BindingConnectorCheckKind::FeatureReferenceExpression,
+                    rule: BindingConnectorCheckKind::AcceptActionUsageReceiver,
                     outcome: BindingConnectorCheckOutcome::Unsupported(
-                        BindingConnectorValidationPrerequisite::FeatureReferenceExpressionTargetAndResult,
+                        BindingConnectorValidationPrerequisite::AcceptActionUsageReceiverEndpointFacts,
                     ),
                 },
                 BindingConnectorCheckExpectation {
@@ -8072,7 +8897,7 @@ mod tests {
 
     #[test]
     fn parses_manifest_scoped_redefinition_check_expectations_strictly() {
-        let fixture = "# EXPECTED SEMANTICS\n~~~sexpr\n(fixture-semantics\n  (redefinition-check\n    (rule_id \"kerml-1.0:8.3.3.3.4:checkFeatureEndRedefinition\")\n    (outcome unsupported)\n    (prerequisite end_feature_position_and_inherited_ends))\n  (redefinition-check\n    (rule_id \"sysml-2.0:8.3.26.6:checkRenderingUsageRedefinition\")\n    (outcome unsupported)\n    (prerequisite view_rendering_membership)))\n~~~\n";
+        let fixture = "# EXPECTED SEMANTICS\n~~~sexpr\n(fixture-semantics\n  (redefinition-check\n    (rule_id \"kerml-1.0:8.3.3.3.4:checkFeatureParameterRedefinition\")\n    (outcome unsupported)\n    (prerequisite grammar_parameters))\n  (redefinition-check\n    (rule_id \"kerml-1.0:8.3.3.3.4:checkFeatureResultRedefinition\")\n    (outcome unsupported)\n    (prerequisite expression_elements)))\n~~~\n";
         let parsed = parse_expected_semantics(fixture, "fixture.md")
             .unwrap()
             .expect("semantic expectations");
@@ -8080,15 +8905,15 @@ mod tests {
             parsed.redefinition_checks,
             vec![
                 RedefinitionCheckExpectation {
-                    rule: RedefinitionCheckKind::FeatureEnd,
+                    rule: RedefinitionCheckKind::FeatureParameter,
                     outcome: RedefinitionCheckExpectationOutcome::Unsupported(
-                        RedefinitionCheckPrerequisite::EndFeaturePositionAndInheritedEnds,
+                        RedefinitionCheckPrerequisite::GrammarParameters,
                     ),
                 },
                 RedefinitionCheckExpectation {
-                    rule: RedefinitionCheckKind::RenderingUsage,
+                    rule: RedefinitionCheckKind::FeatureResult,
                     outcome: RedefinitionCheckExpectationOutcome::Unsupported(
-                        RedefinitionCheckPrerequisite::ViewRenderingMembership,
+                        RedefinitionCheckPrerequisite::ExpressionElements,
                     ),
                 },
             ]
@@ -8288,17 +9113,25 @@ mod tests {
             expectations.action_derived_facts,
             vec![
                 ActionDerivedFactExpectation {
-                    collection: ActionDerivedFactCollection::ActionDefinitionAction,
-                    source: "Actions::Procedure".to_string(),
-                    target: Some("Actions::Procedure::step".to_string()),
+                    collection: Some(ActionDerivedFactCollection::ActionDefinitionAction),
+                    source: ElementReferenceExpectation::Qualified(
+                        "Actions::Procedure".to_string()
+                    ),
+                    target: Some(ElementReferenceExpectation::Qualified(
+                        "Actions::Procedure::step".to_string(),
+                    )),
                     position: None,
+                    value: None,
                     outcome: TypeDerivedElementOutcome::Resolved,
                 },
                 ActionDerivedFactExpectation {
-                    collection: ActionDerivedFactCollection::AssignmentValueExpression,
-                    source: "Actions::Procedure".to_string(),
+                    collection: Some(ActionDerivedFactCollection::AssignmentValueExpression),
+                    source: ElementReferenceExpectation::Qualified(
+                        "Actions::Procedure".to_string()
+                    ),
                     target: None,
                     position: Some(2),
+                    value: None,
                     outcome: TypeDerivedElementOutcome::Resolved,
                 },
             ]
@@ -8315,6 +9148,10 @@ mod tests {
             (
                 "(fixture-semantics (action-derived-fact (rule_id sysml-2.0:8.3.17.5:deriveAssignmentActionUsageValueExpression) (source Actions::Procedure) (position 0) (outcome resolved)))",
                 "position must be a positive integer",
+            ),
+            (
+                "(fixture-semantics (action-derived-fact (rule_id kerml-1.0:8.3.3.3.4:deriveFeatureType) (source Model::feature) (outcome unsupported)))",
+                "states the specified outcome",
             ),
         ] {
             let fixture = format!("# EXPECTED SEMANTICS\n~~~sexpr\n{body}\n~~~\n");
@@ -8535,7 +9372,7 @@ mod tests {
 
     #[test]
     fn feature_derived_semantics_use_the_query_facade_with_publication_parity() {
-        let fixture = "# META\n~~~ini\nsource_expectation=accepted\nrule_family=derive\nexpectation=semantics\nrule_id=kerml-1.0:8.3.3.3.4:deriveFeatureOwnedFeatureChaining\nlibraries=none\n~~~\n# SOURCE\n~~~kerml\npackage Model { classifier Vehicle { feature base; feature derived : Vehicle redefines base chains base; feature unresolved chains Missing; } }\n~~~\n# EXPECTED SEMANTICS\n~~~sexpr\n(fixture-semantics\n  (derived-relationship-collection (rule_id \"kerml-1.0:8.3.3.3.4:deriveFeatureOwnedFeatureChaining\") (source \"Model::Vehicle::derived\") (kind feature_chaining) (target \"Model::Vehicle::base\") (provenance authored) (outcome resolved))\n  (derived-relationship-collection (rule_id \"kerml-1.0:8.3.3.3.4:deriveFeatureOwnedFeatureChaining\") (source \"Model::Vehicle::unresolved\") (kind feature_chaining) (provenance authored) (outcome unresolved))\n  (derived-relationship-collection (rule_id \"kerml-1.0:8.3.3.3.4:deriveFeatureOwnedRedefinition\") (source \"Model::Vehicle::derived\") (kind redefinition) (target \"Model::Vehicle::base\") (provenance authored) (outcome resolved))\n  (derived-relationship-collection (rule_id \"kerml-1.0:8.3.3.3.4:deriveFeatureOwnedSubsetting\") (source \"Model::Vehicle::derived\") (kind redefinition) (target \"Model::Vehicle::base\") (provenance authored) (outcome resolved))\n  (derived-relationship-collection (rule_id \"kerml-1.0:8.3.3.3.4:deriveFeatureOwnedTyping\") (source \"Model::Vehicle::derived\") (kind feature_typing) (target \"Model::Vehicle\") (provenance authored) (outcome resolved))\n  (derived-relationship-collection (rule_id \"kerml-1.0:8.3.3.3.4:deriveFeatureOwnedTypeFeaturing\") (source \"Model::Vehicle::derived\") (kind type_featuring) (target \"Model::Vehicle\") (provenance implied) (outcome resolved)))\n~~~\n";
+        let fixture = "# META\n~~~ini\nsource_expectation=accepted\nrule_family=derive\nexpectation=semantics\nrule_id=kerml-1.0:8.3.3.3.4:deriveFeatureOwnedFeatureChaining\nlibraries=none\n~~~\n# SOURCE\n~~~kerml\npackage Model { classifier Base { feature base; } classifier Vehicle specializes Base { feature 'derived' : Vehicle redefines base chains base; feature unresolved chains Missing; } }\n~~~\n# EXPECTED SEMANTICS\n~~~sexpr\n(fixture-semantics\n  (derived-relationship-collection (rule_id \"kerml-1.0:8.3.3.3.4:deriveFeatureOwnedFeatureChaining\") (source \"Model::Vehicle::derived\") (kind feature_chaining) (target \"Model::Base::base\") (provenance authored) (outcome resolved))\n  (derived-relationship-collection (rule_id \"kerml-1.0:8.3.3.3.4:deriveFeatureOwnedFeatureChaining\") (source \"Model::Vehicle::unresolved\") (kind feature_chaining) (provenance authored) (outcome unresolved))\n  (derived-relationship-collection (rule_id \"kerml-1.0:8.3.3.3.4:deriveFeatureOwnedRedefinition\") (source \"Model::Vehicle::derived\") (kind redefinition) (target \"Model::Base::base\") (provenance authored) (outcome resolved))\n  (derived-relationship-collection (rule_id \"kerml-1.0:8.3.3.3.4:deriveFeatureOwnedSubsetting\") (source \"Model::Vehicle::derived\") (kind redefinition) (target \"Model::Base::base\") (provenance authored) (outcome resolved))\n  (derived-relationship-collection (rule_id \"kerml-1.0:8.3.3.3.4:deriveFeatureOwnedTyping\") (source \"Model::Vehicle::derived\") (kind feature_typing) (target \"Model::Vehicle\") (provenance authored) (outcome resolved))\n  (derived-relationship-collection (rule_id \"kerml-1.0:8.3.3.3.4:deriveFeatureOwnedTypeFeaturing\") (source \"Model::Vehicle::derived\") (kind type_featuring) (target \"Model::Vehicle\") (provenance implied) (outcome resolved)))\n~~~\n";
         let manifest_path = Path::new(env!("CARGO_MANIFEST_DIR"))
             .join("../..")
             .join("specifications/constraint_manifest.toml");
@@ -9401,13 +10238,13 @@ mod tests {
 
     #[test]
     fn parses_closed_typed_diagram_selection() {
-        let diagram = "# META\n~~~ini\ntype=generate\nplugin=repository:diagram\nviewKind=general-view\nviewDocument=model.sysml\nviewQualifiedName=Example::selected\n~~~\n";
+        let diagram = "# META\n~~~ini\ntype=generate\nplugin=native:diagram\nviewKind=general-view\nviewDocument=model.sysml\nviewQualifiedName=Example::selected\n~~~\n";
         assert_eq!(
             parse_fixture_meta(diagram, "fixture.md")
                 .unwrap()
                 .generation,
             Some(GenerationRequest {
-                plugin: GeneratorPlugin::RepositoryDiagram,
+                plugin: GeneratorPlugin::NativeDiagram,
                 diagram_selection: Some(DiagramSelection {
                     kind: "general-view".to_string(),
                     document: "model.sysml".to_string(),
@@ -9418,6 +10255,39 @@ mod tests {
     }
 
     #[test]
+    fn parses_nested_anonymous_element_references() {
+        let expression = parse_authored_sexpr(
+            "(anonymous (owner (anonymous (owner \"M::S\") (kind TransitionUsage) (ordinal 0))) (kind AcceptActionUsage) (ordinal 1))",
+        )
+        .unwrap();
+        assert_eq!(
+            parse_element_reference_expectation(&expression, "fixture.md").unwrap(),
+            ElementReferenceExpectation::Anonymous {
+                owner: Box::new(ElementReferenceExpectation::Anonymous {
+                    owner: Box::new(ElementReferenceExpectation::Qualified("M::S".to_string())),
+                    kind: ElementKind::TransitionUsage,
+                    ordinal: 0,
+                }),
+                kind: ElementKind::AcceptActionUsage,
+                ordinal: 1,
+            }
+        );
+        for invalid in [
+            "(anonymous (owner \"M\") (kind IfActionUsage))",
+            "(anonymous (owner \"M\") (kind NotAKind) (ordinal 0))",
+            "(anonymous (owner \"M\") (kind IfActionUsage) (ordinal -1))",
+            "(anonymous (owner \"M\") (owner \"N\") (kind IfActionUsage) (ordinal 0))",
+            "(named (owner \"M\"))",
+        ] {
+            let expression = parse_authored_sexpr(invalid).unwrap();
+            assert!(
+                parse_element_reference_expectation(&expression, "fixture.md").is_err(),
+                "{invalid} should be rejected"
+            );
+        }
+    }
+
+    #[test]
     fn parses_qualified_reference_probe_mechanics() {
         let fixture = "# SOURCE\n## model.sysml\n~~~sysml\npackage Example {}\n~~~\n# QUALIFIED REFERENCE QUERIES\n~~~text\nresolve model.sysml Example::selected ViewUsage\nresolve * StandardViewDefinitions::GeneralView *\n~~~\n";
         assert_eq!(
@@ -9425,6 +10295,7 @@ mod tests {
                 fixture,
                 &[SourceDocument {
                     name: "model.sysml".to_string(),
+                    language: SourceLanguage::SysML,
                     text: "package Example {}".to_string(),
                 }],
                 "fixture.md",
@@ -9446,12 +10317,13 @@ mod tests {
     }
 
     #[test]
-    fn parses_hover_as_an_editor_probe_projection() {
-        let fixture = "# SOURCE\n## model.sysml\n~~~sysml\npackage Example {}\n~~~\n# EDITOR QUERIES\n~~~text\nprobe model.sysml 0 8 hover\nprobe model.sysml 0 16 rename=Renamed\n~~~\n";
+    fn parses_optional_editor_probe_projections() {
+        let fixture = "# SOURCE\n## model.sysml\n~~~sysml\npackage Example {}\n~~~\n# EDITOR QUERIES\n~~~text\nprobe model.sysml 0 8 hover features\nprobe model.sysml 0 16 rename=Renamed\n~~~\n";
         let parsed = parse_editor_probes(
             fixture,
             &[SourceDocument {
                 name: "model.sysml".to_string(),
+                language: SourceLanguage::SysML,
                 text: "package Example {}".to_string(),
             }],
             "fixture.md",
@@ -9460,7 +10332,19 @@ mod tests {
 
         assert_eq!(parsed.queries.len(), 2);
         assert_eq!(parsed.hover, BTreeSet::from([0]));
+        assert!(parsed.queries[0].features);
+        assert!(!parsed.queries[1].features);
         assert_eq!(parsed.queries[1].rename_to.as_deref(), Some("Renamed"));
+        assert!(parse_editor_probes(
+            &fixture.replace("hover features", "features features"),
+            &[SourceDocument {
+                name: "model.sysml".to_string(),
+                language: SourceLanguage::SysML,
+                text: "package Example {}".to_string(),
+            }],
+            "fixture.md",
+        )
+        .is_err());
     }
 
     #[test]
@@ -9479,12 +10363,12 @@ mod tests {
     fn rejects_invalid_generator_selection_metadata() {
         for (meta, expected) in [
             (
-                "type=generate\nplugin=repository:diagram\nviewKind=general-view",
+                "type=generate\nplugin=native:diagram\nviewKind=general-view",
                 "must be specified together",
             ),
             (
                 "type=generate\nplugin=requirements_csv\nviewKind=general-view\nviewDocument=model.sysml\nviewQualifiedName=Example::selected",
-                "only valid with plugin=repository:diagram",
+                "only valid with plugin=native:diagram",
             ),
             ("type=generate\nplugin=../../escape", "unknown or unsafe"),
             (
@@ -9500,9 +10384,7 @@ mod tests {
 
     #[test]
     fn repository_plugin_paths_are_closed() {
-        assert!(generator_plugin_path(&GeneratorPlugin::RepositoryDiagram)
-            .ends_with("generator-plugins/target/wasm32-unknown-unknown/release/spec42_diagram_generator.wasm"));
-        assert!(generator_plugin_path(&GeneratorPlugin::Conformance("example".to_string()))
+        assert!(conformance_plugin_path("example")
             .ends_with("generator-tests/plugins/target/wasm32-unknown-unknown/release/spec42_conformance_example.wasm"));
     }
 
@@ -9552,18 +10434,39 @@ mod tests {
     fn generated_artifact_paths_are_safe_and_unique() {
         let mut artifacts = GeneratedArtifacts::default();
         artifacts
-            .insert_utf8("ok/report.csv", String::new())
+            .insert_utf8("ok/report.csv", "original".to_owned())
             .unwrap();
         assert!(artifacts
-            .insert_utf8("ok/report.csv", String::new())
+            .insert_utf8("ok/report.csv", "replacement".to_owned())
             .unwrap_err()
             .contains("duplicate"));
+        assert_eq!(artifacts.files["ok/report.csv"], "original");
+        for (first, alias) in [("Report.csv", "report.csv"), ("é.csv", "e\u{301}.csv")] {
+            let mut artifacts = GeneratedArtifacts::default();
+            artifacts.insert_utf8(first, "original".to_owned()).unwrap();
+            assert!(artifacts
+                .insert_utf8(alias, "replacement".to_owned())
+                .is_err());
+            assert_eq!(artifacts.files.len(), 1);
+            assert_eq!(artifacts.files[first], "original");
+        }
         for path in [
             "",
             "/absolute.csv",
             "../escape.csv",
             "a/../escape.csv",
             "./same.csv",
+            "C:/drive.csv",
+            "C:\\drive.csv",
+            "a\\..\\escape.csv",
+            "a//empty-segment.csv",
+            "trailing/",
+            "nul\0.csv",
+            "CON.csv",
+            "nested/LPT1.txt",
+            "report.csv.",
+            "report.csv ",
+            "bad|name.csv",
         ] {
             assert!(
                 GeneratedArtifacts::default()

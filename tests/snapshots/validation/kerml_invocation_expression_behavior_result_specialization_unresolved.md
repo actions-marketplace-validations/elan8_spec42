@@ -6,6 +6,7 @@ specification_url=https://www.omg.org/spec/KerML/1.0/PDF
 source_expectation=accepted
 rule_family=check
 expectation=semantics
+coverage_role=secondary
 rule_id=kerml-1.0:8.3.4.8.8:checkInvocationExpressionBehaviorResultSpecialization
 ~~~
 # SOURCE
@@ -36,7 +37,7 @@ package Model {
 # SMG
 ~~~sexpr
 (semantic-model
-  (publication (phase resolved) (completeness complete) (has-evaluation true) (source-digest "blake3:613a7360789f4c1442b5ba0cb530c41f9bc0a0907fe9c69e502a459e040e292c"))
+  (publication (phase resolved) (completeness complete) (has-evaluation true) (source-digest "blake3:b37d8d1a3af9f16e6ba7a3b274d412beb68fde8d42839b099015b62960f79079"))
   (declarations
     (declaration (id (node (document "memory://snapshot/kerml_invocation_expression_behavior_result_specialization_unresolved.md") (qualified-name "Model"))) (kind package) (membership (kind owning) (visibility default)))
     (declaration (id (node (document "memory://snapshot/kerml_invocation_expression_behavior_result_specialization_unresolved.md") (qualified-name "Model::invoked"))) (kind kerml-feature) (membership (kind feature) (visibility default)) (feature-value (kind bind) (value (node (document "memory://snapshot/kerml_invocation_expression_behavior_result_specialization_unresolved.md") (path (named (kind package) (name "Model")) (named (kind kerml-feature) (name "invoked")) (anonymous (kind kerml-expression) (ordinal 0))))) (result (node (document "memory://snapshot/kerml_invocation_expression_behavior_result_specialization_unresolved.md") (path (named (kind package) (name "Model")) (named (kind kerml-feature) (name "invoked")) (anonymous (kind kerml-expression) (ordinal 0)) (anonymous (kind kerml-feature) (ordinal 0)))))))
@@ -53,7 +54,7 @@ package Model {
     (relationship (kind typeFeaturing) (source (node (document "memory://snapshot/kerml_invocation_expression_behavior_result_specialization_unresolved.md") (path (named (kind package) (name "Model")) (named (kind kerml-feature) (name "invoked")) (anonymous (kind kerml-expression) (ordinal 0)) (anonymous (kind kerml-feature) (ordinal 0))))) (target (node (document "memory://snapshot/kerml_invocation_expression_behavior_result_specialization_unresolved.md") (path (named (kind package) (name "Model")) (named (kind kerml-feature) (name "invoked")) (anonymous (kind kerml-expression) (ordinal 0))))) (provenance implied))
   )
   (evaluation
-    (evaluated (declaration (node (document "memory://snapshot/kerml_invocation_expression_behavior_result_specialization_unresolved.md") (path (named (kind package) (name "Model")) (named (kind kerml-feature) (name "invoked")) (anonymous (kind kerml-expression) (ordinal 0))))) (state non-constant))
+    (evaluated (declaration (node (document "memory://snapshot/kerml_invocation_expression_behavior_result_specialization_unresolved.md") (path (named (kind package) (name "Model")) (named (kind kerml-feature) (name "invoked")) (anonymous (kind kerml-expression) (ordinal 0))))) (state unresolved-operand))
   )
 )
 ~~~
@@ -67,6 +68,12 @@ package Model {
       (featured-by (node (document "memory://snapshot/kerml_invocation_expression_behavior_result_specialization_unresolved.md") (path (named (kind package) (name "Model")) (named (kind kerml-feature) (name "invoked")) (anonymous (kind kerml-expression) (ordinal 0)))))
       (subtype (node (document "memory://snapshot/kerml_invocation_expression_behavior_result_specialization_unresolved.md") (qualified-name "Model::invoked")) (scopes any feature))
     )
+)
+~~~
+# EXPRESSIONS
+~~~sexpr
+(expressions
+  (declaration (id (node (document "memory://snapshot/kerml_invocation_expression_behavior_result_specialization_unresolved.md") (path (named (kind package) (name "Model")) (named (kind kerml-feature) (name "invoked")) (anonymous (kind kerml-expression) (ordinal 0))))) (outcome resolved) (unsupported))
 )
 ~~~
 # NAVIGATION

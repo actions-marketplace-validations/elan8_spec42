@@ -3,7 +3,7 @@
 description=Sequence view keeps unresolved exposure explicit
 type=generate
 libraries=standard
-plugin=repository:diagram
+plugin=native:diagram
 viewKind=sequence-view
 viewDocument=diagram_sequence_unresolved.md
 viewQualifiedName=SequenceNegative::selected
@@ -34,7 +34,7 @@ package SequenceNegative {
 # SMG
 ~~~sexpr
 (semantic-model
-  (publication (phase resolved) (completeness complete) (has-evaluation true) (source-digest "blake3:eaed36cecf940a559efe2d04a551b1fb5ca6dface7d64a8d171729a1f39f9c4f") (admitted (standard-library 94)))
+  (publication (phase resolved) (completeness complete) (has-evaluation true) (source-digest "blake3:8e77318b3df28695c167d3ed558fb09f83b564d8d2a89412ce3dbe46a15fcbde") (admitted (standard-library 94)))
   (declarations
     (declaration (id (node (document "memory://snapshot/diagram_sequence_unresolved.md") (qualified-name "SequenceNegative"))) (kind package) (membership (kind owning) (visibility default)))
     (declaration (id (node (document "memory://snapshot/diagram_sequence_unresolved.md") (path (named (kind package) (name "SequenceNegative")) (anonymous (kind import) (ordinal 0))))) (kind import) (membership (kind import) (visibility private)) (authored (membership (kind import) (visibility private)) (relationships (namespaceImport (reference "StandardViewDefinitions") (import (shape namespace) (recursive false))))))
@@ -135,8 +135,8 @@ package SequenceNegative {
 ## diagram.json
 ~~~json
 {
-  "schemaVersion": 5,
-  "modelDigest": "blake3:38326074b5805006fe5d3787cec23fc55b587556d6828c9a076cd00168be224e",
+  "schemaVersion": 10,
+  "modelDigest": "blake3:eb821db0392e33dbf38170d2deb4e6f649c28f8f53afbe27a7de6fe7c9d370f4",
   "documents": [
     {
       "uri": "memory://snapshot/diagram_sequence_unresolved.md",

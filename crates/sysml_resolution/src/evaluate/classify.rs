@@ -5,8 +5,9 @@ use sysml_v2_parser::{
     ParsedDocument,
 };
 
+use crate::evaluate::fold::CallTarget;
 use crate::evaluate::fold::{
-    eval_node_is_pure_literal, fold_eval_node, literal_expression_value, EvalNode,
+    eval_node_is_pure_literal, fold_eval_node, literal_expression_value, EvalNode, EvalOperand,
 };
 use crate::lower::facts::{AuthoredExpression, ExpressionGrammar, FilterPredicate};
 use crate::lower::storage::ParsedSources;
@@ -50,7 +51,7 @@ pub(crate) fn classify_constraint_node(
             literal_expression_value(parsed, node).map(EvalNode::Literal)
         }
         Expression::FeatureRef(_) | Expression::FeatureChainRef(_) => {
-            let leaf = EvalNode::Operand(*ordinal);
+            let leaf = EvalNode::Operand(EvalOperand::Ordinal(*ordinal));
             *ordinal += 1;
             Some(leaf)
         }
@@ -69,9 +70,11 @@ pub(crate) fn classify_constraint_node(
                     ordinal,
                 )?);
             }
-            Some(EvalNode::Invocation(children))
+            Some(EvalNode::Sequence(children))
         }
-        Expression::BodyExpr(body) if body.value.parameters.is_empty() => {
+        Expression::BodyExpr(body)
+            if body.value.parameters.is_empty() && body.value.members.is_empty() =>
+        {
             classify_constraint_node(parsed, &body.value.result.as_ref()?.value, ordinal)
         }
         Expression::Index { base, operands, .. } => {
@@ -88,7 +91,7 @@ pub(crate) fn classify_constraint_node(
         }
         Expression::Select { base, .. } => {
             let base = classify_constraint_node(parsed, &base.value, ordinal)?;
-            let selector = EvalNode::Operand(*ordinal);
+            let selector = EvalNode::Operand(EvalOperand::Ordinal(*ordinal));
             *ordinal += 1;
             Some(EvalNode::Invocation(vec![base, selector]))
         }
@@ -119,12 +122,15 @@ pub(crate) fn classify_constraint_node(
                 Box::new(right),
             ))
         }
-        Expression::Invocation { args, .. } => {
+        Expression::Invocation { callee, args } => {
             let mut children = Vec::with_capacity(args.len());
             for arg in args {
                 children.push(classify_constraint_node(parsed, &arg.value, ordinal)?);
             }
-            Some(EvalNode::Invocation(children))
+            Some(EvalNode::Call(
+                CallTarget::AuthoredEnd(callee.span.offset.checked_add(callee.span.len)?),
+                children,
+            ))
         }
         Expression::Constructor { args, .. } => {
             let mut children = Vec::with_capacity(args.len());
@@ -133,7 +139,15 @@ pub(crate) fn classify_constraint_node(
             }
             Some(EvalNode::Invocation(children))
         }
-        Expression::CollectionOp { base, args, .. } => {
+        // Callback bodies are resolved in their own semantic scopes. Until the
+        // evaluator models higher-order application, do not classify a call as
+        // though the callback were absent.
+        Expression::CollectionOp {
+            base,
+            args,
+            brace_body: None,
+            ..
+        } => {
             let mut children = Vec::with_capacity(args.len() + 1);
             children.push(classify_constraint_node(parsed, &base.value, ordinal)?);
             for arg in args {
@@ -156,6 +170,15 @@ pub(crate) fn classify_constraint_node(
             let base = classify_constraint_node(parsed, &base.value, ordinal)?;
             Some(EvalNode::Invocation(vec![base]))
         }
+        // A dotted feature chain (`s.error`) is lowered as one `MemberAccessOperand`, not an
+        // `ExpressionOperand`, so it must not advance that ordinal. Its authored token end joins
+        // directly to the canonical member-access reference's settled target.
+        Expression::MemberAccess { member, .. } if !has_indexed_primary(node) => {
+            let span = parsed.qualified_reference(*member)?.metadata.span;
+            Some(EvalNode::Operand(EvalOperand::MemberAccessEnd(
+                span.offset.checked_add(span.len)?,
+            )))
+        }
         _ => None,
     }
 }
@@ -171,6 +194,13 @@ pub(crate) fn classify_filter_predicate(
             *metadata_ordinal = metadata_ordinal.saturating_add(1);
             FilterPredicate::Metadata(ordinal)
         }
+        Expression::UnaryOp {
+            op: UnaryOperator::Not,
+            operand,
+        } => FilterPredicate::Not(Box::new(classify_filter_predicate(
+            &operand.value,
+            metadata_ordinal,
+        ))),
         Expression::Sequence { operands, .. }
             if matches!(operands.value.elements.as_slice(), [_]) =>
         {
@@ -217,7 +247,7 @@ pub(crate) fn classify_calc_node(
             literal_expression_value(parsed, node).map(EvalNode::Literal)
         }
         Expression::FeatureRef(_) | Expression::FeatureChainRef(_) => {
-            let leaf = EvalNode::Operand(*ordinal);
+            let leaf = EvalNode::Operand(EvalOperand::Ordinal(*ordinal));
             *ordinal += 1;
             Some(leaf)
         }
@@ -236,9 +266,11 @@ pub(crate) fn classify_calc_node(
                     ordinal,
                 )?);
             }
-            Some(EvalNode::Invocation(children))
+            Some(EvalNode::Sequence(children))
         }
-        Expression::BodyExpr(body) if body.value.parameters.is_empty() => {
+        Expression::BodyExpr(body)
+            if body.value.parameters.is_empty() && body.value.members.is_empty() =>
+        {
             classify_calc_node(parsed, &body.value.result.as_ref()?.value, ordinal)
         }
         Expression::Index { base, operands, .. } => {
@@ -255,7 +287,7 @@ pub(crate) fn classify_calc_node(
         }
         Expression::Select { base, .. } => {
             let base = classify_calc_node(parsed, &base.value, ordinal)?;
-            let selector = EvalNode::Operand(*ordinal);
+            let selector = EvalNode::Operand(EvalOperand::Ordinal(*ordinal));
             *ordinal += 1;
             Some(EvalNode::Invocation(vec![base, selector]))
         }
@@ -268,12 +300,15 @@ pub(crate) fn classify_calc_node(
                 Box::new(right),
             ))
         }
-        Expression::Invocation { args, .. } => {
+        Expression::Invocation { callee, args } => {
             let mut children = Vec::with_capacity(args.len());
             for arg in args {
                 children.push(classify_calc_node(parsed, &arg.value, ordinal)?);
             }
-            Some(EvalNode::Invocation(children))
+            Some(EvalNode::Call(
+                CallTarget::AuthoredEnd(callee.span.offset.checked_add(callee.span.len)?),
+                children,
+            ))
         }
         Expression::Constructor { args, .. } => {
             let mut children = Vec::with_capacity(args.len());
@@ -282,7 +317,15 @@ pub(crate) fn classify_calc_node(
             }
             Some(EvalNode::Invocation(children))
         }
-        Expression::CollectionOp { base, args, .. } => {
+        // Callback bodies are resolved in their own semantic scopes. Until the
+        // evaluator models higher-order application, do not classify a call as
+        // though the callback were absent.
+        Expression::CollectionOp {
+            base,
+            args,
+            brace_body: None,
+            ..
+        } => {
             let mut children = Vec::with_capacity(args.len() + 1);
             children.push(classify_calc_node(parsed, &base.value, ordinal)?);
             for arg in args {
@@ -305,6 +348,13 @@ pub(crate) fn classify_calc_node(
             let base = classify_calc_node(parsed, &base.value, ordinal)?;
             Some(EvalNode::Invocation(vec![base]))
         }
+        // A dotted chain consumes its member-access occurrence, not an ExpressionOperand ordinal.
+        Expression::MemberAccess { member, .. } if !has_indexed_primary(node) => {
+            let span = parsed.qualified_reference(*member)?.metadata.span;
+            Some(EvalNode::Operand(EvalOperand::MemberAccessEnd(
+                span.offset.checked_add(span.len)?,
+            )))
+        }
         _ => None,
     }
 }
@@ -326,12 +376,7 @@ pub(crate) fn classify_authored(
     let Some(parsed) = sources.parsed(expression.document) else {
         return ExpressionEvalShape::Unsupported;
     };
-    classify_expression(
-        parsed,
-        &expression.node,
-        expression.grammar,
-        expression.operand_start,
-    )
+    classify_expression(parsed, expression)
 }
 
 /// Classifies an expression exactly along `lower_constraint_expression`/`lower_calc_expression`'s
@@ -345,15 +390,10 @@ pub(crate) fn classify_authored(
 /// every leaf with the wrong reference.
 pub(crate) fn classify_expression(
     parsed: &ParsedDocument,
-    node: &Expression,
-    grammar: ExpressionGrammar,
-    start: u32,
+    expression: &AuthoredExpression,
 ) -> ExpressionEvalShape {
-    let mut ordinal = start;
-    let classified = match grammar {
-        ExpressionGrammar::Constraint => classify_constraint_node(parsed, node, &mut ordinal),
-        ExpressionGrammar::Calc => classify_calc_node(parsed, node, &mut ordinal),
-    };
+    let mut ordinal = expression.operand_start;
+    let classified = classify_authored_node(parsed, expression, &mut ordinal);
     match classified {
         None => ExpressionEvalShape::Unsupported,
         Some(tree) if eval_node_is_pure_literal(&tree) => {
@@ -464,4 +504,42 @@ pub(crate) fn is_arithmetic_operator(op: &BinaryOperator) -> bool {
 /// other three.
 pub(crate) fn is_range_or_coalesce_operator(op: &BinaryOperator) -> bool {
     matches!(op, BinaryOperator::Range | BinaryOperator::NullCoalesce)
+}
+
+/// Indexing selects an occurrence; resolving its member definition does not evaluate that
+/// selection. Keep this boundary explicit until the evaluator supports indexed access.
+fn has_indexed_primary(node: &Expression) -> bool {
+    match node {
+        Expression::Index { .. } => true,
+        Expression::MemberAccess { base, .. } => has_indexed_primary(&base.value),
+        Expression::TypeCheck {
+            operand: Some(operand),
+            ..
+        } => has_indexed_primary(&operand.value),
+        Expression::Sequence { operands, .. } => operands
+            .value
+            .elements
+            .iter()
+            .any(|element| has_indexed_primary(&element.expression.value)),
+        _ => false,
+    }
+}
+
+/// The single accept boundary shared by evaluation and resolved-expression publication.
+/// Owned argument expressions have separate reference ordinals; execution of those
+/// structured calls remains unsupported until the evaluator binds their argument values.
+pub(crate) fn classify_authored_node(
+    parsed: &ParsedDocument,
+    expression: &AuthoredExpression,
+    ordinal: &mut u32,
+) -> Option<EvalNode> {
+    if expression.operand_scope == crate::lower::facts::ExpressionOperandScope::OwnedArguments {
+        return None;
+    }
+    match expression.grammar {
+        ExpressionGrammar::Constraint => {
+            classify_constraint_node(parsed, &expression.node, ordinal)
+        }
+        ExpressionGrammar::Calc => classify_calc_node(parsed, &expression.node, ordinal),
+    }
 }

@@ -11,7 +11,7 @@ use serde::{Deserialize, Serialize};
 // Schema 17 preserves typed provenance for official corrections to erroneous library-anchor
 // spellings in the pinned normative constraints.
 // The committed manifest is refreshed only at the coordinated publication barrier.
-pub const SCHEMA_VERSION: u32 = 18;
+pub const SCHEMA_VERSION: u32 = 19;
 
 /// Closed identity of every specification the manifest admits.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -91,6 +91,24 @@ pub enum LibraryAnchorCorrectionIssue {
     Kerml11_207,
     Kerml11_205,
     Sysml21_348,
+    /// SYSML21-301 "Viewpoint specialization constraints are incorrect": clause 8.3.26.8/8.3.26.9
+    /// name `Views::Viewpoint` / `Views::viewpoints`, but the 8.4.22 semantics, the 2026-04
+    /// `Views.sysml` library, and the official pilot implementation all use `Views::ViewpointCheck`
+    /// / `Views::viewpointChecks`.
+    Sysml21_301,
+    /// `checkItemUsageSubitemSpecialization` names `Items::Item::subitem`. The pinned 2026-04
+    /// Systems Library feature is the plural `Items::Item::subitems`, the same singular/plural
+    /// library mismatch as KERML11-207.
+    SysmlLibrarySubitems,
+    /// `checkJoinNodeSpecialization` names `Actions::Action::join`. The rule's own documentation,
+    /// 9.2.10.2.4 and the specialization table name `Actions::Action::joins`, the 2026-04 Systems
+    /// Library declares only `joins`, and the Pilot's `ImplicitGeneralizationMap` specializes
+    /// `joins` -- the same plural mismatch as its `forks`, `merges` and `decisions` siblings.
+    SysmlLibraryJoins,
+    /// `checkControlNodeSpecialization` names `Action::Action::controls` (its documentation says
+    /// `Actions::Action::control`). The 2026-04 Systems Library feature is
+    /// `Actions::Action::controls`, which `forks`, `joins`, `merges` and `decisions` subset.
+    SysmlLibraryControls,
 }
 
 impl ConstraintManifest {
@@ -158,7 +176,11 @@ impl ConstraintManifest {
             let source_matches = entry
                 .conditional_specializes_from_library
                 .as_ref()
-                .is_some_and(|contract| contract.anchor == correction.source_anchor);
+                .is_some_and(|contract| contract.anchor == correction.source_anchor)
+                || entry
+                    .specializes_from_library
+                    .as_ref()
+                    .is_some_and(|contract| contract.anchor == correction.source_anchor);
             let exact_correction = matches!(
                 (
                     correction.rule_id.as_str(),
@@ -181,6 +203,31 @@ impl ConstraintManifest {
                     "Connections::BinaryConnections",
                     "Connections::BinaryConnection",
                     LibraryAnchorCorrectionIssue::Sysml21_348,
+                ) | (
+                    "sysml-2.0:8.3.26.8:checkViewpointDefinitionSpecialization",
+                    "Views::Viewpoint",
+                    "Views::ViewpointCheck",
+                    LibraryAnchorCorrectionIssue::Sysml21_301,
+                ) | (
+                    "sysml-2.0:8.3.26.9:checkViewpointUsageSpecialization",
+                    "Views::viewpoints",
+                    "Views::viewpointChecks",
+                    LibraryAnchorCorrectionIssue::Sysml21_301,
+                ) | (
+                    "sysml-2.0:8.3.10.3:checkItemUsageSubitemSpecialization",
+                    "Items::Item::subitem",
+                    "Items::Item::subitems",
+                    LibraryAnchorCorrectionIssue::SysmlLibrarySubitems,
+                ) | (
+                    "sysml-2.0:8.3.17.11:checkJoinNodeSpecialization",
+                    "Actions::Action::join",
+                    "Actions::Action::joins",
+                    LibraryAnchorCorrectionIssue::SysmlLibraryJoins,
+                ) | (
+                    "sysml-2.0:8.3.17.6:checkControlNodeSpecialization",
+                    "Action::Action::controls",
+                    "Actions::Action::controls",
+                    LibraryAnchorCorrectionIssue::SysmlLibraryControls,
                 )
             );
             if !source_matches || !exact_correction {
@@ -194,6 +241,11 @@ impl ConstraintManifest {
             "kerml-1.0:8.3.4.6.3:checkStepEnclosedPerformanceSpecialization",
             "kerml-1.0:8.3.4.6.3:checkStepSubperformanceSpecialization",
             "sysml-2.0:8.3.13.3:checkConnectionDefinitionBinarySpecialization",
+            "sysml-2.0:8.3.26.8:checkViewpointDefinitionSpecialization",
+            "sysml-2.0:8.3.26.9:checkViewpointUsageSpecialization",
+            "sysml-2.0:8.3.10.3:checkItemUsageSubitemSpecialization",
+            "sysml-2.0:8.3.17.11:checkJoinNodeSpecialization",
+            "sysml-2.0:8.3.17.6:checkControlNodeSpecialization",
         ] {
             if self.find_rule(rule_id).is_some() && !corrected_rules.contains(rule_id) {
                 return Err(format!(
@@ -342,6 +394,18 @@ impl ConstraintManifest {
                         ) | (
                             "deriveFeatureOwnedTypeFeaturing",
                             FeatureDerivedRelationshipKind::OwnedTypeFeaturing
+                        ) | (
+                            "deriveFeatureChainingFeature",
+                            FeatureDerivedRelationshipKind::ChainingFeature
+                        ) | (
+                            "deriveFeatureOwnedFeatureInverting",
+                            FeatureDerivedRelationshipKind::OwnedFeatureInverting
+                        ) | (
+                            "deriveFeatureOwnedReferenceSubsetting",
+                            FeatureDerivedRelationshipKind::OwnedReferenceSubsetting
+                        ) | (
+                            "deriveFeatureOwnedCrossSubsetting",
+                            FeatureDerivedRelationshipKind::OwnedCrossSubsetting
                         )
                     ) {
                         return Err(format!(
@@ -351,40 +415,48 @@ impl ConstraintManifest {
                     }
                 }
                 if let Some(contract) = &entry.type_derived_relationship {
-                    if entry.family != ConstraintFamily::Derive || entry.metaclass != "Type" {
+                    let classifier_subclassification = entry.family == ConstraintFamily::Derive
+                        && entry.constraint == "deriveClassifierOwnedSubclassification"
+                        && entry.metaclass == "Classifier"
+                        && contract.kind == TypeDerivedRelationshipKind::OwnedSubclassification;
+                    if !classifier_subclassification
+                        && (entry.family != ConstraintFamily::Derive || entry.metaclass != "Type")
+                    {
                         return Err(format!(
                             "constraint manifest rule {:?} has a Type relationship derivation outside the exact Type derive family",
                             entry.rule_id
                         ));
                     }
-                    if !matches!(
-                        (entry.constraint.as_str(), contract.kind),
-                        (
-                            "deriveTypeOwnedSpecialization",
-                            TypeDerivedRelationshipKind::OwnedSpecialization
-                        ) | (
-                            "deriveTypeOwnedUnioning",
-                            TypeDerivedRelationshipKind::OwnedUnioning
-                        ) | (
-                            "deriveTypeOwnedIntersecting",
-                            TypeDerivedRelationshipKind::OwnedIntersecting
-                        ) | (
-                            "deriveTypeOwnedDifferencing",
-                            TypeDerivedRelationshipKind::OwnedDifferencing
-                        ) | (
-                            "deriveTypeOwnedDisjoining",
-                            TypeDerivedRelationshipKind::OwnedDisjoining
-                        ) | (
-                            "deriveTypeUnioningType",
-                            TypeDerivedRelationshipKind::UnioningType
-                        ) | (
-                            "deriveTypeIntersectingType",
-                            TypeDerivedRelationshipKind::IntersectingType
-                        ) | (
-                            "deriveTypeDifferencingType",
-                            TypeDerivedRelationshipKind::DifferencingType
+                    if !classifier_subclassification
+                        && !matches!(
+                            (entry.constraint.as_str(), contract.kind),
+                            (
+                                "deriveTypeOwnedSpecialization",
+                                TypeDerivedRelationshipKind::OwnedSpecialization
+                            ) | (
+                                "deriveTypeOwnedUnioning",
+                                TypeDerivedRelationshipKind::OwnedUnioning
+                            ) | (
+                                "deriveTypeOwnedIntersecting",
+                                TypeDerivedRelationshipKind::OwnedIntersecting
+                            ) | (
+                                "deriveTypeOwnedDifferencing",
+                                TypeDerivedRelationshipKind::OwnedDifferencing
+                            ) | (
+                                "deriveTypeOwnedDisjoining",
+                                TypeDerivedRelationshipKind::OwnedDisjoining
+                            ) | (
+                                "deriveTypeUnioningType",
+                                TypeDerivedRelationshipKind::UnioningType
+                            ) | (
+                                "deriveTypeIntersectingType",
+                                TypeDerivedRelationshipKind::IntersectingType
+                            ) | (
+                                "deriveTypeDifferencingType",
+                                TypeDerivedRelationshipKind::DifferencingType
+                            )
                         )
-                    ) {
+                    {
                         return Err(format!(
                             "constraint manifest rule {:?} has an incompatible exact Type relationship derivation",
                             entry.rule_id
@@ -535,6 +607,306 @@ impl ConstraintManifest {
                             "deriveIfActionUsageIfArgument",
                             "IfActionUsage",
                             ActionDerivedFactKind::IfArgument
+                        ) | (
+                            "deriveStateDefinitionEntryAction",
+                            "StateDefinition",
+                            ActionDerivedFactKind::StateDefinitionEntryAction
+                        ) | (
+                            "deriveStateDefinitionDoAction",
+                            "StateDefinition",
+                            ActionDerivedFactKind::StateDefinitionDoAction
+                        ) | (
+                            "deriveStateDefinitionExitAction",
+                            "StateDefinition",
+                            ActionDerivedFactKind::StateDefinitionExitAction
+                        ) | (
+                            "deriveStateUsageEntryAction",
+                            "StateUsage",
+                            ActionDerivedFactKind::StateUsageEntryAction
+                        ) | (
+                            "deriveStateUsageDoAction",
+                            "StateUsage",
+                            ActionDerivedFactKind::StateUsageDoAction
+                        ) | (
+                            "deriveStateUsageExitAction",
+                            "StateUsage",
+                            ActionDerivedFactKind::StateUsageExitAction
+                        ) | (
+                            "deriveStateDefinitionState",
+                            "StateDefinition",
+                            ActionDerivedFactKind::StateDefinitionState
+                        ) | (
+                            "deriveCalculationUsageCalculation",
+                            "CalculationDefinition",
+                            ActionDerivedFactKind::CalculationDefinitionCalculation
+                        ) | (
+                            "deriveAllocationDefinitionAllocation",
+                            "AllocationDefinition",
+                            ActionDerivedFactKind::AllocationDefinitionAllocation
+                        ) | (
+                            "deriveRenderingDefinitionRendering",
+                            "RenderingDefinition",
+                            ActionDerivedFactKind::RenderingDefinitionRendering
+                        ) | (
+                            "deriveViewDefinitionView",
+                            "ViewDefinition",
+                            ActionDerivedFactKind::ViewDefinitionView
+                        ) | (
+                            "deriveViewDefinitionViewRendering",
+                            "ViewDefinition",
+                            ActionDerivedFactKind::ViewDefinitionViewRendering
+                        ) | (
+                            "deriveViewUsageViewRendering",
+                            "ViewUsage",
+                            ActionDerivedFactKind::ViewUsageViewRendering
+                        ) | (
+                            "deriveViewDefinitionSatisfiedViewpoint",
+                            "ViewDefinition",
+                            ActionDerivedFactKind::ViewDefinitionSatisfiedViewpoint
+                        ) | (
+                            "deriveViewUsageSatisfiedViewpoint",
+                            "ViewUsage",
+                            ActionDerivedFactKind::ViewUsageSatisfiedViewpoint
+                        ) | (
+                            "derivePortDefinitionConjugatedPortDefinition",
+                            "PortDefinition",
+                            ActionDerivedFactKind::PortDefinitionConjugatedPortDefinition
+                        ) | (
+                            "deriveFeatureCrossFeature",
+                            "Feature",
+                            ActionDerivedFactKind::FeatureCrossFeature
+                        ) | (
+                            "deriveFeatureFeatureTarget",
+                            "Feature",
+                            ActionDerivedFactKind::FeatureFeatureTarget
+                        ) | (
+                            "deriveFunctionResult",
+                            "Function",
+                            ActionDerivedFactKind::FunctionResult
+                        ) | (
+                            "deriveExpressionResult",
+                            "Expression",
+                            ActionDerivedFactKind::ExpressionResult
+                        ) | (
+                            "deriveBehaviorStep",
+                            "Behavior",
+                            ActionDerivedFactKind::BehaviorStep
+                        ) | (
+                            "deriveMultiplicityRangeLowerBound",
+                            "MultiplicityRange",
+                            ActionDerivedFactKind::MultiplicityRangeLowerBound
+                        ) | (
+                            "deriveMultiplicityRangeUpperBound",
+                            "MultiplicityRange",
+                            ActionDerivedFactKind::MultiplicityRangeUpperBound
+                        ) | (
+                            "deriveMultiplicityRangeBound",
+                            "MultiplicityRange",
+                            ActionDerivedFactKind::MultiplicityRangeBound
+                        ) | (
+                            "deriveItemUsageItemDefinition",
+                            "ItemUsage",
+                            ActionDerivedFactKind::ItemUsageItemDefinition
+                        ) | (
+                            "derivePartUsagePartDefinition",
+                            "PartUsage",
+                            ActionDerivedFactKind::PartUsagePartDefinition
+                        ) | (
+                            "deriveOccurrenceUsageIndividualDefinition",
+                            "OccurrenceUsage",
+                            ActionDerivedFactKind::OccurrenceUsageIndividualDefinition
+                        ) | (
+                            "deriveConjugatedPortTypingPortDefinition",
+                            "ConjugatedPortTyping",
+                            ActionDerivedFactKind::ConjugatedPortTypingPortDefinition
+                        ) | (
+                            "deriveTransitionUsageSuccession",
+                            "TransitionUsage",
+                            ActionDerivedFactKind::TransitionUsageSuccession
+                        ) | (
+                            "deriveTransitionUsageTarget",
+                            "TransitionUsage",
+                            ActionDerivedFactKind::TransitionUsageTarget
+                        ) | (
+                            "deriveTransitionUsageTriggerAction",
+                            "TransitionUsage",
+                            ActionDerivedFactKind::TransitionUsageTriggerAction
+                        ) | (
+                            "deriveAssertConstraintUsageAssertedConstraint",
+                            "AssertConstraintUsage",
+                            ActionDerivedFactKind::AssertConstraintUsageAssertedConstraint
+                        ) | (
+                            "deriveEventOccurrenceUsageEventOccurrence",
+                            "EventOccurrenceUsage",
+                            ActionDerivedFactKind::EventOccurrenceUsageEventOccurrence
+                        ) | (
+                            "deriveVerificationCaseDefinitionVerifiedRequirement",
+                            "VerificationCaseDefinition",
+                            ActionDerivedFactKind::VerificationCaseDefinitionVerifiedRequirement
+                        ) | (
+                            "deriveVerificationCaseUsageVerifiedRequirement",
+                            "VerificationCaseUsage",
+                            ActionDerivedFactKind::VerificationCaseUsageVerifiedRequirement
+                        ) | (
+                            "deriveUseCaseDefinitionIncludedUseCase",
+                            "UseCaseDefinition",
+                            ActionDerivedFactKind::UseCaseDefinitionIncludedUseCase
+                        ) | (
+                            "deriveUseCaseUsageIncludedUseCase",
+                            "UseCaseUsage",
+                            ActionDerivedFactKind::UseCaseUsageIncludedUseCase
+                        ) | (
+                            "deriveViewDefinitionViewCondition",
+                            "ViewDefinition",
+                            ActionDerivedFactKind::ViewDefinitionViewCondition
+                        ) | (
+                            "deriveViewUsageViewCondition",
+                            "ViewUsage",
+                            ActionDerivedFactKind::ViewUsageViewCondition
+                        ) | (
+                            "deriveElementIsLibraryElement",
+                            "Element",
+                            ActionDerivedFactKind::ElementIsLibraryElement
+                        ) | (
+                            "deriveElementName",
+                            "Element",
+                            ActionDerivedFactKind::ElementName
+                        ) | (
+                            "deriveElementShortName",
+                            "Element",
+                            ActionDerivedFactKind::ElementShortName
+                        ) | (
+                            "deriveElementQualifiedName",
+                            "Element",
+                            ActionDerivedFactKind::ElementQualifiedName
+                        ) | (
+                            "deriveElementOwnedElement",
+                            "Element",
+                            ActionDerivedFactKind::ElementOwnedElement
+                        ) | (
+                            "deriveElementOwnedAnnotation",
+                            "Element",
+                            ActionDerivedFactKind::ElementOwnedAnnotation
+                        ) | (
+                            "deriveOwningNamespace",
+                            "Element",
+                            ActionDerivedFactKind::ElementOwningNamespace
+                        ) | (
+                            "deriveRelationshipRelatedElement",
+                            "Relationship",
+                            ActionDerivedFactKind::RelationshipRelatedElement
+                        ) | (
+                            "deriveAnnotatingElementAnnotatedElement",
+                            "AnnotatingElement",
+                            ActionDerivedFactKind::AnnotatingElementAnnotatedElement
+                        ) | (
+                            "deriveAnnotatingElementAnnotation",
+                            "AnnotatingElement",
+                            ActionDerivedFactKind::AnnotatingElementAnnotation
+                        ) | (
+                            "deriveAnnotatingElementOwnedAnnotatingRelationship",
+                            "AnnotatingElement",
+                            ActionDerivedFactKind::AnnotatingElementOwnedAnnotatingRelationship
+                        ) | (
+                            "deriveAnnotationOwnedAnnotatingElement",
+                            "Annotation",
+                            ActionDerivedFactKind::AnnotationOwnedAnnotatingElement
+                        ) | (
+                            "deriveMembershipImportImportedElement",
+                            "MembershipImport",
+                            ActionDerivedFactKind::MembershipImportImportedElement
+                        ) | (
+                            "deriveNamespaceImportedMembership",
+                            "Namespace",
+                            ActionDerivedFactKind::NamespaceImportedMembership
+                        ) | (
+                            "deriveNamespaceMembers",
+                            "Namespace",
+                            ActionDerivedFactKind::NamespaceMember
+                        ) | (
+                            "deriveNamespaceOwnedMembership",
+                            "Namespace",
+                            ActionDerivedFactKind::NamespaceOwnedMembership
+                        ) | (
+                            "deriveOwningMembershipOwnedMemberName",
+                            "OwningMembership",
+                            ActionDerivedFactKind::OwningMembershipOwnedMemberName
+                        ) | (
+                            "deriveOwningMembershipOwnedMemberShortName",
+                            "OwningMembership",
+                            ActionDerivedFactKind::OwningMembershipOwnedMemberShortName
+                        ) | (
+                            "derivePackageFilterCondition",
+                            "Package",
+                            ActionDerivedFactKind::PackageFilterCondition
+                        ) | (
+                            "deriveFeatureFeaturingType",
+                            "Feature",
+                            ActionDerivedFactKind::FeatureFeaturingType
+                        ) | (
+                            "deriveAssociationRelatedType",
+                            "Association",
+                            ActionDerivedFactKind::AssociationRelatedType
+                        ) | (
+                            "deriveAssociationSourceType",
+                            "Association",
+                            ActionDerivedFactKind::AssociationSourceType
+                        ) | (
+                            "deriveAssociationTargetType",
+                            "Association",
+                            ActionDerivedFactKind::AssociationTargetType
+                        ) | (
+                            "deriveConnectorRelatedFeature",
+                            "Connector",
+                            ActionDerivedFactKind::ConnectorRelatedFeature
+                        ) | (
+                            "deriveConnectorSourceFeature",
+                            "Connector",
+                            ActionDerivedFactKind::ConnectorSourceFeature
+                        ) | (
+                            "deriveConnectorTargetFeature",
+                            "Connector",
+                            ActionDerivedFactKind::ConnectorTargetFeature
+                        ) | (
+                            "deriveConnectorDefaultFeaturingType",
+                            "Connector",
+                            ActionDerivedFactKind::ConnectorDefaultFeaturingType
+                        ) | (
+                            "deriveStepBehavior",
+                            "Step",
+                            ActionDerivedFactKind::StepBehavior
+                        ) | (
+                            "deriveLiteralExpressionIsModelLevelEvaluable",
+                            "LiteralExpression",
+                            ActionDerivedFactKind::LiteralExpressionIsModelLevelEvaluable
+                        ) | (
+                            "deriveMetadataAccessExpressionReferencdElement",
+                            "MetadataAccessExpression",
+                            ActionDerivedFactKind::MetadataAccessExpressionReferencedElement
+                        ) | (
+                            "deriveFeatureChainExpressionTargetFeature",
+                            "FeatureChainExpression",
+                            ActionDerivedFactKind::FeatureChainExpressionTargetFeature
+                        ) | (
+                            "deriveFeatureReferenceExpressionReferent",
+                            "FeatureReferenceExpression",
+                            ActionDerivedFactKind::FeatureReferenceExpressionReferent
+                        ) | (
+                            "deriveInstantiationExpressionInstantiatedType",
+                            "InstantiationExpression",
+                            ActionDerivedFactKind::InstantiationExpressionInstantiatedType
+                        ) | (
+                            "deriveFlowFlowEnd",
+                            "Flow",
+                            ActionDerivedFactKind::FlowFlowEnd
+                        ) | (
+                            "deriveFlowSourceOutputFeature",
+                            "Flow",
+                            ActionDerivedFactKind::FlowSourceOutputFeature
+                        ) | (
+                            "deriveFlowTargetInputFeature",
+                            "Flow",
+                            ActionDerivedFactKind::FlowTargetInputFeature
                         )
                     );
                     if entry.family != ConstraintFamily::Derive
@@ -602,6 +974,30 @@ impl ConstraintManifest {
                             "deriveRequirementUsageFramedConcern",
                             "RequirementUsage",
                             RequirementDerivedFactKind::UsageFramedConcern
+                        ) | (
+                            "deriveCaseDefinitionActorParameter",
+                            "CaseDefinition",
+                            RequirementDerivedFactKind::CaseDefinitionActorParameter
+                        ) | (
+                            "deriveCaseDefinitionSubjectParameter",
+                            "CaseDefinition",
+                            RequirementDerivedFactKind::CaseDefinitionSubjectParameter
+                        ) | (
+                            "deriveCaseUsageActorParameter",
+                            "CaseUsage",
+                            RequirementDerivedFactKind::CaseUsageActorParameter
+                        ) | (
+                            "deriveCaseUsageSubjectParameter",
+                            "CaseUsage",
+                            RequirementDerivedFactKind::CaseUsageSubjectParameter
+                        ) | (
+                            "deriveCaseDefinitionObjectiveRequirement",
+                            "CaseDefinition",
+                            RequirementDerivedFactKind::CaseDefinitionObjectiveRequirement
+                        ) | (
+                            "deriveCaseUsageObjectiveRequirement",
+                            "CaseUsage",
+                            RequirementDerivedFactKind::CaseUsageObjectiveRequirement
                         )
                     );
                     if entry.family != ConstraintFamily::Derive
@@ -745,10 +1141,6 @@ impl ConstraintManifest {
                             "checkMetadataFeatureSemanticSpecialization",
                             "MetadataFeature",
                             SpecializationCheckKind::MetadataFeatureSemantic
-                        ) | (
-                            "checkConnectorBinaryObjectSpecialization",
-                            "Connector",
-                            SpecializationCheckKind::ConnectorBinaryObject
                         ) | (
                             "checkConnectorObjectSpecialization",
                             "Connector",
@@ -1266,6 +1658,8 @@ pub enum LibrarySpecializationPredicate {
     EndOwnedByAssociationOrConnector,
     /// `association->exists(oclIsKindOf(AssociationStructure))` on a `Connector`.
     ConnectorAssociationStructure,
+    /// `connectorEnds->size() = 2 and association->exists(oclIsKindOf(AssociationStructure))`.
+    ConnectorBinaryAssociationStructure,
     /// `owningType <> null and (owningType.oclIsKindOf(A) or owningType.oclIsKindOf(B))`.
     OwnedBy,
     /// `isSubactionUsage()`.
@@ -1329,6 +1723,13 @@ pub enum FeatureDerivedRelationshipKind {
     OwnedSubsetting,
     OwnedTyping,
     OwnedTypeFeaturing,
+    /// `chainingFeature = ownedFeatureChaining.chainingFeature`. The publication retains the
+    /// `FeatureChaining` relationship whose target is that feature.
+    ChainingFeature,
+    /// `ownedFeatureInverting = ownedRelationship->selectByKind(FeatureInverting)->select(fi | fi.featureInverted = self)`.
+    OwnedFeatureInverting,
+    OwnedReferenceSubsetting,
+    OwnedCrossSubsetting,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -1351,6 +1752,7 @@ pub enum TypeDerivedRelationshipKind {
     UnioningType,
     IntersectingType,
     DifferencingType,
+    OwnedSubclassification,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -1502,7 +1904,6 @@ pub enum SpecializationCheckKind {
     FeatureSuboccurrence,
     FeatureValuation,
     MetadataFeatureSemantic,
-    ConnectorBinaryObject,
     ConnectorObject,
     StepOwnedPerformance,
     StepSubperformance,
@@ -1959,6 +2360,81 @@ pub enum ActionDerivedFactKind {
     IfThenAction,
     IfElseAction,
     IfArgument,
+    StateDefinitionEntryAction,
+    StateDefinitionDoAction,
+    StateDefinitionExitAction,
+    StateUsageEntryAction,
+    StateUsageDoAction,
+    StateUsageExitAction,
+    StateDefinitionState,
+    CalculationDefinitionCalculation,
+    AllocationDefinitionAllocation,
+    RenderingDefinitionRendering,
+    ViewDefinitionView,
+    ViewDefinitionViewRendering,
+    ViewUsageViewRendering,
+    ViewDefinitionSatisfiedViewpoint,
+    ViewUsageSatisfiedViewpoint,
+    PortDefinitionConjugatedPortDefinition,
+    FeatureCrossFeature,
+    FeatureFeatureTarget,
+    FunctionResult,
+    ExpressionResult,
+    BehaviorStep,
+    MultiplicityRangeLowerBound,
+    MultiplicityRangeUpperBound,
+    MultiplicityRangeBound,
+    ItemUsageItemDefinition,
+    PartUsagePartDefinition,
+    OccurrenceUsageIndividualDefinition,
+    ConjugatedPortTypingPortDefinition,
+    TransitionUsageSuccession,
+    TransitionUsageTarget,
+    TransitionUsageTriggerAction,
+    AssertConstraintUsageAssertedConstraint,
+    EventOccurrenceUsageEventOccurrence,
+    VerificationCaseDefinitionVerifiedRequirement,
+    VerificationCaseUsageVerifiedRequirement,
+    UseCaseDefinitionIncludedUseCase,
+    UseCaseUsageIncludedUseCase,
+    ViewDefinitionViewCondition,
+    ViewUsageViewCondition,
+    ElementIsLibraryElement,
+    ElementName,
+    ElementShortName,
+    ElementQualifiedName,
+    ElementOwnedElement,
+    ElementOwnedAnnotation,
+    ElementOwningNamespace,
+    RelationshipRelatedElement,
+    AnnotatingElementAnnotatedElement,
+    AnnotatingElementAnnotation,
+    AnnotatingElementOwnedAnnotatingRelationship,
+    AnnotationOwnedAnnotatingElement,
+    MembershipImportImportedElement,
+    NamespaceImportedMembership,
+    NamespaceMember,
+    NamespaceOwnedMembership,
+    OwningMembershipOwnedMemberName,
+    OwningMembershipOwnedMemberShortName,
+    PackageFilterCondition,
+    FeatureFeaturingType,
+    AssociationRelatedType,
+    AssociationSourceType,
+    AssociationTargetType,
+    ConnectorRelatedFeature,
+    ConnectorSourceFeature,
+    ConnectorTargetFeature,
+    ConnectorDefaultFeaturingType,
+    StepBehavior,
+    LiteralExpressionIsModelLevelEvaluable,
+    MetadataAccessExpressionReferencedElement,
+    FeatureChainExpressionTargetFeature,
+    FeatureReferenceExpressionReferent,
+    InstantiationExpressionInstantiatedType,
+    FlowFlowEnd,
+    FlowSourceOutputFeature,
+    FlowTargetInputFeature,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -1985,6 +2461,12 @@ pub enum RequirementDerivedFactKind {
     UsageRequiredConstraint,
     UsageAssumedConstraint,
     UsageFramedConcern,
+    CaseDefinitionActorParameter,
+    CaseDefinitionSubjectParameter,
+    CaseUsageActorParameter,
+    CaseUsageSubjectParameter,
+    CaseDefinitionObjectiveRequirement,
+    CaseUsageObjectiveRequirement,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -2232,7 +2714,7 @@ rule_id = "testml-1.0:Core::Element:deriveOwner"
             .join("../..")
             .join("specifications/constraint_manifest.toml");
         let mut manifest = ConstraintManifest::load_toml(&manifest_path).unwrap();
-        assert_eq!(manifest.library_anchor_corrections.len(), 3);
+        assert_eq!(manifest.library_anchor_corrections.len(), 8);
         assert_eq!(
             manifest.library_anchor_corrections[0].issue,
             LibraryAnchorCorrectionIssue::Kerml11_207
@@ -2243,7 +2725,57 @@ rule_id = "testml-1.0:Core::Element:deriveOwner"
         );
         assert_eq!(
             manifest.library_anchor_corrections[2].issue,
+            LibraryAnchorCorrectionIssue::SysmlLibrarySubitems
+        );
+        assert_eq!(
+            manifest.library_anchor_corrections[3].issue,
             LibraryAnchorCorrectionIssue::Sysml21_348
+        );
+        assert_eq!(
+            manifest.library_anchor_corrections[4].issue,
+            LibraryAnchorCorrectionIssue::SysmlLibraryJoins
+        );
+        assert_eq!(
+            manifest.library_anchor_corrections[5].issue,
+            LibraryAnchorCorrectionIssue::SysmlLibraryControls
+        );
+        assert_eq!(
+            manifest.library_anchor_corrections[6].issue,
+            LibraryAnchorCorrectionIssue::Sysml21_301
+        );
+        assert_eq!(
+            manifest.library_anchor_corrections[7].issue,
+            LibraryAnchorCorrectionIssue::Sysml21_301
+        );
+        assert_eq!(
+            manifest.executable_library_anchor(
+                "sysml-2.0:8.3.17.11:checkJoinNodeSpecialization",
+                "Actions::Action::join",
+            ),
+            "Actions::Action::joins"
+        );
+        assert_eq!(
+            manifest.executable_library_anchor(
+                "sysml-2.0:8.3.17.6:checkControlNodeSpecialization",
+                "Action::Action::controls",
+            ),
+            "Actions::Action::controls"
+        );
+        assert_eq!(
+            manifest.executable_library_anchor(
+                "sysml-2.0:8.3.10.3:checkItemUsageSubitemSpecialization",
+                "Items::Item::subitem",
+            ),
+            "Items::Item::subitems"
+        );
+        // The two SYSML21-301 corrections fix a plain `specializes_from_library` contract, not the
+        // `conditional_*` shape the first three use.
+        assert_eq!(
+            manifest.executable_library_anchor(
+                "sysml-2.0:8.3.26.9:checkViewpointUsageSpecialization",
+                "Views::viewpoints",
+            ),
+            "Views::viewpointChecks"
         );
 
         let removed = manifest.library_anchor_corrections.pop().unwrap();

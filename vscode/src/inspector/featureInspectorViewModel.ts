@@ -30,8 +30,25 @@ export interface FeatureInspectorViewModel {
   sections: string[];
   languageHelp?: FeatureInspectorLanguageHelp;
   primaryElement?: FeatureInspectorElement;
+  elementHeading?: {
+    name: string;
+    kind: string;
+    documentation: string;
+    hasDocumentation: boolean;
+  };
   referencedFrom?: FeatureInspectorElement;
   value?: FeatureInspectorValueContext;
+  inheritedFeatures?: {
+    direct: FeatureInspectorElement["inheritedFeatures"];
+    indirect: FeatureInspectorElement["inheritedFeatures"];
+  };
+}
+
+function inheritedFeatures(element: FeatureInspectorElement) {
+  return {
+    direct: (element.inheritedFeatures || []).filter((feature) => feature.isDirect),
+    indirect: (element.inheritedFeatures || []).filter((feature) => !feature.isDirect),
+  };
 }
 
 /** The evaluated value with its unit, when the publication settled on one.
@@ -92,12 +109,22 @@ export function analysisLabel(
   }
 }
 
+function elementHeading(element: FeatureInspectorElement) {
+  const kind = element.type
+    .replace(/([a-z0-9])([A-Z])/g, "$1 $2")
+    .replace(/\bdef\b/gi, "definition")
+    .toLowerCase();
+  const hasDocumentation = Boolean(element.documentation?.trim());
+  return {
+    name: element.qualifiedName || element.name || "(unnamed)",
+    kind: kind.charAt(0).toUpperCase() + kind.slice(1),
+    documentation: hasDocumentation ? element.documentation! : "No documentation.",
+    hasDocumentation,
+  };
+}
+
 function elementSections(element: FeatureInspectorElement): string[] {
-  const sections = ["Model element"];
-  if (element.declaration) {
-    sections.push("Declaration");
-  }
-  sections.push("Identity");
+  const sections = ["Model element", "Documentation", "Identity"];
   if (
     element.typing.status !== "notApplicable" ||
     (element.effectiveTyping !== undefined &&
@@ -116,9 +143,6 @@ function elementSections(element: FeatureInspectorElement): string[] {
   }
   if (element.inheritedFeatures?.length) {
     sections.push("Inherited features");
-  }
-  if (element.documentation) {
-    sections.push("Documentation");
   }
   if (element.metadata?.length) {
     sections.push("Metadata");
@@ -188,6 +212,8 @@ export function buildFeatureInspectorViewModel(
       mode: "reference",
       sections: elementSections(referenced),
       primaryElement: referenced,
+      elementHeading: elementHeading(referenced),
+      inheritedFeatures: inheritedFeatures(referenced),
       referencedFrom: result.containingElement,
     };
   }
@@ -213,6 +239,8 @@ export function buildFeatureInspectorViewModel(
       mode: "element",
       sections: elementSections(result.containingElement),
       primaryElement: result.containingElement,
+      elementHeading: elementHeading(result.containingElement),
+      inheritedFeatures: inheritedFeatures(result.containingElement),
     };
   }
 

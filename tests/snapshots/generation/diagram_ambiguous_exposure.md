@@ -3,7 +3,7 @@
 description=Ambiguous exposure remains explicit and admits no guessed scope
 type=generate
 libraries=standard
-plugin=repository:diagram
+plugin=native:diagram
 viewKind=general-view
 viewDocument=diagram_ambiguous_exposure.md
 viewQualifiedName=AmbiguousExample::selected
@@ -57,7 +57,7 @@ package AmbiguousExample {
 # SMG
 ~~~sexpr
 (semantic-model
-  (publication (phase resolved) (completeness complete) (has-evaluation true) (source-digest "blake3:f14a5a180f45e68462fafa495c434bc62cb11e6b2856e4c9dd8bdbb64f575100") (admitted (standard-library 94)))
+  (publication (phase resolved) (completeness complete) (has-evaluation true) (source-digest "blake3:edd8a01135474ed668236e6aa56853f965aabfbb129832076c26dadb63b29b11") (admitted (standard-library 94)))
   (declarations
     (declaration (id (node (document "memory://snapshot/diagram_ambiguous_exposure.md") (qualified-name "AmbiguousExample"))) (kind package) (membership (kind owning) (visibility default)))
     (declaration (id (node (document "memory://snapshot/diagram_ambiguous_exposure.md") (path (named (kind package) (name "AmbiguousExample")) (anonymous (kind import) (ordinal 0))))) (kind import) (membership (kind import) (visibility private)) (authored (membership (kind import) (visibility private)) (relationships (namespaceImport (reference "StandardViewDefinitions") (import (shape namespace) (recursive false))))))
@@ -157,8 +157,8 @@ package AmbiguousExample {
 ## diagram.json
 ~~~json
 {
-  "schemaVersion": 5,
-  "modelDigest": "blake3:662dc3e8f3d0f98de068a24ad4542cbbea350f639e5051983a808c616463455a",
+  "schemaVersion": 10,
+  "modelDigest": "blake3:30a1fac161a80ea0389f7b1e58824cca0d4e18ea802d91ba4c991df2eff65550",
   "documents": [
     {
       "uri": "memory://snapshot/diagram_ambiguous_exposure.md",

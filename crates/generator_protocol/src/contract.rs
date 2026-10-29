@@ -287,9 +287,9 @@ impl fmt::Display for UnknownCode {
 impl std::error::Error for UnknownCode {}
 
 abi_contract! {
-    abi_version: 5,
-    semantic_api_version: "0.2.0",
-    namespace: "spec42:generator-abi/5",
+    abi_version: 6,
+    semantic_api_version: "0.3.0",
+    namespace: "spec42:generator-abi/6",
     import_module: "spec42",
 
     /// A read-only semantic query.
@@ -321,6 +321,8 @@ abi_contract! {
         DiagramViews = 11 => ((), Vec<DiagramViewSummary>),
         /// Typed semantic projection for one catalog handle.
         DiagramView = 12 => (String, DiagramViewProjection),
+        /// Authoritative workspace requirement derivations with classified ends.
+        DerivationRelationships = 13 => ((), Vec<DerivationRelationship>),
     }
 
     /// Severity of a generator diagnostic.

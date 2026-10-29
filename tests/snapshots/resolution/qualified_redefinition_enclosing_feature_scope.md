@@ -3,10 +3,6 @@
 description=Qualified redefinition of a nested feature starts from the enclosing feature's inherited membership
 specification=OMG KerML 1.0 (formal/26-03-01)
 specification_url=https://www.omg.org/spec/KerML/1.0/PDF
-source_expectation=accepted
-rule_family=derive
-expectation=semantics
-rule_id=kerml-1.0:8.2.3.5.3:resolveLocalName
 libraries=none
 ~~~
 # SOURCE
@@ -58,17 +54,17 @@ package Demo {
 # SMG
 ~~~sexpr
 (semantic-model
-  (publication (phase resolved) (completeness complete) (has-evaluation false) (source-digest "blake3:d94d73ce340cd6e1046fc0cd7f8f5fcdbb2412c0045c575f973368fd57ede2d8"))
+  (publication (phase resolved) (completeness complete) (has-evaluation false) (source-digest "blake3:9dc0fe5c8914ae74e8ce6e36b011f45343a61334c4732b2dbcbaeb7ea334955e"))
   (declarations
     (declaration (id (node (document "memory://snapshot/qualified_redefinition_enclosing_feature_scope.md") (qualified-name "Demo"))) (kind package) (membership (kind owning) (visibility default)))
     (declaration (id (node (document "memory://snapshot/qualified_redefinition_enclosing_feature_scope.md") (qualified-name "Demo::Derived"))) (kind item-def) (membership (kind owning) (visibility default)) (authored (membership (kind owning) (visibility default)) (relationships (specialization (reference "General")))))
     (declaration (id (node (document "memory://snapshot/qualified_redefinition_enclosing_feature_scope.md") (qualified-name "Demo::Derived::base"))) (kind item) (membership (kind feature) (visibility default)) (authored (membership (kind feature) (visibility default)) (relationships (featureTyping (reference "Disc")) (redefinition (reference "General::base")))))
-    (declaration (id (node (document "memory://snapshot/qualified_redefinition_enclosing_feature_scope.md") (qualified-name "Demo::Derived::base::selected"))) (kind ref) (membership (kind feature) (visibility default)) (authored (membership (kind feature) (visibility default)) (relationships (redefinition (reference "base::edges")))))
+    (declaration (id (node (document "memory://snapshot/qualified_redefinition_enclosing_feature_scope.md") (qualified-name "Demo::Derived::base::selected"))) (kind item) (membership (kind feature) (visibility default)) (facts (modifiers reference)) (authored (membership (kind feature) (visibility default)) (relationships (redefinition (reference "base::edges")))))
     (declaration (id (node (document "memory://snapshot/qualified_redefinition_enclosing_feature_scope.md") (qualified-name "Demo::Disc"))) (kind item-def) (membership (kind owning) (visibility default)))
     (declaration (id (node (document "memory://snapshot/qualified_redefinition_enclosing_feature_scope.md") (qualified-name "Demo::Disc::edges"))) (kind item) (membership (kind feature) (visibility default)))
     (declaration (id (node (document "memory://snapshot/qualified_redefinition_enclosing_feature_scope.md") (qualified-name "Demo::General"))) (kind item-def) (membership (kind owning) (visibility default)))
     (declaration (id (node (document "memory://snapshot/qualified_redefinition_enclosing_feature_scope.md") (qualified-name "Demo::General::base"))) (kind item) (membership (kind feature) (visibility default)) (authored (membership (kind feature) (visibility default)) (relationships (featureTyping (reference "Disc")))))
-    (declaration (id (node (document "memory://snapshot/qualified_redefinition_enclosing_feature_scope.md") (qualified-name "Demo::General::base::edges"))) (kind ref) (membership (kind feature) (visibility default)) (authored (membership (kind feature) (visibility default)) (relationships (redefinition (reference "Disc::edges")))))
+    (declaration (id (node (document "memory://snapshot/qualified_redefinition_enclosing_feature_scope.md") (qualified-name "Demo::General::base::edges"))) (kind item) (membership (kind feature) (visibility default)) (facts (modifiers reference)) (authored (membership (kind feature) (visibility default)) (relationships (redefinition (reference "Disc::edges")))))
   )
   (references
     (reference (id (source (node (document "memory://snapshot/qualified_redefinition_enclosing_feature_scope.md") (qualified-name "Demo::Derived"))) (kind specialization) (ordinal 0))

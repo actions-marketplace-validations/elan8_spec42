@@ -48,7 +48,7 @@ package Expressions {
 # SMG
 ~~~sexpr
 (semantic-model
-  (publication (phase resolved) (completeness complete) (has-evaluation true) (source-digest "blake3:d06175e7f66d5edc2c3d0b04ab3464234f6a742369554a9b2ca44c0b9a1ca01d"))
+  (publication (phase resolved) (completeness complete) (has-evaluation true) (source-digest "blake3:c03367bba697fafb99406debb24600904d049066f93d578e2f23cc0654b779e5"))
   (declarations
     (declaration (id (node (document "memory://snapshot/kerml_feature_chain_expression_operator.md") (qualified-name "Expressions"))) (kind package) (membership (kind owning) (visibility default)))
     (declaration (id (node (document "memory://snapshot/kerml_feature_chain_expression_operator.md") (qualified-name "Expressions::Holder"))) (kind kerml-classifier) (membership (kind owning) (visibility default)))
@@ -80,6 +80,7 @@ package Expressions {
     (relationship (kind typeFeaturing) (source (node (document "memory://snapshot/kerml_feature_chain_expression_operator.md") (qualified-name "Expressions::Holder::outer"))) (target (node (document "memory://snapshot/kerml_feature_chain_expression_operator.md") (qualified-name "Expressions::Holder"))) (provenance implied))
     (relationship (kind typeFeaturing) (source (node (document "memory://snapshot/kerml_feature_chain_expression_operator.md") (qualified-name "Expressions::Holder::reached"))) (target (node (document "memory://snapshot/kerml_feature_chain_expression_operator.md") (qualified-name "Expressions::Holder"))) (provenance implied))
     (relationship (kind subsetting) (source (node (document "memory://snapshot/kerml_feature_chain_expression_operator.md") (qualified-name "Expressions::Holder::reached"))) (target (node (document "memory://snapshot/kerml_feature_chain_expression_operator.md") (path (named (kind package) (name "Expressions")) (named (kind kerml-classifier) (name "Holder")) (named (kind kerml-feature) (name "reached")) (anonymous (kind kerml-expression) (ordinal 0)) (anonymous (kind kerml-feature) (ordinal 0))))) (provenance implied))
+    (relationship (kind typeFeaturing) (source (node (document "memory://snapshot/kerml_feature_chain_expression_operator.md") (path (named (kind package) (name "Expressions")) (named (kind kerml-classifier) (name "Holder")) (named (kind kerml-feature) (name "reached")) (anonymous (kind kerml-expression) (ordinal 0))))) (target (node (document "memory://snapshot/kerml_feature_chain_expression_operator.md") (qualified-name "Expressions::Holder"))) (provenance implied))
     (relationship (kind typeFeaturing) (source (node (document "memory://snapshot/kerml_feature_chain_expression_operator.md") (path (named (kind package) (name "Expressions")) (named (kind kerml-classifier) (name "Holder")) (named (kind kerml-feature) (name "reached")) (anonymous (kind kerml-expression) (ordinal 0)) (anonymous (kind kerml-feature) (ordinal 0))))) (target (node (document "memory://snapshot/kerml_feature_chain_expression_operator.md") (path (named (kind package) (name "Expressions")) (named (kind kerml-classifier) (name "Holder")) (named (kind kerml-feature) (name "reached")) (anonymous (kind kerml-expression) (ordinal 0))))) (provenance implied))
     (relationship (kind typeFeaturing) (source (node (document "memory://snapshot/kerml_feature_chain_expression_operator.md") (path (named (kind package) (name "Expressions")) (named (kind kerml-classifier) (name "Holder")) (named (kind kerml-feature) (name "reached")) (anonymous (kind kerml-expression) (ordinal 0)) (anonymous (kind kerml-feature) (ordinal 1))))) (target (node (document "memory://snapshot/kerml_feature_chain_expression_operator.md") (path (named (kind package) (name "Expressions")) (named (kind kerml-classifier) (name "Holder")) (named (kind kerml-feature) (name "reached")) (anonymous (kind kerml-expression) (ordinal 0))))) (provenance implied))
     (relationship (kind featureChaining) (source (node (document "memory://snapshot/kerml_feature_chain_expression_operator.md") (path (named (kind package) (name "Expressions")) (named (kind kerml-classifier) (name "Holder")) (named (kind kerml-feature) (name "reached")) (anonymous (kind kerml-expression) (ordinal 0)) (anonymous (kind kerml-feature) (ordinal 2))))) (target (node (document "memory://snapshot/kerml_feature_chain_expression_operator.md") (path (named (kind package) (name "Expressions")) (named (kind kerml-classifier) (name "Holder")) (named (kind kerml-feature) (name "reached")) (anonymous (kind kerml-expression) (ordinal 0)) (anonymous (kind kerml-feature) (ordinal 1))))) (provenance implied))
@@ -90,7 +91,7 @@ package Expressions {
     (relationship (kind typeFeaturing) (source (node (document "memory://snapshot/kerml_feature_chain_expression_operator.md") (qualified-name "Expressions::Thing::inner"))) (target (node (document "memory://snapshot/kerml_feature_chain_expression_operator.md") (qualified-name "Expressions::Thing"))) (provenance implied))
   )
   (evaluation
-    (evaluated (declaration (node (document "memory://snapshot/kerml_feature_chain_expression_operator.md") (path (named (kind package) (name "Expressions")) (named (kind kerml-classifier) (name "Holder")) (named (kind kerml-feature) (name "reached")) (anonymous (kind kerml-expression) (ordinal 0))))) (state unsupported))
+    (evaluated (declaration (node (document "memory://snapshot/kerml_feature_chain_expression_operator.md") (path (named (kind package) (name "Expressions")) (named (kind kerml-classifier) (name "Holder")) (named (kind kerml-feature) (name "reached")) (anonymous (kind kerml-expression) (ordinal 0))))) (state non-constant))
   )
 )
 ~~~
@@ -105,11 +106,16 @@ package Expressions {
     )
     (declaration (id (node (document "memory://snapshot/kerml_feature_chain_expression_operator.md") (qualified-name "Expressions::Holder::reached")))
       (featured-by (node (document "memory://snapshot/kerml_feature_chain_expression_operator.md") (qualified-name "Expressions::Holder")))
+      (effective-type (node (document "memory://snapshot/kerml_feature_chain_expression_operator.md") (qualified-name "Expressions::Thing")) (source inherited) (from (node (document "memory://snapshot/kerml_feature_chain_expression_operator.md") (qualified-name "Expressions::Thing::inner"))))
       (supertype (node (document "memory://snapshot/kerml_feature_chain_expression_operator.md") (path (named (kind package) (name "Expressions")) (named (kind kerml-classifier) (name "Holder")) (named (kind kerml-feature) (name "reached")) (anonymous (kind kerml-expression) (ordinal 0)) (anonymous (kind kerml-feature) (ordinal 0)))) (scopes any feature))
       (supertype (node (document "memory://snapshot/kerml_feature_chain_expression_operator.md") (path (named (kind package) (name "Expressions")) (named (kind kerml-classifier) (name "Holder")) (named (kind kerml-feature) (name "reached")) (anonymous (kind kerml-expression) (ordinal 0)) (anonymous (kind kerml-feature) (ordinal 2)))) (scopes any feature))
     )
+    (declaration (id (node (document "memory://snapshot/kerml_feature_chain_expression_operator.md") (path (named (kind package) (name "Expressions")) (named (kind kerml-classifier) (name "Holder")) (named (kind kerml-feature) (name "reached")) (anonymous (kind kerml-expression) (ordinal 0)))))
+      (featured-by (node (document "memory://snapshot/kerml_feature_chain_expression_operator.md") (qualified-name "Expressions::Holder")))
+    )
     (declaration (id (node (document "memory://snapshot/kerml_feature_chain_expression_operator.md") (path (named (kind package) (name "Expressions")) (named (kind kerml-classifier) (name "Holder")) (named (kind kerml-feature) (name "reached")) (anonymous (kind kerml-expression) (ordinal 0)) (anonymous (kind kerml-feature) (ordinal 0)))))
       (featured-by (node (document "memory://snapshot/kerml_feature_chain_expression_operator.md") (path (named (kind package) (name "Expressions")) (named (kind kerml-classifier) (name "Holder")) (named (kind kerml-feature) (name "reached")) (anonymous (kind kerml-expression) (ordinal 0)))))
+      (effective-type (node (document "memory://snapshot/kerml_feature_chain_expression_operator.md") (qualified-name "Expressions::Thing")) (source inherited) (from (node (document "memory://snapshot/kerml_feature_chain_expression_operator.md") (qualified-name "Expressions::Thing::inner"))))
       (supertype (node (document "memory://snapshot/kerml_feature_chain_expression_operator.md") (path (named (kind package) (name "Expressions")) (named (kind kerml-classifier) (name "Holder")) (named (kind kerml-feature) (name "reached")) (anonymous (kind kerml-expression) (ordinal 0)) (anonymous (kind kerml-feature) (ordinal 2)))) (scopes any feature))
       (subtype (node (document "memory://snapshot/kerml_feature_chain_expression_operator.md") (qualified-name "Expressions::Holder::reached")) (scopes any feature))
     )
@@ -117,6 +123,7 @@ package Expressions {
       (featured-by (node (document "memory://snapshot/kerml_feature_chain_expression_operator.md") (path (named (kind package) (name "Expressions")) (named (kind kerml-classifier) (name "Holder")) (named (kind kerml-feature) (name "reached")) (anonymous (kind kerml-expression) (ordinal 0)))))
     )
     (declaration (id (node (document "memory://snapshot/kerml_feature_chain_expression_operator.md") (path (named (kind package) (name "Expressions")) (named (kind kerml-classifier) (name "Holder")) (named (kind kerml-feature) (name "reached")) (anonymous (kind kerml-expression) (ordinal 0)) (anonymous (kind kerml-feature) (ordinal 2)))))
+      (effective-type (node (document "memory://snapshot/kerml_feature_chain_expression_operator.md") (qualified-name "Expressions::Thing")) (source inherited) (from (node (document "memory://snapshot/kerml_feature_chain_expression_operator.md") (qualified-name "Expressions::Thing::inner"))))
       (subtype (node (document "memory://snapshot/kerml_feature_chain_expression_operator.md") (path (named (kind package) (name "Expressions")) (named (kind kerml-classifier) (name "Holder")) (named (kind kerml-feature) (name "reached")) (anonymous (kind kerml-expression) (ordinal 0)) (anonymous (kind kerml-feature) (ordinal 0)))) (scopes any feature))
     )
     (declaration (id (node (document "memory://snapshot/kerml_feature_chain_expression_operator.md") (path (named (kind package) (name "Expressions")) (named (kind kerml-classifier) (name "Holder")) (named (kind kerml-feature) (name "reached")) (anonymous (kind kerml-expression) (ordinal 0)) (anonymous (kind kerml-feature) (ordinal 1)) (anonymous (kind kerml-feature) (ordinal 0)))))
@@ -136,6 +143,12 @@ package Expressions {
       (supertype (node (document "memory://snapshot/kerml_feature_chain_expression_operator.md") (qualified-name "Expressions::Thing")) (scopes any))
       (subtype (node (document "memory://snapshot/kerml_feature_chain_expression_operator.md") (path (named (kind package) (name "Expressions")) (named (kind kerml-classifier) (name "Holder")) (named (kind kerml-feature) (name "reached")) (anonymous (kind kerml-expression) (ordinal 0)) (anonymous (kind kerml-feature) (ordinal 1)) (anonymous (kind kerml-feature) (ordinal 0)))) (scopes any feature))
     )
+)
+~~~
+# EXPRESSIONS
+~~~sexpr
+(expressions
+  (declaration (id (node (document "memory://snapshot/kerml_feature_chain_expression_operator.md") (path (named (kind package) (name "Expressions")) (named (kind kerml-classifier) (name "Holder")) (named (kind kerml-feature) (name "reached")) (anonymous (kind kerml-expression) (ordinal 0))))) (outcome resolved) (feature-reference "outer::inner" (target (node (document "memory://snapshot/kerml_feature_chain_expression_operator.md") (qualified-name "Expressions::Thing::inner")))))
 )
 ~~~
 # NAVIGATION

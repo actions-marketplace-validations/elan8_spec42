@@ -45,7 +45,7 @@ package P {
 # SMG
 ~~~sexpr
 (semantic-model
-  (publication (phase resolved) (completeness complete) (has-evaluation true) (source-digest "blake3:058d3de74b320ebf59c3665087064fa28dc5af41d2a7abd88b7c720a8445f7ef"))
+  (publication (phase resolved) (completeness complete) (has-evaluation true) (source-digest "blake3:058f42f12b4fc0b2e9d019c11597ad8bd8e94df98f19e61600e751f256d57d21"))
   (declarations
     (declaration (id (node (document "memory://snapshot/fuzz_perform_action_keyword.md") (qualified-name "P"))) (kind package) (membership (kind owning) (visibility default)))
     (declaration (id (node (document "memory://snapshot/fuzz_perform_action_keyword.md") (qualified-name "P::A"))) (kind action-def) (membership (kind owning) (visibility default)))
@@ -97,6 +97,13 @@ package P {
     (declaration (id (node (document "memory://snapshot/fuzz_perform_action_keyword.md") (path (named (kind package) (name "P")) (named (kind action-def) (name "A")) (anonymous (kind for-loop) (ordinal 0)) (named (kind for-loop-variable) (name "x")))))
       (featured-by (node (document "memory://snapshot/fuzz_perform_action_keyword.md") (path (named (kind package) (name "P")) (named (kind action-def) (name "A")) (anonymous (kind for-loop) (ordinal 0)))))
     )
+)
+~~~
+# EXPRESSIONS
+~~~sexpr
+(expressions
+  (declaration (id (node (document "memory://snapshot/fuzz_perform_action_keyword.md") (path (named (kind package) (name "P")) (named (kind action-def) (name "A")) (anonymous (kind for-loop) (ordinal 0))))) (outcome resolved) (feature-reference "seq" (target unresolved)))
+  (declaration (id (node (document "memory://snapshot/fuzz_perform_action_keyword.md") (path (named (kind package) (name "P")) (named (kind action-def) (name "A")) (anonymous (kind for-loop) (ordinal 0)) (named (kind perform-action) (name "doStuff")) (anonymous (kind for-loop) (ordinal 0))))) (outcome resolved) (feature-reference "items" (target unresolved)))
 )
 ~~~
 # NAVIGATION

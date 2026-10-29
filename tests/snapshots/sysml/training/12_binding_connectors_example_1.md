@@ -66,21 +66,9 @@ package 'Binding Connectors Example-1' {
       )
       (diagnostic
         (severity warning)
-        (code "port_nested_usage_composite")
-        (source "semantic")
-        (range (start 10 4) (end 10 34))
-      )
-      (diagnostic
-        (severity warning)
         (code "unresolved_reference")
         (source "semantic")
         (range (start 10 23) (end 10 33))
-      )
-      (diagnostic
-        (severity warning)
-        (code "port_nested_usage_composite")
-        (source "semantic")
-        (range (start 11 4) (end 11 33))
       )
       (diagnostic
         (severity warning)
@@ -131,7 +119,7 @@ package 'Binding Connectors Example-1' {
 # SMG
 ~~~sexpr
 (semantic-model
-  (publication (phase resolved) (completeness complete) (has-evaluation false) (source-digest "blake3:8516e9e78454a517467fd62ad4666734f0fa506d7a9526a8a7033c688fbff697"))
+  (publication (phase resolved) (completeness complete) (has-evaluation false) (source-digest "blake3:62bb4d34b6c0e835b6486f4bcbbd0c848ea72226872a347fa282d2681cfd65d3"))
   (declarations
     (declaration (id (node (document "memory://snapshot/12_binding_connectors_example_1.md") (qualified-name "Binding Connectors Example-1"))) (kind package) (membership (kind owning) (visibility default)))
     (declaration (id (node (document "memory://snapshot/12_binding_connectors_example_1.md") (path (named (kind package) (name "Binding Connectors Example-1")) (anonymous (kind import) (ordinal 0))))) (kind import) (membership (kind import) (visibility private)) (authored (membership (kind import) (visibility private)) (relationships (namespaceImport (reference "Port Example") (import (shape namespace) (recursive false))))))

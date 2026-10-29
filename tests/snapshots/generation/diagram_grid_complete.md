@@ -1,9 +1,9 @@
 # META
 ~~~ini
-description=Grid view projects typed rows and relationship columns
+description=A grid view whose exposed elements share no relationship is a table with one row per exposed element
 type=generate
 libraries=standard
-plugin=repository:diagram
+plugin=native:diagram
 viewKind=grid-view
 viewDocument=diagram_grid_complete.md
 viewQualifiedName=GridExample::selected
@@ -12,7 +12,7 @@ viewQualifiedName=GridExample::selected
 ~~~sysml
 package GridExample {
     private import StandardViewDefinitions::*;
-    part def TableRoot { part first; part second; }
+    part def TableRoot { part 'first'; part second; }
     view selected : GridView { expose TableRoot; }
 }
 ~~~
@@ -28,7 +28,7 @@ package GridExample {
 # SMG
 ~~~sexpr
 (semantic-model
-  (publication (phase resolved) (completeness complete) (has-evaluation true) (source-digest "blake3:c672833c613c1f19ddcf802c690c755bc0cc8f13de9a1632a530e6a0e6152a8a") (admitted (standard-library 94)))
+  (publication (phase resolved) (completeness complete) (has-evaluation true) (source-digest "blake3:e0d71a392b6c663d5739e7ef6aa47d8842dd1030b87fe891ce174f18e42a4d47") (admitted (standard-library 94)))
   (declarations
     (declaration (id (node (document "memory://snapshot/diagram_grid_complete.md") (qualified-name "GridExample"))) (kind package) (membership (kind owning) (visibility default)))
     (declaration (id (node (document "memory://snapshot/diagram_grid_complete.md") (path (named (kind package) (name "GridExample")) (anonymous (kind import) (ordinal 0))))) (kind import) (membership (kind import) (visibility private)) (authored (membership (kind import) (visibility private)) (relationships (namespaceImport (reference "StandardViewDefinitions") (import (shape namespace) (recursive false))))))
@@ -54,8 +54,10 @@ package GridExample {
     (relationship (kind viewExpose) (source (node (document "memory://snapshot/diagram_grid_complete.md") (path (named (kind package) (name "GridExample")) (named (kind view) (name "selected")) (anonymous (kind expose) (ordinal 0))))) (target (node (document "memory://snapshot/diagram_grid_complete.md") (qualified-name "GridExample::TableRoot"))) (provenance authored) (authored-reference (source (node (document "memory://snapshot/diagram_grid_complete.md") (path (named (kind package) (name "GridExample")) (named (kind view) (name "selected")) (anonymous (kind expose) (ordinal 0))))) (kind viewExpose) (ordinal 0)))
     (relationship (kind specialization) (source (node (document "memory://snapshot/diagram_grid_complete.md") (qualified-name "GridExample::TableRoot"))) (target (node (document "memory://snapshot/sysml.library/parts.md") (qualified-name "Parts::Part"))) (provenance implied))
     (relationship (kind typeFeaturing) (source (node (document "memory://snapshot/diagram_grid_complete.md") (qualified-name "GridExample::TableRoot::first"))) (target (node (document "memory://snapshot/diagram_grid_complete.md") (qualified-name "GridExample::TableRoot"))) (provenance implied))
+    (relationship (kind subsetting) (source (node (document "memory://snapshot/diagram_grid_complete.md") (qualified-name "GridExample::TableRoot::first"))) (target (node (document "memory://snapshot/sysml.library/occurrences.md") (qualified-name "Occurrences::Occurrence::suboccurrences"))) (provenance implied))
     (relationship (kind subsetting) (source (node (document "memory://snapshot/diagram_grid_complete.md") (qualified-name "GridExample::TableRoot::first"))) (target (node (document "memory://snapshot/sysml.library/parts.md") (qualified-name "Parts::parts"))) (provenance implied))
     (relationship (kind typeFeaturing) (source (node (document "memory://snapshot/diagram_grid_complete.md") (qualified-name "GridExample::TableRoot::second"))) (target (node (document "memory://snapshot/diagram_grid_complete.md") (qualified-name "GridExample::TableRoot"))) (provenance implied))
+    (relationship (kind subsetting) (source (node (document "memory://snapshot/diagram_grid_complete.md") (qualified-name "GridExample::TableRoot::second"))) (target (node (document "memory://snapshot/sysml.library/occurrences.md") (qualified-name "Occurrences::Occurrence::suboccurrences"))) (provenance implied))
     (relationship (kind subsetting) (source (node (document "memory://snapshot/diagram_grid_complete.md") (qualified-name "GridExample::TableRoot::second"))) (target (node (document "memory://snapshot/sysml.library/parts.md") (qualified-name "Parts::parts"))) (provenance implied))
     (relationship (kind subsetting) (source (node (document "memory://snapshot/diagram_grid_complete.md") (qualified-name "GridExample::selected"))) (target (node (document "memory://snapshot/sysml.library/views.md") (qualified-name "Views::views"))) (provenance implied))
     (relationship (kind typeFeaturing) (source (node (document "memory://snapshot/diagram_grid_complete.md") (path (named (kind package) (name "GridExample")) (named (kind view) (name "selected")) (anonymous (kind expose) (ordinal 0))))) (target (node (document "memory://snapshot/diagram_grid_complete.md") (qualified-name "GridExample::selected"))) (provenance implied))
@@ -79,6 +81,7 @@ package GridExample {
       (effective-type (node (document "memory://snapshot/sysml.library/base.md") (qualified-name "Base::Anything")) (source inherited) (from (node (document "memory://snapshot/sysml.library/base.md") (qualified-name "Base::things"))))
       (effective-type (node (document "memory://snapshot/sysml.library/items.md") (qualified-name "Items::Item")) (source inherited) (from (node (document "memory://snapshot/sysml.library/items.md") (qualified-name "Items::items"))))
       (effective-type (node (document "memory://snapshot/sysml.library/objects.md") (qualified-name "Objects::Object")) (source inherited) (from (node (document "memory://snapshot/sysml.library/objects.md") (qualified-name "Objects::objects"))))
+      (effective-type (node (document "memory://snapshot/sysml.library/occurrences.md") (qualified-name "Occurrences::Occurrence")) (source inherited) (from (node (document "memory://snapshot/sysml.library/occurrences.md") (qualified-name "Occurrences::Occurrence::suboccurrences"))))
       (effective-type (node (document "memory://snapshot/sysml.library/occurrences.md") (qualified-name "Occurrences::Occurrence")) (source inherited) (from (node (document "memory://snapshot/sysml.library/occurrences.md") (qualified-name "Occurrences::occurrences"))))
       (effective-type (node (document "memory://snapshot/sysml.library/parts.md") (qualified-name "Parts::Part")) (source inherited) (from (node (document "memory://snapshot/sysml.library/parts.md") (qualified-name "Parts::parts"))))
       (supertype (node (document "memory://snapshot/sysml.library/base.md") (qualified-name "Base::Anything")) (scopes any))
@@ -88,6 +91,7 @@ package GridExample {
       (supertype (node (document "memory://snapshot/sysml.library/objects.md") (qualified-name "Objects::Object")) (scopes any))
       (supertype (node (document "memory://snapshot/sysml.library/objects.md") (qualified-name "Objects::objects")) (scopes any feature))
       (supertype (node (document "memory://snapshot/sysml.library/occurrences.md") (qualified-name "Occurrences::Occurrence")) (scopes any))
+      (supertype (node (document "memory://snapshot/sysml.library/occurrences.md") (qualified-name "Occurrences::Occurrence::suboccurrences")) (scopes any feature))
       (supertype (node (document "memory://snapshot/sysml.library/occurrences.md") (qualified-name "Occurrences::occurrences")) (scopes any feature))
       (supertype (node (document "memory://snapshot/sysml.library/parts.md") (qualified-name "Parts::Part")) (scopes any))
       (supertype (node (document "memory://snapshot/sysml.library/parts.md") (qualified-name "Parts::parts")) (scopes any feature))
@@ -97,6 +101,7 @@ package GridExample {
       (effective-type (node (document "memory://snapshot/sysml.library/base.md") (qualified-name "Base::Anything")) (source inherited) (from (node (document "memory://snapshot/sysml.library/base.md") (qualified-name "Base::things"))))
       (effective-type (node (document "memory://snapshot/sysml.library/items.md") (qualified-name "Items::Item")) (source inherited) (from (node (document "memory://snapshot/sysml.library/items.md") (qualified-name "Items::items"))))
       (effective-type (node (document "memory://snapshot/sysml.library/objects.md") (qualified-name "Objects::Object")) (source inherited) (from (node (document "memory://snapshot/sysml.library/objects.md") (qualified-name "Objects::objects"))))
+      (effective-type (node (document "memory://snapshot/sysml.library/occurrences.md") (qualified-name "Occurrences::Occurrence")) (source inherited) (from (node (document "memory://snapshot/sysml.library/occurrences.md") (qualified-name "Occurrences::Occurrence::suboccurrences"))))
       (effective-type (node (document "memory://snapshot/sysml.library/occurrences.md") (qualified-name "Occurrences::Occurrence")) (source inherited) (from (node (document "memory://snapshot/sysml.library/occurrences.md") (qualified-name "Occurrences::occurrences"))))
       (effective-type (node (document "memory://snapshot/sysml.library/parts.md") (qualified-name "Parts::Part")) (source inherited) (from (node (document "memory://snapshot/sysml.library/parts.md") (qualified-name "Parts::parts"))))
       (supertype (node (document "memory://snapshot/sysml.library/base.md") (qualified-name "Base::Anything")) (scopes any))
@@ -106,6 +111,7 @@ package GridExample {
       (supertype (node (document "memory://snapshot/sysml.library/objects.md") (qualified-name "Objects::Object")) (scopes any))
       (supertype (node (document "memory://snapshot/sysml.library/objects.md") (qualified-name "Objects::objects")) (scopes any feature))
       (supertype (node (document "memory://snapshot/sysml.library/occurrences.md") (qualified-name "Occurrences::Occurrence")) (scopes any))
+      (supertype (node (document "memory://snapshot/sysml.library/occurrences.md") (qualified-name "Occurrences::Occurrence::suboccurrences")) (scopes any feature))
       (supertype (node (document "memory://snapshot/sysml.library/occurrences.md") (qualified-name "Occurrences::occurrences")) (scopes any feature))
       (supertype (node (document "memory://snapshot/sysml.library/parts.md") (qualified-name "Parts::Part")) (scopes any))
       (supertype (node (document "memory://snapshot/sysml.library/parts.md") (qualified-name "Parts::parts")) (scopes any feature))
@@ -162,16 +168,12 @@ package GridExample {
 ## diagram.json
 ~~~json
 {
-  "schemaVersion": 5,
-  "modelDigest": "blake3:39c0cbc3dbb236f5efd8c1ddfb35e3c07985dd8d28c0b669e2bd930a5b5ce45d",
+  "schemaVersion": 10,
+  "modelDigest": "blake3:3930a81d88dba8f300241c20ebcaeff6b0c3fa6775a12df2b29377fc7937a724",
   "documents": [
     {
       "uri": "memory://snapshot/diagram_grid_complete.md",
       "sourceDomain": "workspace"
-    },
-    {
-      "uri": "memory://snapshot/sysml.library/parts.md",
-      "sourceDomain": "standard-library"
     }
   ],
   "sources": [
@@ -182,24 +184,6 @@ package GridExample {
         13,
         2,
         22
-      ]
-    },
-    {
-      "document": 0,
-      "range": [
-        2,
-        30,
-        2,
-        35
-      ]
-    },
-    {
-      "document": 0,
-      "range": [
-        2,
-        42,
-        2,
-        48
       ]
     },
     {
@@ -221,223 +205,54 @@ package GridExample {
     {
       "document": 0,
       "kind": "qualified-name",
-      "qualifiedName": "GridExample::TableRoot::first"
-    },
-    {
-      "document": 0,
-      "kind": "qualified-name",
-      "qualifiedName": "GridExample::TableRoot::second"
-    },
-    {
-      "document": 0,
-      "kind": "qualified-name",
       "qualifiedName": "GridExample::selected"
-    },
-    {
-      "document": 1,
-      "kind": "qualified-name",
-      "qualifiedName": "Parts::Part"
-    },
-    {
-      "document": 1,
-      "kind": "qualified-name",
-      "qualifiedName": "Parts::parts"
-    },
-    {
-      "kind": "relationship",
-      "ordinal": 0,
-      "relationshipKind": "containment",
-      "source": 0
-    },
-    {
-      "kind": "relationship",
-      "ordinal": 1,
-      "relationshipKind": "containment",
-      "source": 0
-    },
-    {
-      "kind": "relationship",
-      "ordinal": 0,
-      "relationshipKind": "specializes",
-      "source": 0
-    },
-    {
-      "kind": "relationship",
-      "ordinal": 1,
-      "relationshipKind": "subsetting",
-      "source": 1
-    },
-    {
-      "kind": "relationship",
-      "ordinal": 2,
-      "relationshipKind": "typeFeaturing",
-      "source": 1
-    },
-    {
-      "kind": "relationship",
-      "ordinal": 3,
-      "relationshipKind": "subsetting",
-      "source": 2
-    },
-    {
-      "kind": "relationship",
-      "ordinal": 4,
-      "relationshipKind": "typeFeaturing",
-      "source": 2
     }
   ],
   "selectedView": {
-    "reference": 3,
+    "reference": 1,
     "kind": "grid-view",
     "name": "selected",
-    "source": 3
+    "source": 1
   },
   "completeness": {
     "status": "complete",
     "reasons": []
   },
   "projection": {
-    "edges": [
-      {
-        "kind": "containment",
-        "navigation": 1,
-        "origin": 1,
-        "provenance": "authored",
-        "reference": 6,
-        "source": 0,
-        "target": 1
-      },
-      {
-        "kind": "containment",
-        "navigation": 2,
-        "origin": 2,
-        "provenance": "authored",
-        "reference": 7,
-        "source": 0,
-        "target": 2
-      }
-    ],
+    "edges": [],
     "exposedRoots": [
       0
     ],
     "kind": "grid-view",
     "metadata": {
       "cells": [],
-      "columns": [
-        "specializes",
-        "subsetting",
-        "typeFeaturing"
-      ],
+      "columns": [],
+      "layout": "element-table",
       "rows": [
-        0,
-        1,
-        2
+        0
       ]
     },
     "nodes": [
       {
-        "compartments": [
-          {
-            "kind": "parts",
-            "members": [
-              1,
-              2
-            ],
-            "provenance": "direct"
-          }
-        ],
+        "compartments": [],
+        "conjugated": false,
+        "direction": null,
+        "featureDirection": null,
         "metaclass": "PartDefinition",
+        "multiplicity": null,
         "name": "TableRoot",
         "notationRole": "definition",
         "owner": null,
         "reference": 0,
         "source": 0,
-        "typing": {
-          "status": "absent"
-        }
-      },
-      {
-        "compartments": [],
-        "metaclass": "PartUsage",
-        "name": "first",
-        "notationRole": "usage",
-        "owner": 0,
-        "reference": 1,
-        "source": 1,
-        "typing": {
-          "status": "absent"
-        }
-      },
-      {
-        "compartments": [],
-        "metaclass": "PartUsage",
-        "name": "second",
-        "notationRole": "usage",
-        "owner": 0,
-        "reference": 2,
-        "source": 2,
+        "stateSubaction": null,
+        "successionGuard": null,
         "typing": {
           "status": "absent"
         }
       }
     ],
-    "relationships": [
-      {
-        "kind": "specializes",
-        "navigation": null,
-        "provenance": "implied",
-        "reference": 8,
-        "source": 0,
-        "target": {
-          "reference": 4,
-          "status": "resolved"
-        }
-      },
-      {
-        "kind": "subsetting",
-        "navigation": null,
-        "provenance": "implied",
-        "reference": 9,
-        "source": 1,
-        "target": {
-          "reference": 5,
-          "status": "resolved"
-        }
-      },
-      {
-        "kind": "typeFeaturing",
-        "navigation": null,
-        "provenance": "implied",
-        "reference": 10,
-        "source": 1,
-        "target": {
-          "node": 0,
-          "status": "resolved"
-        }
-      },
-      {
-        "kind": "subsetting",
-        "navigation": null,
-        "provenance": "implied",
-        "reference": 11,
-        "source": 2,
-        "target": {
-          "reference": 5,
-          "status": "resolved"
-        }
-      },
-      {
-        "kind": "typeFeaturing",
-        "navigation": null,
-        "provenance": "implied",
-        "reference": 12,
-        "source": 2,
-        "target": {
-          "node": 0,
-          "status": "resolved"
-        }
-      }
-    ],
+    "relationships": [],
     "scene": {
       "kind": "grid"
     }

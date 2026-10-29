@@ -74,12 +74,6 @@ package Demo {
           )
         )
       )
-      (diagnostic
-        (severity information)
-        (code "view_expose_empty")
-        (source "semantic")
-        (range (start 17 4) (end 19 5))
-      )
     )
   )
 )
@@ -87,11 +81,11 @@ package Demo {
 # SMG
 ~~~sexpr
 (semantic-model
-  (publication (phase resolved) (completeness complete) (has-evaluation false) (source-digest "blake3:da0fb148812ffa25232dd185bbc99d7b2a453339523d0bbb99c5adb721dc30b3"))
+  (publication (phase resolved) (completeness complete) (has-evaluation false) (source-digest "blake3:ffa33364cc240ee1c6e8e89ebc4533ca0163fee65f17c5218bc07cc397a25759"))
   (declarations
     (declaration (id (node (document "memory://snapshot/model_diagnostic_categories.md") (qualified-name "Demo"))) (kind package) (membership (kind owning) (visibility default)))
     (declaration (id (node (document "memory://snapshot/model_diagnostic_categories.md") (path (named (kind package) (name "Demo")) (anonymous (kind bare-connect) (ordinal 0))))) (kind bare-connect) (membership (kind feature) (visibility default)) (authored (membership (kind feature) (visibility default)) (relationships (connectorEnd (reference "controller")) (connectorEnd (reference "sensor")))))
-    (declaration (id (node (document "memory://snapshot/model_diagnostic_categories.md") (path (named (kind package) (name "Demo")) (anonymous (kind perform-action) (ordinal 0))))) (kind perform-action) (membership (kind feature) (visibility default)) (authored (membership (kind feature) (visibility default)) (relationships (referenceSubsetting (reference "process")))))
+    (declaration (id (node (document "memory://snapshot/model_diagnostic_categories.md") (path (named (kind package) (name "Demo")) (anonymous (kind perform-action) (ordinal 0))))) (kind perform-action) (membership (kind feature) (visibility default)) (effective-identification (name "process") (short-name absent) (provenance performed-action)) (authored (membership (kind feature) (visibility default)) (relationships (referenceSubsetting (reference "process")))))
     (declaration (id (node (document "memory://snapshot/model_diagnostic_categories.md") (path (named (kind package) (name "Demo")) (anonymous (kind satisfy) (ordinal 0))))) (kind satisfy) (membership (kind feature) (visibility default)) (authored (membership (kind feature) (visibility default)) (relationships (satisfySource (reference "system")))))
     (declaration (id (node (document "memory://snapshot/model_diagnostic_categories.md") (qualified-name "Demo::ArchitectureView"))) (kind view-def) (membership (kind owning) (visibility default)))
     (declaration (id (node (document "memory://snapshot/model_diagnostic_categories.md") (qualified-name "Demo::ArchitectureViewpoint"))) (kind viewpoint-def) (membership (kind owning) (visibility default)))
@@ -154,6 +148,11 @@ package Demo {
 # TYPES
 ~~~sexpr
 (types
+    (declaration (id (node (document "memory://snapshot/model_diagnostic_categories.md") (path (named (kind package) (name "Demo")) (anonymous (kind perform-action) (ordinal 0)))))
+      (effective-type (node (document "memory://snapshot/model_diagnostic_categories.md") (qualified-name "Demo::Process")) (source inherited) (from (node (document "memory://snapshot/model_diagnostic_categories.md") (qualified-name "Demo::process"))))
+      (supertype (node (document "memory://snapshot/model_diagnostic_categories.md") (qualified-name "Demo::Process")) (scopes any))
+      (supertype (node (document "memory://snapshot/model_diagnostic_categories.md") (qualified-name "Demo::process")) (scopes any feature))
+    )
     (declaration (id (node (document "memory://snapshot/model_diagnostic_categories.md") (qualified-name "Demo::ArchitectureView")))
       (subtype (node (document "memory://snapshot/model_diagnostic_categories.md") (qualified-name "Demo::architecture")) (scopes any))
     )
@@ -183,12 +182,19 @@ package Demo {
       (type (node (document "memory://snapshot/model_diagnostic_categories.md") (qualified-name "Demo::Process")) (provenance authored))
       (effective-type (node (document "memory://snapshot/model_diagnostic_categories.md") (qualified-name "Demo::Process")) (source direct))
       (supertype (node (document "memory://snapshot/model_diagnostic_categories.md") (qualified-name "Demo::Process")) (scopes any))
+      (subtype (node (document "memory://snapshot/model_diagnostic_categories.md") (path (named (kind package) (name "Demo")) (anonymous (kind perform-action) (ordinal 0)))) (scopes any feature))
     )
     (declaration (id (node (document "memory://snapshot/model_diagnostic_categories.md") (qualified-name "Demo::sensor")))
       (type (node (document "memory://snapshot/model_diagnostic_categories.md") (qualified-name "Demo::Sensor")) (provenance authored))
       (effective-type (node (document "memory://snapshot/model_diagnostic_categories.md") (qualified-name "Demo::Sensor")) (source direct))
       (supertype (node (document "memory://snapshot/model_diagnostic_categories.md") (qualified-name "Demo::Sensor")) (scopes any))
     )
+)
+~~~
+# CONNECTIONS
+~~~sexpr
+(connections
+  (connector (id (node (document "memory://snapshot/model_diagnostic_categories.md") (path (named (kind package) (name "Demo")) (anonymous (kind bare-connect) (ordinal 0))))) (kind connection) (end bare (feature (resolved (node (document "memory://snapshot/model_diagnostic_categories.md") (qualified-name "Demo::controller"))))) (end bare (feature (resolved (node (document "memory://snapshot/model_diagnostic_categories.md") (qualified-name "Demo::sensor"))))))
 )
 ~~~
 # NAVIGATION

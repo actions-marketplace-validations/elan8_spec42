@@ -57,6 +57,56 @@ function assertMode(
 }
 
 describe("FeatureInspectorViewModel", () => {
+  it("leads with the qualified name, readable kind and original documentation", () => {
+    const documentation = "Authorizes configuration changes.\n\n  Preserve this indentation.\n<script>plain text</script>";
+    const target = element("configurationChange", "usage", {
+      qualifiedName: "Elevators::OperationalScenarios::configurationChange", type: "ActionUsage", documentation,
+    });
+    const viewModel = buildFeatureInspectorViewModel(result({ kind: "element" }, target));
+    assert.deepStrictEqual(viewModel.elementHeading, {
+      name: target.qualifiedName, kind: "Action usage", documentation, hasDocumentation: true,
+    });
+    assert.deepStrictEqual(viewModel.sections.slice(0, 3), ["Model element", "Documentation", "Identity"]);
+    assert.ok(!viewModel.sections.includes("Declaration"));
+  });
+
+  it("shows missing documentation and falls back to the supplied local or unnamed name", () => {
+    for (const documentation of [undefined, "", "  \n "]) {
+      const target = element("Vehicle", "definition", { qualifiedName: "", documentation });
+      const heading = buildFeatureInspectorViewModel(result({ kind: "element" }, target)).elementHeading;
+      assert.deepStrictEqual(heading, { name:"Vehicle", kind:"Part definition", documentation:"No documentation.", hasDocumentation:false });
+      target.name = "";
+      assert.strictEqual(buildFeatureInspectorViewModel(result({ kind:"element" }, target)).elementHeading?.name, "(unnamed)");
+    }
+  });
+
+  it("shows the resolved target's heading and documentation for reference selections", () => {
+    const input = result({kind:"reference"}, element("caller", "usage"));
+    input.referenced = {status:"resolved", element:element("Operation", "definition", {documentation:"Target documentation."})};
+    const heading = buildFeatureInspectorViewModel(input).elementHeading;
+    assert.strictEqual(heading?.name, "P::Operation");
+    assert.strictEqual(heading?.documentation, "Target documentation.");
+  });
+
+  it("keeps immediate features visible and ancestor features available for expansion", () => {
+    const base = element("Base", "definition");
+    const ancestor = element("Ancestor", "definition");
+    const direct = { feature: element("command", "usage"), declaredIn: base, isDirect: true };
+    const indirect = { feature: element("status", "usage"), declaredIn: ancestor, isDirect: false };
+    const target = element("Derived", "definition", { inheritedFeatures: [direct, indirect] });
+    const viewModel = buildFeatureInspectorViewModel(result({ kind: "element" }, target));
+    assert.deepStrictEqual(viewModel.inheritedFeatures, { direct: [direct], indirect: [indirect] });
+
+    const referenced = result({ kind: "reference" });
+    referenced.referenced = { status: "resolved", element: target };
+    assert.deepStrictEqual(buildFeatureInspectorViewModel(referenced).inheritedFeatures,
+      { direct: [direct], indirect: [indirect] });
+    target.inheritedFeatures = [indirect];
+    const ancestorOnly = buildFeatureInspectorViewModel(result({ kind: "element" }, target));
+    assert.deepStrictEqual(ancestorOnly.inheritedFeatures, { direct: [], indirect: [indirect] });
+    assert.ok(ancestorOnly.sections.includes("Inherited features"));
+  });
+
   it("renders a keyword as language help only", () => {
     const input = result({ kind: "keyword", text: "part" }, element("RobotLidar", "definition"));
     input.languageHelp = {
@@ -103,7 +153,7 @@ describe("FeatureInspectorViewModel", () => {
     assert.strictEqual(viewModel.primaryElement?.role, "definition");
     assert.deepStrictEqual(viewModel.sections, [
       "Model element",
-      "Declaration",
+      "Documentation",
       "Identity",
       "Type/specialization",
       "Relationships",
@@ -117,7 +167,7 @@ describe("FeatureInspectorViewModel", () => {
       documentation: "A specialized vehicle.",
       subsetting: { status: "notApplicable", targets: [] },
       redefinition: { status: "resolved", targets: [base] },
-      inheritedFeatures: [{ feature: element("command", "usage"), declaredIn: base }],
+      inheritedFeatures: [{ feature: element("command", "usage"), declaredIn: base, isDirect: true }],
       metadata: [element("SafetyCritical", "usage")],
     });
 
@@ -127,11 +177,10 @@ describe("FeatureInspectorViewModel", () => {
 
     assert.deepStrictEqual(viewModel.sections, [
       "Model element",
-      "Declaration",
+      "Documentation",
       "Identity",
       "Subsetting/redefinition",
       "Inherited features",
-      "Documentation",
       "Metadata",
       "Source location",
     ]);

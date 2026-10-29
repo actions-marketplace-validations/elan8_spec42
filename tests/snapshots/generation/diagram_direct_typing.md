@@ -3,7 +3,7 @@
 description=Diagram node typing is authored FeatureTyping, not the implied library effective-type closure
 type=generate
 libraries=standard
-plugin=repository:diagram
+plugin=native:diagram
 viewKind=general-view
 viewDocument=diagram_direct_typing.md
 viewQualifiedName=DirectTypingExample::selected
@@ -33,7 +33,7 @@ package DirectTypingExample {
 # SMG
 ~~~sexpr
 (semantic-model
-  (publication (phase resolved) (completeness complete) (has-evaluation true) (source-digest "blake3:60187702aff36b2605cec05ffff861fc828e788ee8b90dc107e511239d2e9a5f") (admitted (standard-library 94)))
+  (publication (phase resolved) (completeness complete) (has-evaluation true) (source-digest "blake3:78f38058673ad8477a65a6518a7312ad8b8e06c3234b0aa1dcecb5caf7fc1078") (admitted (standard-library 94)))
   (declarations
     (declaration (id (node (document "memory://snapshot/diagram_direct_typing.md") (qualified-name "DirectTypingExample"))) (kind package) (membership (kind owning) (visibility default)))
     (declaration (id (node (document "memory://snapshot/diagram_direct_typing.md") (path (named (kind package) (name "DirectTypingExample")) (anonymous (kind import) (ordinal 0))))) (kind import) (membership (kind import) (visibility private)) (authored (membership (kind import) (visibility private)) (relationships (namespaceImport (reference "StandardViewDefinitions") (import (shape namespace) (recursive false))))))
@@ -69,8 +69,10 @@ package DirectTypingExample {
     (relationship (kind viewExpose) (source (node (document "memory://snapshot/diagram_direct_typing.md") (path (named (kind package) (name "DirectTypingExample")) (named (kind view) (name "selected")) (anonymous (kind expose) (ordinal 0))))) (target (node (document "memory://snapshot/diagram_direct_typing.md") (qualified-name "DirectTypingExample::root"))) (provenance authored) (authored-reference (source (node (document "memory://snapshot/diagram_direct_typing.md") (path (named (kind package) (name "DirectTypingExample")) (named (kind view) (name "selected")) (anonymous (kind expose) (ordinal 0))))) (kind viewExpose) (ordinal 0)))
     (relationship (kind specialization) (source (node (document "memory://snapshot/diagram_direct_typing.md") (qualified-name "DirectTypingExample::Assembly"))) (target (node (document "memory://snapshot/sysml.library/parts.md") (qualified-name "Parts::Part"))) (provenance implied))
     (relationship (kind typeFeaturing) (source (node (document "memory://snapshot/diagram_direct_typing.md") (qualified-name "DirectTypingExample::Assembly::typedChild"))) (target (node (document "memory://snapshot/diagram_direct_typing.md") (qualified-name "DirectTypingExample::Assembly"))) (provenance implied))
+    (relationship (kind subsetting) (source (node (document "memory://snapshot/diagram_direct_typing.md") (qualified-name "DirectTypingExample::Assembly::typedChild"))) (target (node (document "memory://snapshot/sysml.library/objects.md") (qualified-name "Objects::Object::subobjects"))) (provenance implied))
     (relationship (kind subsetting) (source (node (document "memory://snapshot/diagram_direct_typing.md") (qualified-name "DirectTypingExample::Assembly::typedChild"))) (target (node (document "memory://snapshot/sysml.library/parts.md") (qualified-name "Parts::parts"))) (provenance implied))
     (relationship (kind typeFeaturing) (source (node (document "memory://snapshot/diagram_direct_typing.md") (qualified-name "DirectTypingExample::Assembly::untypedChild"))) (target (node (document "memory://snapshot/diagram_direct_typing.md") (qualified-name "DirectTypingExample::Assembly"))) (provenance implied))
+    (relationship (kind subsetting) (source (node (document "memory://snapshot/diagram_direct_typing.md") (qualified-name "DirectTypingExample::Assembly::untypedChild"))) (target (node (document "memory://snapshot/sysml.library/occurrences.md") (qualified-name "Occurrences::Occurrence::suboccurrences"))) (provenance implied))
     (relationship (kind subsetting) (source (node (document "memory://snapshot/diagram_direct_typing.md") (qualified-name "DirectTypingExample::Assembly::untypedChild"))) (target (node (document "memory://snapshot/sysml.library/parts.md") (qualified-name "Parts::parts"))) (provenance implied))
     (relationship (kind specialization) (source (node (document "memory://snapshot/diagram_direct_typing.md") (qualified-name "DirectTypingExample::Board"))) (target (node (document "memory://snapshot/sysml.library/parts.md") (qualified-name "Parts::Part"))) (provenance implied))
     (relationship (kind subsetting) (source (node (document "memory://snapshot/diagram_direct_typing.md") (qualified-name "DirectTypingExample::root"))) (target (node (document "memory://snapshot/sysml.library/parts.md") (qualified-name "Parts::parts"))) (provenance implied))
@@ -98,7 +100,9 @@ package DirectTypingExample {
       (effective-type (node (document "memory://snapshot/diagram_direct_typing.md") (qualified-name "DirectTypingExample::Board")) (source direct))
       (effective-type (node (document "memory://snapshot/sysml.library/base.md") (qualified-name "Base::Anything")) (source inherited) (from (node (document "memory://snapshot/sysml.library/base.md") (qualified-name "Base::things"))))
       (effective-type (node (document "memory://snapshot/sysml.library/items.md") (qualified-name "Items::Item")) (source inherited) (from (node (document "memory://snapshot/sysml.library/items.md") (qualified-name "Items::items"))))
+      (effective-type (node (document "memory://snapshot/sysml.library/objects.md") (qualified-name "Objects::Object")) (source inherited) (from (node (document "memory://snapshot/sysml.library/objects.md") (qualified-name "Objects::Object::subobjects"))))
       (effective-type (node (document "memory://snapshot/sysml.library/objects.md") (qualified-name "Objects::Object")) (source inherited) (from (node (document "memory://snapshot/sysml.library/objects.md") (qualified-name "Objects::objects"))))
+      (effective-type (node (document "memory://snapshot/sysml.library/occurrences.md") (qualified-name "Occurrences::Occurrence")) (source inherited) (from (node (document "memory://snapshot/sysml.library/occurrences.md") (qualified-name "Occurrences::Occurrence::suboccurrences"))))
       (effective-type (node (document "memory://snapshot/sysml.library/occurrences.md") (qualified-name "Occurrences::Occurrence")) (source inherited) (from (node (document "memory://snapshot/sysml.library/occurrences.md") (qualified-name "Occurrences::occurrences"))))
       (effective-type (node (document "memory://snapshot/sysml.library/parts.md") (qualified-name "Parts::Part")) (source inherited) (from (node (document "memory://snapshot/sysml.library/parts.md") (qualified-name "Parts::parts"))))
       (supertype (node (document "memory://snapshot/diagram_direct_typing.md") (qualified-name "DirectTypingExample::Board")) (scopes any))
@@ -107,8 +111,10 @@ package DirectTypingExample {
       (supertype (node (document "memory://snapshot/sysml.library/items.md") (qualified-name "Items::Item")) (scopes any))
       (supertype (node (document "memory://snapshot/sysml.library/items.md") (qualified-name "Items::items")) (scopes any feature))
       (supertype (node (document "memory://snapshot/sysml.library/objects.md") (qualified-name "Objects::Object")) (scopes any))
+      (supertype (node (document "memory://snapshot/sysml.library/objects.md") (qualified-name "Objects::Object::subobjects")) (scopes any feature))
       (supertype (node (document "memory://snapshot/sysml.library/objects.md") (qualified-name "Objects::objects")) (scopes any feature))
       (supertype (node (document "memory://snapshot/sysml.library/occurrences.md") (qualified-name "Occurrences::Occurrence")) (scopes any))
+      (supertype (node (document "memory://snapshot/sysml.library/occurrences.md") (qualified-name "Occurrences::Occurrence::suboccurrences")) (scopes any feature))
       (supertype (node (document "memory://snapshot/sysml.library/occurrences.md") (qualified-name "Occurrences::occurrences")) (scopes any feature))
       (supertype (node (document "memory://snapshot/sysml.library/parts.md") (qualified-name "Parts::Part")) (scopes any))
       (supertype (node (document "memory://snapshot/sysml.library/parts.md") (qualified-name "Parts::parts")) (scopes any feature))
@@ -118,6 +124,7 @@ package DirectTypingExample {
       (effective-type (node (document "memory://snapshot/sysml.library/base.md") (qualified-name "Base::Anything")) (source inherited) (from (node (document "memory://snapshot/sysml.library/base.md") (qualified-name "Base::things"))))
       (effective-type (node (document "memory://snapshot/sysml.library/items.md") (qualified-name "Items::Item")) (source inherited) (from (node (document "memory://snapshot/sysml.library/items.md") (qualified-name "Items::items"))))
       (effective-type (node (document "memory://snapshot/sysml.library/objects.md") (qualified-name "Objects::Object")) (source inherited) (from (node (document "memory://snapshot/sysml.library/objects.md") (qualified-name "Objects::objects"))))
+      (effective-type (node (document "memory://snapshot/sysml.library/occurrences.md") (qualified-name "Occurrences::Occurrence")) (source inherited) (from (node (document "memory://snapshot/sysml.library/occurrences.md") (qualified-name "Occurrences::Occurrence::suboccurrences"))))
       (effective-type (node (document "memory://snapshot/sysml.library/occurrences.md") (qualified-name "Occurrences::Occurrence")) (source inherited) (from (node (document "memory://snapshot/sysml.library/occurrences.md") (qualified-name "Occurrences::occurrences"))))
       (effective-type (node (document "memory://snapshot/sysml.library/parts.md") (qualified-name "Parts::Part")) (source inherited) (from (node (document "memory://snapshot/sysml.library/parts.md") (qualified-name "Parts::parts"))))
       (supertype (node (document "memory://snapshot/sysml.library/base.md") (qualified-name "Base::Anything")) (scopes any))
@@ -127,6 +134,7 @@ package DirectTypingExample {
       (supertype (node (document "memory://snapshot/sysml.library/objects.md") (qualified-name "Objects::Object")) (scopes any))
       (supertype (node (document "memory://snapshot/sysml.library/objects.md") (qualified-name "Objects::objects")) (scopes any feature))
       (supertype (node (document "memory://snapshot/sysml.library/occurrences.md") (qualified-name "Occurrences::Occurrence")) (scopes any))
+      (supertype (node (document "memory://snapshot/sysml.library/occurrences.md") (qualified-name "Occurrences::Occurrence::suboccurrences")) (scopes any feature))
       (supertype (node (document "memory://snapshot/sysml.library/occurrences.md") (qualified-name "Occurrences::occurrences")) (scopes any feature))
       (supertype (node (document "memory://snapshot/sysml.library/parts.md") (qualified-name "Parts::Part")) (scopes any))
       (supertype (node (document "memory://snapshot/sysml.library/parts.md") (qualified-name "Parts::parts")) (scopes any feature))
@@ -221,16 +229,12 @@ package DirectTypingExample {
 ## diagram.json
 ~~~json
 {
-  "schemaVersion": 5,
-  "modelDigest": "blake3:3872951ad8c86edc7cd8c4bd82ae4b402741c73db34eb2c971c553f78afdf005",
+  "schemaVersion": 10,
+  "modelDigest": "blake3:c3a191c3090f163ece09797117fe49dba08321c88e5c5054ac27359319224c75",
   "documents": [
     {
       "uri": "memory://snapshot/diagram_direct_typing.md",
       "sourceDomain": "workspace"
-    },
-    {
-      "uri": "memory://snapshot/sysml.library/parts.md",
-      "sourceDomain": "standard-library"
     }
   ],
   "sources": [
@@ -321,39 +325,10 @@ package DirectTypingExample {
       "qualifiedName": "DirectTypingExample::selected"
     },
     {
-      "document": 1,
-      "kind": "qualified-name",
-      "qualifiedName": "Parts::parts"
-    },
-    {
-      "kind": "relationship",
-      "ordinal": 3,
-      "relationshipKind": "subsetting",
-      "source": 1
-    },
-    {
-      "kind": "relationship",
-      "ordinal": 4,
-      "relationshipKind": "typeFeaturing",
-      "source": 1
-    },
-    {
       "kind": "relationship",
       "ordinal": 2,
       "relationshipKind": "typing",
       "source": 1
-    },
-    {
-      "kind": "relationship",
-      "ordinal": 5,
-      "relationshipKind": "subsetting",
-      "source": 2
-    },
-    {
-      "kind": "relationship",
-      "ordinal": 6,
-      "relationshipKind": "typeFeaturing",
-      "source": 2
     },
     {
       "kind": "relationship",
@@ -365,12 +340,6 @@ package DirectTypingExample {
       "kind": "relationship",
       "ordinal": 1,
       "relationshipKind": "containment",
-      "source": 4
-    },
-    {
-      "kind": "relationship",
-      "ordinal": 1,
-      "relationshipKind": "subsetting",
       "source": 4
     },
     {
@@ -397,7 +366,7 @@ package DirectTypingExample {
         "navigation": 0,
         "origin": 1,
         "provenance": "implied",
-        "reference": 12,
+        "reference": 7,
         "source": 0,
         "target": 1
       },
@@ -406,7 +375,7 @@ package DirectTypingExample {
         "navigation": 2,
         "origin": 2,
         "provenance": "implied",
-        "reference": 13,
+        "reference": 8,
         "source": 0,
         "target": 2
       }
@@ -432,12 +401,18 @@ package DirectTypingExample {
             "provenance": "inherited"
           }
         ],
+        "conjugated": false,
+        "direction": null,
+        "featureDirection": null,
         "metaclass": "PartUsage",
+        "multiplicity": null,
         "name": "root",
         "notationRole": "usage",
         "owner": null,
         "reference": 4,
         "source": 3,
+        "stateSubaction": null,
+        "successionGuard": null,
         "typing": {
           "status": "resolved",
           "types": [
@@ -450,12 +425,18 @@ package DirectTypingExample {
       },
       {
         "compartments": [],
+        "conjugated": false,
+        "direction": null,
+        "featureDirection": null,
         "metaclass": "PartUsage",
+        "multiplicity": null,
         "name": "typedChild",
         "notationRole": "usage",
         "owner": 0,
         "reference": 1,
         "source": 0,
+        "stateSubaction": null,
+        "successionGuard": null,
         "typing": {
           "status": "resolved",
           "types": [
@@ -468,12 +449,18 @@ package DirectTypingExample {
       },
       {
         "compartments": [],
+        "conjugated": false,
+        "direction": null,
+        "featureDirection": null,
         "metaclass": "PartUsage",
+        "multiplicity": null,
         "name": "untypedChild",
         "notationRole": "usage",
         "owner": 0,
         "reference": 2,
         "source": 2,
+        "stateSubaction": null,
+        "successionGuard": null,
         "typing": {
           "status": "absent"
         }
@@ -484,21 +471,10 @@ package DirectTypingExample {
         "kind": "typing",
         "navigation": 4,
         "provenance": "authored",
-        "reference": 15,
+        "reference": 9,
         "source": 0,
         "target": {
           "reference": 0,
-          "status": "resolved"
-        }
-      },
-      {
-        "kind": "subsetting",
-        "navigation": null,
-        "provenance": "implied",
-        "reference": 14,
-        "source": 0,
-        "target": {
-          "reference": 6,
           "status": "resolved"
         }
       },
@@ -506,54 +482,10 @@ package DirectTypingExample {
         "kind": "typing",
         "navigation": 1,
         "provenance": "authored",
-        "reference": 9,
+        "reference": 6,
         "source": 1,
         "target": {
           "reference": 3,
-          "status": "resolved"
-        }
-      },
-      {
-        "kind": "subsetting",
-        "navigation": null,
-        "provenance": "implied",
-        "reference": 7,
-        "source": 1,
-        "target": {
-          "reference": 6,
-          "status": "resolved"
-        }
-      },
-      {
-        "kind": "typeFeaturing",
-        "navigation": null,
-        "provenance": "implied",
-        "reference": 8,
-        "source": 1,
-        "target": {
-          "reference": 0,
-          "status": "resolved"
-        }
-      },
-      {
-        "kind": "subsetting",
-        "navigation": null,
-        "provenance": "implied",
-        "reference": 10,
-        "source": 2,
-        "target": {
-          "reference": 6,
-          "status": "resolved"
-        }
-      },
-      {
-        "kind": "typeFeaturing",
-        "navigation": null,
-        "provenance": "implied",
-        "reference": 11,
-        "source": 2,
-        "target": {
-          "reference": 0,
           "status": "resolved"
         }
       }

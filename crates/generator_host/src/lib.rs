@@ -6,12 +6,13 @@ use std::sync::Arc;
 use std::time::{Duration, Instant};
 
 use generator_api::{
-    ArtifactLimits, ArtifactSet, ElementDetail as ApiElementDetail,
-    ElementSummary as ApiElementSummary, GeneratorDiagnostic, GeneratorDiagnosticLevel,
-    GeneratorModelView, MultiplicitySummary as ApiMultiplicity, RelationshipSummary,
-    RequirementUsageTypingSummary, RequirementVerificationSummary, SatisfyEndpointSummary,
-    SatisfyPolaritySummary, SatisfyRelationshipSummary, TypingProvenanceSummary,
-    VerificationOutcomeSummary, VerificationRequirementSummary, MAX_ARTIFACT_PATH_BYTES,
+    ArtifactLimits, ArtifactSet, DerivationEndpointSummary, DerivationRelationshipSummary,
+    ElementDetail as ApiElementDetail, ElementSummary as ApiElementSummary, GeneratorDiagnostic,
+    GeneratorDiagnosticLevel, GeneratorModelView, MultiplicitySummary as ApiMultiplicity,
+    RelationshipSummary, RelationshipTargetSummary, RequirementUsageTypingSummary,
+    RequirementVerificationSummary, SatisfyEndpointSummary, SatisfyPolaritySummary,
+    SatisfyRelationshipSummary, TypingProvenanceSummary, VerificationOutcomeSummary,
+    VerificationRequirementSummary, MAX_ARTIFACT_PATH_BYTES,
 };
 use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
@@ -1036,6 +1037,18 @@ fn handle_query(
                     .map_err(|error| error.to_string()),
             )
         }
+        protocol::Operation::DerivationRelationships => encode_result(
+            state
+                .model
+                .derivation_relationships()
+                .map(|values| {
+                    values
+                        .into_iter()
+                        .map(derivation_relationship)
+                        .collect::<Vec<_>>()
+                })
+                .map_err(|error| error.to_string()),
+        ),
         protocol::Operation::SatisfyRelationships => encode_result(
             state
                 .model
@@ -1203,12 +1216,7 @@ fn detail(value: ApiElementDetail) -> protocol::ElementDetail {
         declared_name: value.declared_name,
         effective_name: value.effective_name,
         source_uri: value.source_uri,
-        source_range: protocol::SourceRange {
-            start_line: value.source_range.start_line,
-            start_character: value.source_range.start_character,
-            end_line: value.source_range.end_line,
-            end_character: value.source_range.end_character,
-        },
+        source_range: source_range(value.source_range),
         definition: value.definition,
         documentation: value.documentation,
         short_name: value.short_name,
@@ -1233,8 +1241,33 @@ fn relationship(value: RelationshipSummary) -> protocol::Relationship {
     protocol::Relationship {
         kind: value.kind,
         source: summary(value.source),
-        target: summary(value.target),
+        target: match value.target {
+            RelationshipTargetSummary::Resolved(target) => {
+                protocol::RelationshipTarget::Resolved(summary(target))
+            }
+            RelationshipTargetSummary::Ambiguous(candidates) => {
+                protocol::RelationshipTarget::Ambiguous(
+                    candidates.into_iter().map(summary).collect(),
+                )
+            }
+            RelationshipTargetSummary::Unresolved { authored } => {
+                protocol::RelationshipTarget::Unresolved { authored }
+            }
+            RelationshipTargetSummary::Unsupported { authored } => {
+                protocol::RelationshipTarget::Unsupported { authored }
+            }
+        },
         implied: value.implied,
+        authored_at: value.authored_at.map(source_range),
+    }
+}
+
+fn source_range(value: generator_api::SourceRange) -> protocol::SourceRange {
+    protocol::SourceRange {
+        start_line: value.start_line,
+        start_character: value.start_character,
+        end_line: value.end_line,
+        end_character: value.end_character,
     }
 }
 
@@ -1287,11 +1320,60 @@ fn satisfy_endpoint(value: SatisfyEndpointSummary) -> protocol::SatisfyEndpoint 
         SatisfyEndpointSummary::Resolved(value) => {
             protocol::SatisfyEndpoint::Resolved(summary(value))
         }
+        SatisfyEndpointSummary::FeatureChain { path, authored } => {
+            protocol::SatisfyEndpoint::FeatureChain {
+                path: path.into_iter().map(summary).collect(),
+                authored,
+            }
+        }
         SatisfyEndpointSummary::Ambiguous(values) => {
             protocol::SatisfyEndpoint::Ambiguous(values.into_iter().map(summary).collect())
         }
         SatisfyEndpointSummary::Unresolved => protocol::SatisfyEndpoint::Unresolved,
         SatisfyEndpointSummary::Unsupported => protocol::SatisfyEndpoint::Unsupported,
+    }
+}
+
+fn derivation_endpoint(value: DerivationEndpointSummary) -> protocol::DerivationEndpoint {
+    match value {
+        DerivationEndpointSummary::Resolved(value) => {
+            protocol::DerivationEndpoint::Resolved(summary(value))
+        }
+        DerivationEndpointSummary::FeatureChain { path, authored } => {
+            protocol::DerivationEndpoint::FeatureChain {
+                path: path.into_iter().map(summary).collect(),
+                authored,
+            }
+        }
+        DerivationEndpointSummary::Ambiguous(values) => {
+            protocol::DerivationEndpoint::Ambiguous(values.into_iter().map(summary).collect())
+        }
+        DerivationEndpointSummary::Unresolved => protocol::DerivationEndpoint::Unresolved,
+        DerivationEndpointSummary::Unsupported => protocol::DerivationEndpoint::Unsupported,
+    }
+}
+
+fn derivation_relationship(
+    value: DerivationRelationshipSummary,
+) -> protocol::DerivationRelationship {
+    protocol::DerivationRelationship {
+        semantic_id: value.semantic_id,
+        original: value
+            .original
+            .into_iter()
+            .map(derivation_endpoint)
+            .collect(),
+        derived: value.derived.into_iter().map(derivation_endpoint).collect(),
+        unclassified: value
+            .unclassified
+            .into_iter()
+            .map(derivation_endpoint)
+            .collect(),
+        provenance: match value.provenance {
+            TypingProvenanceSummary::Authored => protocol::RelationshipProvenance::Authored,
+            TypingProvenanceSummary::Implied => protocol::RelationshipProvenance::Implied,
+        },
+        recovered: value.recovered,
     }
 }
 

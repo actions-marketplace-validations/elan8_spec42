@@ -47,6 +47,16 @@ impl RelationshipFamily {
 pub struct EffectiveTypeEntry {
     pub element: SymbolEntry,
     pub origin: EffectiveTypeOrigin,
+    /// Whether the element reaches this type through something it authored.
+    ///
+    /// [`RelationshipProvenance::Authored`] for a direct typing and for a type inherited along an
+    /// authored subsetting or redefinition (`part engine :>> vehicle.powerplant` keeps the
+    /// powerplant's authored type). [`RelationshipProvenance::Implied`] for a type reached only
+    /// through implied library subsetting (`Parts::parts`, `Items::items`, and the rest of the
+    /// kernel chain), including implied types of an authored general. Compact editor surfaces
+    /// filter to `Authored`; `effective_types()` and the TYPES projection still list every
+    /// effective type.
+    pub provenance: RelationshipProvenance,
 }
 
 /// The types a feature has, directly or along its subsetting/redefinition chain.
@@ -74,6 +84,8 @@ pub struct EffectiveTyping {
 pub struct InheritedFeature {
     pub feature: SymbolEntry,
     pub declared_in: SymbolEntry,
+    /// Declared by an immediate type or supertype of the inspected element.
+    pub is_direct: bool,
 }
 
 /// The candidate-dependent result of applying all effective conditions of a view to one element.
@@ -96,6 +108,21 @@ pub struct ViewSelection {
     pub view: crate::SymbolId,
     pub candidate: crate::SymbolId,
     pub outcome: ViewSelectionOutcome,
+}
+
+/// The rendering selected by a view through a direct or inherited rendering membership.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ViewRendering {
+    pub membership: crate::MembershipId,
+    /// The RenderingUsage owned by the ViewRenderingMembership.
+    pub owned_rendering: crate::SymbolId,
+    /// The owned usage itself for inline form, or the settled reference for short form.
+    pub referenced_rendering: crate::SymbolId,
+    /// Declarations in the owned usage body, including additions in short form.
+    pub owned_body_members: Box<[crate::SymbolId]>,
+    /// Declarations in the referenced RenderingUsage body. Metadata on either usage is available
+    /// through `element_details` on its symbol.
+    pub body_members: Box<[crate::SymbolId]>,
 }
 
 /// One settled relationship between an element and a peer, in one direction.
@@ -140,6 +167,11 @@ pub struct ElementDetails {
     pub outgoing: Box<[ConnectedElement]>,
     pub evaluation: ElementEvaluation,
     pub analysis: AnalysisEvaluation,
+    /// Whether an authored feature typing conjugates its target (`port p : ~T`).
+    ///
+    /// The typing target is the original port definition either way. This is the polarity the
+    /// author wrote, kept apart from the target's qualified name.
+    pub conjugated: bool,
 }
 
 /// What a reference at a source position resolves to, in full detail.

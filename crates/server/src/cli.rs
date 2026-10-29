@@ -38,11 +38,14 @@ pub enum Command {
     Init(InitArgs),
     /// Run a sandboxed WebAssembly plugin against a resolved semantic model.
     Generate(GenerateArgs),
+    /// List the model's diagram views, or render one as SVG or as its diagram product JSON.
+    Diagram(DiagramArgs),
     Doctor(DoctorArgs),
     /// Explain a diagnostic code.
     ExplainDiagnostic(ExplainDiagnosticArgs),
-    /// Validation-only model summary pending a bounded typed structural query.
-    ModelSummary(ModelSummaryArgs),
+    /// Validation summary plus a read-only, schema-versioned JSON export of a publication's
+    /// resolved structure.
+    ModelExport(ModelExportArgs),
     /// Create a validated local KPAR archive from a model directory.
     Bundle(BundleArgs),
     /// Validate and atomically unpack a local KPAR archive.
@@ -105,6 +108,57 @@ pub struct GenerateArgs {
     /// Arguments passed verbatim to the guest after `--`.
     #[arg(last = true)]
     pub generator_args: Vec<String>,
+}
+
+#[derive(Debug, Clone, Args)]
+pub struct DiagramArgs {
+    /// SysML/KerML file or workspace directory.
+    pub path: PathBuf,
+    #[arg(long = "workspace-root")]
+    pub workspace_root: Option<PathBuf>,
+    /// Qualified name of the view to render, e.g. `Shop::fulfilment`. Omitted, the diagram views
+    /// of the model are listed.
+    #[arg(long = "view")]
+    pub view: Option<String>,
+    /// With `--view`: the view kind to render (`general-view`, `interconnection-view`, ...), for a
+    /// view typed by more than one view definition. Listed with the views.
+    #[arg(long = "kind", requires = "view")]
+    pub kind: Option<String>,
+    /// With `--view`: the document declaring the view, as listed (its URI) or as a path suffix
+    /// such as `views/Views.sysml`, for a qualified name declared in more than one document.
+    #[arg(long = "document", requires = "view")]
+    pub document: Option<String>,
+    /// `svg` renders the view; `json` writes its diagram product, or lists the views
+    /// as JSON when no view is given.
+    #[arg(long = "format", value_enum, default_value_t = DiagramFormat::Svg)]
+    pub format: DiagramFormat,
+    /// For general and interconnection views: how many levels of members to draw below the
+    /// exposed elements. Deeper content is drawn closed. `all` draws every level.
+    #[arg(long = "depth", default_value = "1", value_parser = parse_depth)]
+    pub depth: diagram_draw::Nesting,
+    /// Write to this file instead of standard output.
+    #[arg(long = "output", short = 'o')]
+    pub output: Option<PathBuf>,
+    /// With `--view`: report the size of the view's diagram product instead of rendering it --
+    /// bytes per section, element counts, and relationships by provenance and kind.
+    #[arg(long = "stats", requires = "view")]
+    pub stats: bool,
+}
+
+fn parse_depth(value: &str) -> Result<diagram_draw::Nesting, String> {
+    if value.eq_ignore_ascii_case("all") {
+        return Ok(diagram_draw::Nesting::All);
+    }
+    value
+        .parse()
+        .map(diagram_draw::Nesting::Levels)
+        .map_err(|_| format!("`{value}` is not a number of levels or `all`"))
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, ValueEnum)]
+pub enum DiagramFormat {
+    Svg,
+    Json,
 }
 
 #[derive(Debug, Clone, Args)]
@@ -183,16 +237,15 @@ pub struct ExplainDiagnosticArgs {
     pub format: OutputFormat,
 }
 
-fn default_max_nodes() -> usize {
-    500
-}
-
 #[derive(Debug, Clone, Args)]
-pub struct ModelSummaryArgs {
+pub struct ModelExportArgs {
     pub path: PathBuf,
     #[arg(long = "workspace-root")]
     pub workspace_root: Option<PathBuf>,
-    #[arg(long = "max-nodes", default_value_t = default_max_nodes())]
+    /// Bounds the returned element list; the full count is always reported in
+    /// `projection.truncation`. Defaults to unbounded -- pass an explicit bound for a large
+    /// workspace under an agent's context budget.
+    #[arg(long = "max-nodes", default_value_t = usize::MAX)]
     pub max_nodes: usize,
     #[arg(long = "format", value_enum, default_value_t = OutputFormat::Json)]
     pub format: OutputFormat,
@@ -389,6 +442,47 @@ mod tests {
     }
 
     #[test]
+    fn diagram_command_parses() {
+        let cli = Cli::parse_from([
+            "spec42",
+            "diagram",
+            "model",
+            "--view",
+            "Shop::fulfilment",
+            "--kind",
+            "action-flow-view",
+            "--document",
+            "Views.sysml",
+            "--format",
+            "json",
+            "-o",
+            "out.json",
+        ]);
+        match cli.command {
+            Some(Command::Diagram(args)) => {
+                assert_eq!(args.path, PathBuf::from("model"));
+                assert_eq!(args.view.as_deref(), Some("Shop::fulfilment"));
+                assert_eq!(args.kind.as_deref(), Some("action-flow-view"));
+                assert_eq!(args.document.as_deref(), Some("Views.sysml"));
+                assert_eq!(args.format, DiagramFormat::Json);
+                assert_eq!(args.output, Some(PathBuf::from("out.json")));
+            }
+            other => panic!("expected diagram command, got {other:?}"),
+        }
+        assert!(
+            Cli::try_parse_from(["spec42", "diagram", "model", "--kind", "general-view"]).is_err(),
+            "--kind selects among the views named by --view"
+        );
+        match Cli::parse_from(["spec42", "diagram", "model"]).command {
+            Some(Command::Diagram(args)) => {
+                assert_eq!(args.view, None);
+                assert_eq!(args.format, DiagramFormat::Svg);
+            }
+            other => panic!("expected diagram command, got {other:?}"),
+        }
+    }
+
+    #[test]
     fn generate_command_defaults_output_to_generated_directory() {
         let cli = Cli::parse_from(["spec42", "generate", "generator.wasm", "model.sysml"]);
         match cli.command {
@@ -433,10 +527,10 @@ mod tests {
     }
 
     #[test]
-    fn model_summary_command_parses() {
+    fn model_export_command_parses() {
         let cli = Cli::parse_from([
             "spec42",
-            "model-summary",
+            "model-export",
             "models",
             "--workspace-root",
             "workspace",
@@ -446,13 +540,22 @@ mod tests {
             "json",
         ]);
         match cli.command {
-            Some(Command::ModelSummary(args)) => {
+            Some(Command::ModelExport(args)) => {
                 assert_eq!(args.path, PathBuf::from("models"));
                 assert_eq!(args.workspace_root, Some(PathBuf::from("workspace")));
                 assert_eq!(args.max_nodes, 1);
                 assert_eq!(args.format, OutputFormat::Json);
             }
-            other => panic!("expected model-summary command, got {other:?}"),
+            other => panic!("expected model-export command, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn model_export_max_nodes_defaults_to_unbounded() {
+        let cli = Cli::parse_from(["spec42", "model-export", "models"]);
+        match cli.command {
+            Some(Command::ModelExport(args)) => assert_eq!(args.max_nodes, usize::MAX),
+            other => panic!("expected model-export command, got {other:?}"),
         }
     }
 

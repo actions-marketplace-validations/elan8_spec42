@@ -2,8 +2,8 @@
 
 use crate::lower::facts::AuthoredReference;
 use crate::lower::facts::Declaration;
-use crate::lower::facts::DeclarationFacts;
 use crate::lower::facts::MembershipRecord;
+use crate::lower::facts::OwnedEndFeature;
 use crate::lower::facts::PortionKind;
 use crate::lower::facts::TransitionFeatureRole;
 use crate::lower::storage::SemanticModelStorage;
@@ -23,6 +23,10 @@ use crate::resolve::names::NameIndex;
 use crate::resolve::results::ConstructorExpressionProjection;
 use crate::resolve::results::ConstructorExpressionProjectionStatus;
 use crate::resolve::results::ConstructorExpressionSpecializationStatus;
+use crate::resolve::results::ControlNodeSuccession;
+use crate::resolve::results::ControlNodeSuccessionEnd;
+use crate::resolve::results::EffectiveNameFacts;
+use crate::resolve::results::EffectiveNameProvenance;
 use crate::resolve::results::ExpressionArgumentProjectionStatus;
 use crate::resolve::results::FeatureChainExpressionProjection;
 use crate::resolve::results::FeatureChainExpressionSpecializationStatus;
@@ -47,6 +51,9 @@ use crate::resolve::results::TransitionPayloadSubsettingProjection;
 use crate::resolve::results::TransitionPayloadSubsettingStatus;
 use crate::resolve::results::TransitionSuccessionSourceProjection;
 use crate::resolve::results::TransitionSuccessionSourceStatus;
+use crate::resolve::role_redefinitions::synthesize_library_role_redefinitions;
+use crate::resolve::role_redefinitions::LibraryRedefinitionRole;
+use crate::resolve::role_redefinitions::LibraryRoleAnchors;
 use crate::resolve::ResolutionReferenceFact;
 use crate::specialization_query::SpecializationCheckKind;
 use crate::traceability::BindingConnectorCheckKind;
@@ -358,6 +365,14 @@ pub(crate) fn feature_derived_relationship_kinds(
         }
         FeatureDerivedRelationshipCollection::OwnedTyping => &[ReferenceKind::FeatureTyping],
         FeatureDerivedRelationshipCollection::OwnedTypeFeaturing => &[ReferenceKind::TypeFeaturing],
+        FeatureDerivedRelationshipCollection::ChainingFeature => &[ReferenceKind::FeatureChaining],
+        FeatureDerivedRelationshipCollection::OwnedFeatureInverting => {
+            &[ReferenceKind::FeatureInverting]
+        }
+        FeatureDerivedRelationshipCollection::OwnedReferenceSubsetting => {
+            &[ReferenceKind::References]
+        }
+        FeatureDerivedRelationshipCollection::OwnedCrossSubsetting => &[ReferenceKind::Crosses],
     }
 }
 
@@ -462,6 +477,233 @@ pub(crate) fn type_derived_relationship_kinds(
         TypeDerivedRelationshipCollection::OwnedDifferencing
         | TypeDerivedRelationshipCollection::DifferencingType => &[ReferenceKind::Differencing],
         TypeDerivedRelationshipCollection::OwnedDisjoining => &[ReferenceKind::Disjoining],
+        TypeDerivedRelationshipCollection::OwnedSubclassification => {
+            &[ReferenceKind::Subclassification]
+        }
+    }
+}
+
+/// Metaclasses whose library rules apply to one lowered declaration.
+///
+/// An `event occurrence` is an `OccurrenceUsage` plus the event modifier. Its
+/// `EventOccurrenceUsage` contracts are not visible from `OccurrenceUsage` alone.
+pub(crate) fn applicable_library_metaclasses(
+    storage: &SemanticModelStorage,
+    source: DeclarationId,
+    kind: crate::model::DeclarationKind,
+) -> Vec<ApplicableRuleMetaclass> {
+    let mut metaclasses = library_specialization_metaclasses(kind);
+    if kind == crate::model::DeclarationKind::OccurrenceUsage
+        && storage
+            .declaration_facts(source)
+            .is_some_and(|facts| facts.modifiers.event)
+        && metaclasses
+            .iter()
+            .all(|metaclass| metaclass.metaclass != "EventOccurrenceUsage")
+    {
+        metaclasses.push(ApplicableRuleMetaclass::all("EventOccurrenceUsage"));
+    }
+    metaclasses
+}
+
+/// Metaclasses whose generated `specializesFromLibrary` rules apply to `kind`.
+///
+/// A `specializesFromLibrary` constraint holds for every instance of its metaclass, including
+/// instances of its metaclass specializations. As the Pilot's `ImplicitGeneralizationMap` does
+/// (its lookup walks from the element's metaclass up to the nearest one carrying a default
+/// supertype), the rules applied are those of the nearest metaclass along each generalization
+/// path ([`sysml_contract::ElementKind::direct_generals`]) that declares any generated rule: a
+/// metaclass with its own rule shadows its generals, whose anchors its own anchor already
+/// specializes in the library (`Actions::Action::forks :> controls`). So a `SuccessionAsUsage`,
+/// which declares none, takes `checkSuccessionSpecialization` from `Succession`, and a
+/// `BindingConnectorAsUsage` takes `checkBindingConnectorSpecialization`.
+///
+/// The walk does not enter the KerML root metaclasses `Type`, `Classifier` and `Feature`:
+/// applying `checkFeatureSpecialization` (`Base::things`) to every Feature is deferred, since it
+/// currently adds `Anything` to effective types and fails subsetting conformance. The one
+/// exception is `SatisfyRequirementUsage`, which inherits `things::that` for `satisfy … by that`.
+/// `Flow` keeps its extra generated alias.
+pub(crate) fn library_specialization_metaclasses(
+    kind: crate::model::DeclarationKind,
+) -> Vec<ApplicableRuleMetaclass> {
+    use sysml_contract::ElementKind;
+    let declares_rules = |metaclass: &str| {
+        library_specialization_rules(metaclass).next().is_some()
+            || conditional_library_specialization_rules(metaclass)
+                .next()
+                .is_some()
+    };
+    let is_root = |general: ElementKind| {
+        matches!(
+            general,
+            ElementKind::Type | ElementKind::Classifier | ElementKind::Feature
+        )
+    };
+    let primary = library_rule_metaclass(kind);
+    let mut metaclasses = vec![ApplicableRuleMetaclass::all(primary)];
+    if !declares_rules(primary) {
+        let mut pending = element_kind::element_kind(kind).direct_generals().to_vec();
+        let mut visited = std::collections::BTreeSet::new();
+        while let Some(general) = pending.pop() {
+            if is_root(general) || !visited.insert(general) {
+                continue;
+            }
+            if declares_rules(general.as_str()) {
+                metaclasses.push(ApplicableRuleMetaclass::all(general.as_str()));
+            } else {
+                pending.extend_from_slice(general.direct_generals());
+            }
+        }
+    }
+    // The default ("base") supertype is its own key: a metaclass whose rules are all
+    // non-default conditional keys (`ExhibitStateUsage`'s `performedAction`,
+    // `PerformActionUsage`'s, `EventOccurrenceUsage`'s `suboccurrence`, `OccurrenceDefinition`'s
+    // `life`) does not shadow the nearest general's default, exactly as the Pilot's
+    // `ImplicitGeneralizationMap.getDefaultSupertypeFor(class, "base")` walks past it. Of the
+    // defaults so found, one whose metaclass another found metaclass specializes is shadowed by
+    // it (`ExhibitStateUsage` takes `StateUsage`'s `stateActions`, not `ActionUsage`'s `actions`
+    // through `PerformActionUsage`).
+    let mut defaults = Vec::<ElementKind>::new();
+    if !metaclasses
+        .iter()
+        .any(|metaclass| metaclass_declares_default_rule(metaclass.metaclass))
+    {
+        let mut pending = element_kind::element_kind(kind).direct_generals().to_vec();
+        let mut visited = std::collections::BTreeSet::new();
+        while let Some(general) = pending.pop() {
+            if is_root(general) || !visited.insert(general) {
+                continue;
+            }
+            if metaclass_declares_default_rule(general.as_str()) {
+                defaults.push(general);
+            } else {
+                pending.extend_from_slice(general.direct_generals());
+            }
+        }
+    }
+    let shadowed = defaults
+        .iter()
+        .filter(|general| {
+            defaults
+                .iter()
+                .any(|other| other != *general && other.conforms_to(**general))
+        })
+        .copied()
+        .collect::<Vec<_>>();
+    metaclasses.extend(
+        defaults
+            .into_iter()
+            .filter(|general| !shadowed.contains(general))
+            .map(|general| ApplicableRuleMetaclass {
+                metaclass: general.as_str(),
+                default_only: true,
+            }),
+    );
+    if kind == crate::model::DeclarationKind::Satisfy && primary != "Feature" {
+        metaclasses.push(ApplicableRuleMetaclass::all("Feature"));
+    }
+    match kind {
+        crate::model::DeclarationKind::Flow => {
+            metaclasses.push(ApplicableRuleMetaclass::all("Flow"))
+        }
+        crate::model::DeclarationKind::SuccessionFlow => {
+            metaclasses.push(ApplicableRuleMetaclass::all("SuccessionFlow"))
+        }
+        _ => {}
+    }
+    // An occurrence definition of any family takes OccurrenceDefinition's rules (its `individual`
+    // `life` key), as the Pilot's definition adapters inherit `OccurrenceDefinitionAdapter`.
+    if crate::model::metaclass::is_occurrence_definition(kind) && primary != "OccurrenceDefinition"
+    {
+        metaclasses.push(ApplicableRuleMetaclass::all("OccurrenceDefinition"));
+    }
+    metaclasses.sort_unstable();
+    metaclasses.dedup();
+    metaclasses
+}
+
+/// One metaclass whose generated library rules apply to a declaration, and which of them.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
+pub(crate) struct ApplicableRuleMetaclass {
+    pub(crate) metaclass: &'static str,
+    /// Only the rules selecting the metaclass's default supertype apply: the declaration's own
+    /// metaclass declares no default and its other keys shadow this general's.
+    pub(crate) default_only: bool,
+}
+
+impl ApplicableRuleMetaclass {
+    fn all(metaclass: &'static str) -> Self {
+        Self {
+            metaclass,
+            default_only: false,
+        }
+    }
+
+    /// The unconditional rules that apply; every one selects the default supertype.
+    pub(crate) fn rules(self) -> impl Iterator<Item = &'static LibrarySpecializationRule> {
+        library_specialization_rules(self.metaclass)
+    }
+
+    /// The conditional rules that apply.
+    pub(crate) fn conditional_rules(
+        self,
+    ) -> impl Iterator<Item = &'static ConditionalLibrarySpecializationRule> {
+        library_specialization_rules_conditional_filtered(self)
+    }
+}
+
+fn library_specialization_rules_conditional_filtered(
+    applicable: ApplicableRuleMetaclass,
+) -> impl Iterator<Item = &'static ConditionalLibrarySpecializationRule> {
+    GENERATED_CONDITIONAL_LIBRARY_SPECIALIZATION_RULES
+        .iter()
+        .filter(move |rule| {
+            rule.metaclass == applicable.metaclass
+                && (!applicable.default_only || predicate_selects_default_supertype(rule.predicate))
+        })
+}
+
+/// Whether a metaclass declares a rule for its default ("base") supertype.
+fn metaclass_declares_default_rule(metaclass: &str) -> bool {
+    library_specialization_rules(metaclass).next().is_some()
+        || conditional_library_specialization_rules(metaclass)
+            .any(|rule| predicate_selects_default_supertype(rule.predicate))
+}
+
+/// Whether a conditional rule chooses between branches of the default supertype, as the Pilot's
+/// adapters replace the `base` key (`AssertConstraintUsage` negated, `IfActionUsage`
+/// `ifThenElse`, `AcceptActionUsage` trigger), rather than adding a further supertype under a
+/// key of its own.
+fn predicate_selects_default_supertype(predicate: LibrarySpecializationPredicate) -> bool {
+    use LibrarySpecializationPredicate as P;
+    match predicate {
+        P::PolarityBranch | P::HasElseActionBranch | P::IsNotTriggerAction | P::IsTriggerAction => {
+            true
+        }
+        P::IsIndividual
+        | P::PortionKindSnapshot
+        | P::PortionKindTimeslice
+        | P::CompositeOwnedBy
+        | P::OwnedEndFeatureCountIsTwo
+        | P::ConnectorEndCountIsTwo
+        | P::AssociationEndCountIsTwo
+        | P::EndFeatureCountIsTwo
+        | P::FlowEndCountIsTwo
+        | P::OwnedEndFeaturesNotEmpty
+        | P::OwnedTypingDataType
+        | P::OwnedTypingClass
+        | P::OwnedTypingStructure
+        | P::EndOwnedByAssociationOrConnector
+        | P::ConnectorAssociationStructure
+        | P::ConnectorBinaryAssociationStructure
+        | P::OwnedBy
+        | P::IsSubactionUsage
+        | P::IsSubactionUsageAndNotTriggerAction
+        | P::FramedConcernMembership
+        | P::RequirementConstraintMembershipKind
+        | P::ActorMembershipOwningRequirement
+        | P::StakeholderMembership
+        | P::RequirementVerificationMembership => false,
     }
 }
 
@@ -506,7 +748,10 @@ pub(crate) fn library_anchor_packages() -> Vec<&'static str> {
                 .iter()
                 .map(|rule| rule.anchor),
         )
+        .chain(std::iter::once(INDIVIDUAL_MULTIPLICITY_ANCHOR))
         .filter_map(|anchor| anchor.split("::").next())
+        .chain(LibraryRedefinitionRole::anchor_packages())
+        .chain(crate::resolve::role_specializations::LibrarySpecializationRole::anchor_packages())
         .collect::<Vec<_>>();
     packages.sort_unstable();
     packages.dedup();
@@ -560,6 +805,16 @@ pub(crate) struct LibrarySpecializationAnchorFacts {
     /// owns identity: an anchor can be deliberately shared by independent normative rules.
     pub(crate) by_rule:
         std::collections::BTreeMap<LibrarySpecializationAnchorKey, LibrarySpecializationAnchor>,
+    /// The library feature of every library-anchored redefinition role, settled at the same
+    /// barrier.
+    pub(crate) roles: LibraryRoleAnchors,
+    /// The library feature of every library-anchored specialization role, settled at the same
+    /// barrier.
+    pub(crate) specialization_roles:
+        crate::resolve::role_specializations::LibrarySpecializationRoleAnchors,
+    /// The reflective library metaclass of every element kind, settled at the same barrier.
+    pub(crate) reflective_metaclasses:
+        crate::resolve::reflective_metaclasses::ReflectiveMetaclassAnchors,
 }
 
 impl LibrarySpecializationAnchorFacts {
@@ -621,12 +876,17 @@ pub(crate) struct LibrarySpecializationDiagnosticKey {
 /// feature candidate, no implied fact is synthesized for that pair rather than guessing. A member
 /// that already carries an explicit `:>>` redefinition to any target is left to that authored fact
 /// and is never also given an implied one.
+///
+/// An anonymous perform usage is named by the action it performs. That name is not a second
+/// feature competing with the performed action, so the perform does not also implied-redefine
+/// that same action. A different inherited feature that merely shares the name still matches.
 pub(crate) fn synthesize_implied_redefinitions<R: ResolutionReferenceFact>(
     declarations: &[Declaration],
     memberships: &[MembershipRecord],
     references: &[R],
     direct_names: &NameIndex,
     outcomes: &[ResolutionStatus],
+    effective_names: &[EffectiveNameFacts],
 ) -> Result<Box<[ImpliedRelationship]>, ResolutionError> {
     let mut membership_kind: Vec<Option<MembershipKind>> = vec![None; declarations.len()];
     for membership in memberships {
@@ -639,9 +899,38 @@ pub(crate) fn synthesize_implied_redefinitions<R: ResolutionReferenceFact>(
     };
 
     let mut explicitly_redefines: std::collections::BTreeSet<DeclarationId> = Default::default();
-    for reference in references {
+    // The first `References` edge of a perform usage, matching `derive_effective_names`. A later
+    // edge is not the name, including when the first edge did not resolve.
+    let mut saw_performed_action = vec![false; declarations.len()];
+    let mut performed_action_of: Vec<Option<DeclarationId>> = vec![None; declarations.len()];
+    for (index, reference) in references.iter().enumerate() {
         if reference.kind() == ReferenceKind::Redefinition {
             explicitly_redefines.insert(reference.source());
+        }
+        if reference.kind() != ReferenceKind::References {
+            continue;
+        }
+        let source_index = reference.source().index();
+        let Some(seen) = saw_performed_action.get_mut(source_index) else {
+            return Err(ResolutionError::InvalidStorage);
+        };
+        if *seen {
+            continue;
+        }
+        let Some(declaration) = declarations.get(source_index) else {
+            return Err(ResolutionError::InvalidStorage);
+        };
+        if declaration.kind != DeclarationKind::PerformActionUsage {
+            continue;
+        }
+        *seen = true;
+        if let Some(ResolutionStatus::Resolved(target)) = outcomes.get(index).copied() {
+            let Some(slot) = performed_action_of.get_mut(source_index) else {
+                return Err(ResolutionError::InvalidStorage);
+            };
+            *slot = Some(target);
+        } else if outcomes.get(index).is_none() {
+            return Err(ResolutionError::InvalidStorage);
         }
     }
 
@@ -668,86 +957,18 @@ pub(crate) fn synthesize_implied_redefinitions<R: ResolutionReferenceFact>(
                     // Ambiguous immediate-parent candidates: leave unresolved rather than guess.
                     continue;
                 }
+                let named_by_performed_action =
+                    effective_names.get(member.index()).is_some_and(|facts| {
+                        facts.provenance == EffectiveNameProvenance::PerformedAction
+                    }) && performed_action_of.get(member.index()).copied().flatten()
+                        == Some(single_match);
+                if named_by_performed_action {
+                    continue;
+                }
                 implied.push(ImpliedRelationship {
                     kind: ReferenceKind::Redefinition,
                     source: member,
                     target: single_match,
-                });
-            }
-        }
-    }
-    implied.sort_by_key(|relationship| (relationship.source.0, relationship.target.0));
-    implied.dedup();
-    Ok(implied.into_boxed_slice())
-}
-
-/// Synthesizes the positional Redefinitions required for owned end Features.
-///
-/// KerML `checkFeatureEndRedefinition` pairs each owned end with the end at the same position in
-/// every direct supertype of its owning Type. `Type::supertypes` is formed from every owned
-/// Specialization, so a FeatureTyping is just as relevant here as a Subclassification. End
-/// identity and order come from lowering facts and declaration order; names are presentation and
-/// are deliberately not consulted. An authored Redefinition remains authoritative.
-pub(crate) fn synthesize_positional_end_redefinitions<R: ResolutionReferenceFact>(
-    declarations: &[Declaration],
-    declaration_facts: Option<&[DeclarationFacts]>,
-    references: &[R],
-    outcomes: &[ResolutionStatus],
-) -> Result<Box<[ImpliedRelationship]>, ResolutionError> {
-    let Some(declaration_facts) = declaration_facts else {
-        return Ok(Box::default());
-    };
-    if declaration_facts.len() != declarations.len() || outcomes.len() != references.len() {
-        return Err(ResolutionError::InvalidStorage);
-    }
-
-    let mut ends_by_owner = vec![Vec::new(); declarations.len()];
-    for (index, (declaration, facts)) in declarations.iter().zip(declaration_facts).enumerate() {
-        if !(facts.modifiers.end || facts.positional_end.is_some()) {
-            continue;
-        }
-        let Some(owner) = declaration.owner else {
-            continue;
-        };
-        let end = DeclarationId::from_index(index).map_err(|_| ResolutionError::Capacity)?;
-        ends_by_owner
-            .get_mut(owner.index())
-            .ok_or(ResolutionError::InvalidStorage)?
-            .push(end);
-    }
-
-    let explicitly_redefines = references
-        .iter()
-        .filter(|reference| reference.kind() == ReferenceKind::Redefinition)
-        .map(ResolutionReferenceFact::source)
-        .collect::<std::collections::BTreeSet<_>>();
-    let mut implied = Vec::new();
-    for (index, reference) in references.iter().enumerate() {
-        if !matches!(
-            reference.kind(),
-            ReferenceKind::Subclassification
-                | ReferenceKind::FeatureTyping
-                | ReferenceKind::Subsetting
-                | ReferenceKind::Redefinition
-        ) {
-            continue;
-        }
-        let ResolutionStatus::Resolved(general) = outcomes[index] else {
-            continue;
-        };
-        let specific = reference.source();
-        let specific_ends = ends_by_owner
-            .get(specific.index())
-            .ok_or(ResolutionError::InvalidStorage)?;
-        let general_ends = ends_by_owner
-            .get(general.index())
-            .ok_or(ResolutionError::InvalidStorage)?;
-        for (&source, &target) in specific_ends.iter().zip(general_ends) {
-            if !explicitly_redefines.contains(&source) && source != target {
-                implied.push(ImpliedRelationship {
-                    kind: ReferenceKind::Redefinition,
-                    source,
-                    target,
                 });
             }
         }
@@ -917,10 +1138,97 @@ pub(crate) fn synthesize_implied_relationships(
         synthesize_generated_library_redefinitions(storage, &storage.references, anchors)?
             .into_vec(),
     );
+    // `checkFeatureEndRedefinition` pairs owned ends with the ends of every direct supertype,
+    // including the implied library supertypes settled just above (`Links::BinaryLink` and its
+    // SysML specializations), so it runs only once they are known.
+    let positional_ends = crate::resolve::positional_end_redefinitions(
+        storage.declarations.len(),
+        &storage.owned_end_features,
+        &storage.references,
+        &resolution.outcomes,
+        &implied,
+    )?;
+    implied.extend(positional_ends);
+    // A case objective redefines the objective of each case its owner specializes, including the
+    // implied library supertypes (`Cases::Case::obj`) settled above.
+    let settled = crate::resolve::SettledTypeEdges::collect(
+        &storage.references,
+        &resolution.outcomes,
+        &implied,
+    )?;
     implied.extend(
-        synthesize_feature_membership_type_featurings(storage, &storage.references)?.into_vec(),
+        crate::resolve::objective_redefinitions::synthesize_objective_redefinitions(
+            storage,
+            settled.edges,
+            &settled.authored_redefinitions,
+        )?,
     );
+    // An owned cross feature subsets the cross feature of every end its own end redefines, which
+    // includes the positional redefinitions settled just above.
+    let mut redefinitions = std::collections::BTreeSet::new();
+    let mut authored_subsettings = std::collections::BTreeSet::new();
+    for (reference, outcome) in storage.references.iter().zip(resolution.outcomes.iter()) {
+        let ResolutionStatus::Resolved(target) = *outcome else {
+            continue;
+        };
+        match reference.kind {
+            ReferenceKind::Redefinition => {
+                redefinitions.insert((reference.source, target));
+                authored_subsettings.insert((reference.source, target));
+            }
+            ReferenceKind::Subsetting | ReferenceKind::References | ReferenceKind::Crosses => {
+                authored_subsettings.insert((reference.source, target));
+            }
+            _ => {}
+        }
+    }
+    redefinitions.extend(
+        implied
+            .iter()
+            .filter(|relationship| relationship.kind == ReferenceKind::Redefinition)
+            .map(|relationship| (relationship.source, relationship.target)),
+    );
+    implied.extend(
+        crate::resolve::end_features::synthesize_owned_cross_feature_redefinition_subsettings(
+            storage,
+            &resolution.member_access_paths,
+            &redefinitions,
+            &authored_subsettings,
+        )?,
+    );
+    let membership_featurings =
+        synthesize_feature_membership_type_featurings(storage, &storage.references)?;
+    implied.extend(synthesize_feature_value_expression_type_featurings(
+        storage,
+        &resolution.outcomes,
+        &membership_featurings,
+    )?);
+    implied.extend(synthesize_multiplicity_type_featurings(
+        storage,
+        &resolution.outcomes,
+        &membership_featurings,
+    )?);
+    implied.extend(membership_featurings.into_vec());
     implied.extend(synthesize_feature_valuation_specializations(storage)?.into_vec());
+    implied.extend(synthesize_library_role_redefinitions(
+        storage,
+        resolution,
+        &anchors.roles,
+    )?);
+    let role_specializations =
+        crate::resolve::role_specializations::synthesize_library_role_specializations(
+            storage,
+            &resolution.outcomes,
+            &implied,
+            &anchors.specialization_roles,
+        )?;
+    implied.extend(role_specializations);
+    implied.extend(
+        crate::resolve::role_redefinitions::synthesize_assignment_referent_redefinitions(
+            storage, resolution,
+        )?,
+    );
+    implied.extend(synthesize_port_conjugations(storage, &resolution.outcomes)?);
     implied.sort_by_key(|relationship| {
         (
             relationship.kind,
@@ -932,6 +1240,55 @@ pub(crate) fn synthesize_implied_relationships(
     Ok(implied.into_boxed_slice())
 }
 
+/// Publishes the `PortConjugation` of every minted `ConjugatedPortDefinition` and the
+/// `ConjugatedPortTyping` type of every `~P` typing (SysML 8.3.12.2, 8.3.12.4).
+///
+/// A `ConjugatedPortDefinition`'s `ownedPortConjugator` targets its owning `PortDefinition`
+/// (`validateConjugatedPortDefinitionOriginalPortDefinition`), so the conjugation is implied from
+/// canonical ownership. A typing authored as `~P` keeps its authored reference to `P` (the
+/// `ConjugatedPortTyping::portDefinition`); its `type` is the `conjugatedPortDefinition` of `P`,
+/// published here as an implied FeatureTyping. A `~P` whose `P` is not a port definition with a
+/// minted conjugate implies nothing.
+pub(crate) fn synthesize_port_conjugations(
+    storage: &SemanticModelStorage,
+    outcomes: &[ResolutionStatus],
+) -> Result<Vec<ImpliedRelationship>, ResolutionError> {
+    let mut conjugate_of = std::collections::BTreeMap::new();
+    let mut implied = Vec::new();
+    for (index, declaration) in storage.declarations.iter().enumerate() {
+        if declaration.kind != DeclarationKind::ConjugatedPortDefinition {
+            continue;
+        }
+        let conjugated = DeclarationId::from_index(index).map_err(|_| ResolutionError::Capacity)?;
+        let original = declaration.owner.ok_or(ResolutionError::InvalidStorage)?;
+        conjugate_of.insert(original, conjugated);
+        implied.push(ImpliedRelationship {
+            kind: ReferenceKind::Conjugation,
+            source: conjugated,
+            target: original,
+        });
+    }
+    if conjugate_of.is_empty() {
+        return Ok(implied);
+    }
+    for (reference, outcome) in storage.references.iter().zip(outcomes.iter()) {
+        if reference.kind != ReferenceKind::FeatureTyping || !reference.flags.conjugated {
+            continue;
+        }
+        let ResolutionStatus::Resolved(original) = *outcome else {
+            continue;
+        };
+        if let Some(conjugated) = conjugate_of.get(&original) {
+            implied.push(ImpliedRelationship {
+                kind: ReferenceKind::FeatureTyping,
+                source: reference.source,
+                target: *conjugated,
+            });
+        }
+    }
+    Ok(implied)
+}
+
 /// Synthesizes `checkFeatureValuationSpecialization` (KerML 8.3.3.3.4): a non-default
 /// FeatureValue on an undirected Feature with no explicit specialization subsets the canonical
 /// result Feature of its owned value Expression.
@@ -939,8 +1296,22 @@ pub(crate) fn synthesize_feature_valuation_specializations(
     storage: &SemanticModelStorage,
 ) -> Result<Box<[ImpliedRelationship]>, ResolutionError> {
     let mut implied = Vec::new();
+    // One pass over the authored references instead of one per feature value.
+    let mut specialized = vec![false; storage.declarations.len()];
+    for reference in storage.references.iter() {
+        if is_owned_specialization_reference(reference.kind) {
+            *specialized
+                .get_mut(reference.source.index())
+                .ok_or(ResolutionError::InvalidStorage)? = true;
+        }
+    }
     for value in storage.feature_values.iter() {
-        if !feature_valuation_specialization_applies(storage, value)? {
+        if !feature_valuation_specialization_applies_given(storage, value, |declaration| {
+            specialized
+                .get(declaration.index())
+                .copied()
+                .unwrap_or(false)
+        })? {
             continue;
         }
         implied.push(ImpliedRelationship {
@@ -959,21 +1330,53 @@ pub(crate) fn feature_valuation_specialization_applies(
     storage: &SemanticModelStorage,
     value: &crate::lower::facts::FeatureValueRecord,
 ) -> Result<bool, ResolutionError> {
+    feature_valuation_specialization_applies_given(storage, value, |declaration| {
+        storage.references.iter().any(|reference| {
+            reference.source == declaration && is_owned_specialization_reference(reference.kind)
+        })
+    })
+}
+
+/// [`feature_valuation_specialization_applies`] over a caller-supplied answer to "does this
+/// declaration author an owned specialization", so a synthesis over every feature value can
+/// answer it from one pass over the references.
+fn feature_valuation_specialization_applies_given(
+    storage: &SemanticModelStorage,
+    value: &crate::lower::facts::FeatureValueRecord,
+    authors_owned_specialization: impl Fn(DeclarationId) -> bool,
+) -> Result<bool, ResolutionError> {
     let facts = storage
         .declaration_facts(value.declaration)
         .ok_or(ResolutionError::InvalidStorage)?;
     Ok(!value.is_default
         && facts.direction.is_none()
-        && !storage.references.iter().any(|reference| {
-            reference.source == value.declaration
-                && matches!(
-                    reference.kind,
-                    ReferenceKind::Subclassification
-                        | ReferenceKind::FeatureTyping
-                        | ReferenceKind::Subsetting
-                        | ReferenceKind::Redefinition
-                )
-        }))
+        && !authors_owned_specialization(value.declaration))
+}
+
+/// The authored relationship kinds that are an owned specialization of their source.
+fn is_owned_specialization_reference(kind: ReferenceKind) -> bool {
+    matches!(
+        kind,
+        ReferenceKind::Subclassification
+            | ReferenceKind::FeatureTyping
+            | ReferenceKind::Subsetting
+            | ReferenceKind::Redefinition
+    )
+}
+
+/// The indices of the authored references of `kind`, grouped by source in authored order: one
+/// pass over the references for a synthesis that looks up several sources.
+fn reference_indices_by_source(
+    storage: &SemanticModelStorage,
+    kind: ReferenceKind,
+) -> std::collections::HashMap<DeclarationId, Vec<usize>> {
+    let mut by_source = std::collections::HashMap::<DeclarationId, Vec<usize>>::new();
+    for (index, reference) in storage.references.iter().enumerate() {
+        if reference.kind == kind {
+            by_source.entry(reference.source).or_default().push(index);
+        }
+    }
+    by_source
 }
 
 /// Synthesizes the FeatureTyping relationships required by
@@ -999,6 +1402,61 @@ pub(crate) fn synthesize_owned_cross_feature_typings(
                 .iter()
                 .map(|(target, _)| ImpliedRelationship {
                     kind: ReferenceKind::FeatureTyping,
+                    source: projection.owned_cross_feature,
+                    target: *target,
+                }),
+        );
+    }
+    implied.sort_by_key(|relationship| (relationship.source.0, relationship.target.0));
+    implied.dedup();
+    Ok(implied.into_boxed_slice())
+}
+
+/// Synthesizes the TypeFeaturings required by `checkFeatureOwnedCrossFeatureTypeFeaturing`
+/// (KerML 8.3.3.3.4) for the binary case, as the Pilot's
+/// `FeatureAdapter.addOwnedCrossFeatureTypeFeaturing` adds them: an owned cross feature with no
+/// authored TypeFeaturing is featured by the types of the other end of its end's owning Type.
+///
+/// With more than two ends the featuring type is a Cartesian-product Feature the Pilot mints;
+/// this publication has no such element, so the n-ary featuring is not stated rather than
+/// approximated. Ends are the owning Type's owned ends, which redefine inherited ones
+/// positionally; a Type with fewer than two owned ends states nothing here.
+pub(crate) fn synthesize_owned_cross_feature_type_featurings(
+    storage: &SemanticModelStorage,
+    types: &EffectiveTypes,
+) -> Result<Box<[ImpliedRelationship]>, ResolutionError> {
+    let authored_featuring = storage
+        .references
+        .iter()
+        .filter(|reference| reference.kind == ReferenceKind::TypeFeaturing)
+        .map(|reference| reference.source)
+        .collect::<std::collections::BTreeSet<_>>();
+    let mut implied = Vec::new();
+    for (index, facts) in storage.declaration_facts.iter().enumerate() {
+        let Some(projection) = facts.cross_feature_projection else {
+            continue;
+        };
+        if authored_featuring.contains(&projection.owned_cross_feature) {
+            continue;
+        }
+        let end = DeclarationId::from_index(index).map_err(|_| ResolutionError::Capacity)?;
+        let Some(owning_type) = storage.declaration(end).and_then(|end| end.owner) else {
+            continue;
+        };
+        let [first, second] = storage.owned_end_features(owning_type) else {
+            continue;
+        };
+        let other = match (first.end, second.end) {
+            (OwnedEndFeature::Declared(a), OwnedEndFeature::Declared(b)) if a == end => b,
+            (OwnedEndFeature::Declared(a), OwnedEndFeature::Declared(b)) if b == end => a,
+            _ => continue,
+        };
+        implied.extend(
+            types
+                .row(other)
+                .iter()
+                .map(|(target, _)| ImpliedRelationship {
+                    kind: ReferenceKind::TypeFeaturing,
                     source: projection.owned_cross_feature,
                     target: *target,
                 }),
@@ -1134,6 +1592,15 @@ pub(crate) fn synthesize_feature_chain_expression_result_specializations(
     let mut implied = Vec::new();
     let mut projections = Vec::new();
     let mut status = FeatureChainExpressionSpecializationStatus::Complete;
+    let mut operands = reference_indices_by_source(storage, ReferenceKind::MemberAccessOperand);
+    // FeatureChainRef is the parser's compact dotted-reference form. Its existing operand
+    // reference carries the same authored chain and settled endpoint as MemberAccessOperand;
+    // consume that owned fact rather than requiring a second reference with another role.
+    for (index, reference) in storage.references.iter().enumerate() {
+        if reference.kind == ReferenceKind::ExpressionOperand && reference.flags.dotted {
+            operands.entry(reference.source).or_default().push(index);
+        }
+    }
     for chain in storage.feature_chain_expressions.iter() {
         implied.extend([
             ImpliedRelationship {
@@ -1152,15 +1619,12 @@ pub(crate) fn synthesize_feature_chain_expression_result_specializations(
                 target: chain.subsetting_chain,
             },
         ]);
-        let mut references = storage
-            .references
+        let mut references = operands
+            .get(&chain.expression)
+            .map_or(&[][..], Vec::as_slice)
             .iter()
-            .enumerate()
-            .filter(|(_, reference)| {
-                reference.source == chain.expression
-                    && reference.kind == ReferenceKind::MemberAccessOperand
-            });
-        let Some((index, _)) = references.next() else {
+            .copied();
+        let Some(index) = references.next() else {
             status = FeatureChainExpressionSpecializationStatus::Unresolved;
             continue;
         };
@@ -1215,16 +1679,14 @@ pub(crate) fn synthesize_feature_reference_expression_result_specializations(
     let mut implied = Vec::new();
     let mut projections = Vec::new();
     let mut status = FeatureReferenceExpressionSpecializationStatus::Complete;
+    let operands = reference_indices_by_source(storage, ReferenceKind::ExpressionOperand);
     for expression in storage.feature_reference_expressions.iter() {
-        let mut references = storage
-            .references
+        let mut references = operands
+            .get(&expression.expression)
+            .map_or(&[][..], Vec::as_slice)
             .iter()
-            .enumerate()
-            .filter(|(_, reference)| {
-                reference.source == expression.expression
-                    && reference.kind == ReferenceKind::ExpressionOperand
-            });
-        let Some((index, _)) = references.next() else {
+            .copied();
+        let Some(index) = references.next() else {
             status = FeatureReferenceExpressionSpecializationStatus::Unresolved;
             continue;
         };
@@ -1281,6 +1743,7 @@ pub(crate) struct SuccessionEndpointSubsettingSynthesis {
     pub(crate) projections: Box<[SuccessionEndpointSubsettingProjection]>,
     pub(crate) decision_status: SuccessionEndpointSubsettingStatus,
     pub(crate) merge_status: SuccessionEndpointSubsettingStatus,
+    pub(crate) control_node_successions: Box<[ControlNodeSuccession]>,
 }
 
 pub(crate) struct TransitionPayloadSubsettingSynthesis {
@@ -1376,7 +1839,11 @@ fn transition_feature_specialization_anchors(
         {
             continue;
         }
-        let Some(name) = declaration.name.and_then(|name| storage.symbol(name)) else {
+        let Some(name) = declaration
+            .name
+            .resolved()
+            .and_then(|name| storage.symbol(name))
+        else {
             continue;
         };
         let slot_and_owners: Option<(usize, &[&str])> = match name {
@@ -1597,6 +2064,9 @@ pub(crate) fn synthesize_transition_payload_subsettings(
 /// Publishes the SysML 8.3.17.7/13 contextual `subsetsChain` facts in one linear pass over
 /// declarations and references. The projection retains the selected endpoint (`self`) while the
 /// ordinary implied Subsetting relationship targets the canonical library feature.
+///
+/// The same pass publishes [`ControlNodeSuccession`], the canonical incidence of Successions on
+/// ControlNodes that the 8.3.17.6-13 succession validations consume.
 pub(crate) fn synthesize_succession_endpoint_subsettings(
     storage: &SemanticModelStorage,
     resolution: &ResolutionResults,
@@ -1629,12 +2099,31 @@ pub(crate) fn synthesize_succession_endpoint_subsettings(
     );
     let mut implied = Vec::new();
     let mut projections = Vec::new();
+    let mut control_node_successions = Vec::new();
     for (index, declaration) in storage.declarations.iter().enumerate() {
         if declaration.kind != DeclarationKind::Succession {
             continue;
         }
         let succession = DeclarationId::from_index(index).map_err(|_| ResolutionError::Capacity)?;
         let [source, target] = endpoints[index];
+        for (endpoint, end) in [
+            (target, ControlNodeSuccessionEnd::Incoming),
+            (source, ControlNodeSuccessionEnd::Outgoing),
+        ] {
+            let Some(ResolutionStatus::Resolved(node)) = endpoint else {
+                continue;
+            };
+            if storage
+                .declaration(node)
+                .is_some_and(|declaration| is_control_node_kind(declaration.kind))
+            {
+                control_node_successions.push(ControlNodeSuccession {
+                    node,
+                    end,
+                    succession,
+                });
+            }
+        }
         match source {
             Some(ResolutionStatus::Resolved(endpoint))
                 if storage
@@ -1689,12 +2178,26 @@ pub(crate) fn synthesize_succession_endpoint_subsettings(
     implied.sort_by_key(|relationship| (relationship.source.0, relationship.target.0));
     implied.dedup();
     projections.sort_by_key(|projection| (projection.succession.0, projection.kind as u8));
+    control_node_successions
+        .sort_by_key(|incidence| (incidence.node.0, incidence.end, incidence.succession.0));
     Ok(SuccessionEndpointSubsettingSynthesis {
         implied_relationships: implied.into_boxed_slice(),
         projections: projections.into_boxed_slice(),
         decision_status,
         merge_status,
+        control_node_successions: control_node_successions.into_boxed_slice(),
     })
+}
+
+/// The SysML ControlNode metaclasses (`DecisionNode`, `MergeNode`, `ForkNode`, `JoinNode`).
+pub(crate) fn is_control_node_kind(kind: DeclarationKind) -> bool {
+    matches!(
+        kind,
+        DeclarationKind::Decide
+            | DeclarationKind::Merge
+            | DeclarationKind::Fork
+            | DeclarationKind::Join
+    )
 }
 
 /// Publishes the InvocationExpression's instantiated type, its own specialization, result
@@ -1716,16 +2219,18 @@ pub(crate) fn synthesize_invocation_expression_specializations(
         if cyclic.contains(&target) {
             return None;
         }
-        let direct = storage
-            .declaration(target)
-            .is_some_and(|declaration| declaration.kind == DeclarationKind::KermlFunction);
-        let inherited = ancestors.get(target.index()).is_some_and(|values| {
-            values.iter().any(|ancestor| {
-                storage
-                    .declaration(*ancestor)
-                    .is_some_and(|declaration| declaration.kind == DeclarationKind::KermlFunction)
+        // A Function is any declaration whose metaclass conforms to KerML `Function`: a KerML
+        // `function` or `predicate`, and a SysML calculation or constraint definition.
+        let is_function = |declaration: DeclarationId| {
+            storage.declaration(declaration).is_some_and(|declaration| {
+                crate::model::element_kind::element_kind(declaration.kind)
+                    .conforms_to(crate::ElementKind::Function)
             })
-        });
+        };
+        let direct = is_function(target);
+        let inherited = ancestors
+            .get(target.index())
+            .is_some_and(|values| values.iter().any(|ancestor| is_function(*ancestor)));
         Some(direct || inherited)
     };
 
@@ -1836,6 +2341,11 @@ pub(crate) fn synthesize_operator_expression_result_specializations(
         .any(|record| record.kind == crate::lower::facts::OperatorExpressionKind::Index);
     let array =
         has_index.then(|| resolve_library_specialization_anchor(storage, "Collections::Array"));
+    let specializations = if has_index {
+        Some(SettledSpecializationGraph::new(storage, resolution)?)
+    } else {
+        None
+    };
     let mut implied = Vec::new();
     let mut select_status = ExpressionArgumentProjectionStatus::Complete;
     let mut index_status = ExpressionArgumentProjectionStatus::Complete;
@@ -1861,7 +2371,11 @@ pub(crate) fn synthesize_operator_expression_result_specializations(
         if operator.kind == crate::lower::facts::OperatorExpressionKind::Index {
             match array.as_ref() {
                 Some(LibrarySpecializationAnchor::Resolved(array)) => {
-                    match settled_specializes(storage, resolution, argument.result, *array)? {
+                    match specializations
+                        .as_ref()
+                        .ok_or(ResolutionError::InvalidStorage)?
+                        .specializes(argument.result, *array)?
+                    {
                         SettledSpecialization::Conforms => continue,
                         SettledSpecialization::DoesNotConform => {}
                         SettledSpecialization::Unresolved => {
@@ -1899,60 +2413,90 @@ enum SettledSpecialization {
     Unresolved,
 }
 
-fn settled_specializes(
-    storage: &SemanticModelStorage,
-    resolution: &ResolutionResults,
-    specific: DeclarationId,
-    general: DeclarationId,
-) -> Result<SettledSpecialization, ResolutionError> {
-    let mut pending = vec![specific];
-    let mut visited = std::collections::BTreeSet::new();
-    let mut unresolved = false;
-    while let Some(current) = pending.pop() {
-        if current == general {
-            return Ok(SettledSpecialization::Conforms);
-        }
-        if !visited.insert(current) {
-            continue;
-        }
+/// A publication-local adjacency index over the settled facts consumed by this synthesis.
+/// Build once per derivation, rather than rescanning all references at every reachable node.
+struct SettledSpecializationGraph {
+    parents: Vec<Vec<DeclarationId>>,
+    unresolved: Vec<bool>,
+}
+
+impl SettledSpecializationGraph {
+    fn new(
+        storage: &SemanticModelStorage,
+        resolution: &ResolutionResults,
+    ) -> Result<Self, ResolutionError> {
+        let mut parents = vec![Vec::new(); storage.declarations.len()];
+        let mut unresolved = vec![false; storage.declarations.len()];
         for (index, reference) in storage.references.iter().enumerate() {
-            if reference.source != current
-                || !matches!(
-                    reference.kind,
-                    ReferenceKind::Subclassification
-                        | ReferenceKind::Subsetting
-                        | ReferenceKind::Redefinition
-                        | ReferenceKind::FeatureTyping
-                )
-            {
+            if !matches!(
+                reference.kind,
+                ReferenceKind::Subclassification
+                    | ReferenceKind::Subsetting
+                    | ReferenceKind::Redefinition
+                    | ReferenceKind::FeatureTyping
+            ) {
                 continue;
             }
             let id =
                 AuthoredReferenceId::from_index(index).map_err(|_| ResolutionError::Capacity)?;
             match resolution.outcome(id) {
-                Some(ResolutionStatus::Resolved(target)) => pending.push(target),
-                Some(
-                    ResolutionStatus::Unresolved
-                    | ResolutionStatus::Ambiguous(_)
-                    | ResolutionStatus::Unsupported
-                    | ResolutionStatus::NonConverged,
-                )
-                | None => unresolved = true,
+                Some(ResolutionStatus::Resolved(target)) => parents
+                    .get_mut(reference.source.index())
+                    .ok_or(ResolutionError::InvalidStorage)?
+                    .push(target),
+                _ => {
+                    *unresolved
+                        .get_mut(reference.source.index())
+                        .ok_or(ResolutionError::InvalidStorage)? = true
+                }
             }
         }
-        pending.extend(
-            resolution
-                .implied_relationships
-                .iter()
-                .filter(|edge| edge.source == current)
-                .map(|edge| edge.target),
-        );
+        for edge in resolution.implied_relationships.iter() {
+            parents
+                .get_mut(edge.source.index())
+                .ok_or(ResolutionError::InvalidStorage)?
+                .push(edge.target);
+        }
+        Ok(Self {
+            parents,
+            unresolved,
+        })
     }
-    Ok(if unresolved {
-        SettledSpecialization::Unresolved
-    } else {
-        SettledSpecialization::DoesNotConform
-    })
+
+    fn specializes(
+        &self,
+        specific: DeclarationId,
+        general: DeclarationId,
+    ) -> Result<SettledSpecialization, ResolutionError> {
+        let mut pending = vec![specific];
+        let mut visited = std::collections::BTreeSet::new();
+        let mut unresolved = false;
+        while let Some(current) = pending.pop() {
+            if current == general {
+                return Ok(SettledSpecialization::Conforms);
+            }
+            if !visited.insert(current) {
+                continue;
+            }
+            unresolved |= self
+                .unresolved
+                .get(current.index())
+                .copied()
+                .ok_or(ResolutionError::InvalidStorage)?;
+            pending.extend(
+                self.parents
+                    .get(current.index())
+                    .ok_or(ResolutionError::InvalidStorage)?
+                    .iter()
+                    .copied(),
+            );
+        }
+        Ok(if unresolved {
+            SettledSpecialization::Unresolved
+        } else {
+            SettledSpecialization::DoesNotConform
+        })
+    }
 }
 
 pub(crate) fn synthesize_semantic_metadata_specializations(
@@ -1986,31 +2530,62 @@ pub(crate) fn synthesize_semantic_metadata_specializations(
         });
     };
 
+    // Only values that redefine SemanticMetadata::baseType can supply the projection.
+    // Select them once before testing owner conformance: walking the specialization graph
+    // for every unrelated library feature value, for every annotation, dominates large models.
+    // Preserve feature-value order so the first applicable value remains the canonical choice.
+    let base_type_redefinitions = storage
+        .references
+        .iter()
+        .enumerate()
+        .filter_map(|(index, reference)| {
+            (reference.kind == ReferenceKind::Redefinition
+                && AuthoredReferenceId::from_index(index)
+                    .ok()
+                    .is_some_and(|id| {
+                        resolution.outcome(id) == Some(ResolutionStatus::Resolved(base_type))
+                    }))
+            .then_some(reference.source)
+        })
+        .collect::<std::collections::BTreeSet<_>>();
+    let base_type_values = storage
+        .feature_values
+        .iter()
+        .filter(|candidate| base_type_redefinitions.contains(&candidate.declaration))
+        .collect::<Vec<_>>();
+    let specializations = SettledSpecializationGraph::new(storage, resolution)?;
     let mut projections = Vec::new();
     let mut implied = Vec::new();
     let mut status = SemanticMetadataProjectionStatus::Complete;
     for record in storage.metadata_annotations.iter() {
-        let metadata_type = storage
-            .references
-            .iter()
-            .enumerate()
-            .find_map(|(index, reference)| {
-                (reference.source == record.annotation
-                    && reference.kind == ReferenceKind::MetadataAnnotation)
-                    .then(|| {
-                        let id = AuthoredReferenceId::from_index(index).ok()?;
-                        match resolution.outcome(id) {
-                            Some(ResolutionStatus::Resolved(target)) => Some(target),
-                            _ => None,
-                        }
-                    })
-                    .flatten()
+        // Only `@Tag` / `#Tag` annotation *applications* carry a `MetadataAnnotation` typing
+        // reference and can project semantic metadata. A `metadata m : T;` usage record has no
+        // such reference (its type is an ordinary `FeatureTyping`); it is not a semantic-metadata
+        // candidate, so skip it rather than reporting the whole projection as unresolved.
+        let Some(annotation_reference) =
+            storage
+                .references
+                .iter()
+                .enumerate()
+                .find_map(|(index, reference)| {
+                    (reference.source == record.annotation
+                        && reference.kind == ReferenceKind::MetadataAnnotation)
+                        .then_some(index)
+                })
+        else {
+            continue;
+        };
+        let metadata_type = AuthoredReferenceId::from_index(annotation_reference)
+            .ok()
+            .and_then(|id| match resolution.outcome(id) {
+                Some(ResolutionStatus::Resolved(target)) => Some(target),
+                _ => None,
             });
         let Some(metadata_type) = metadata_type else {
             status = SemanticMetadataProjectionStatus::Unresolved;
             continue;
         };
-        match settled_specializes(storage, resolution, metadata_type, semantic_metadata)? {
+        match specializations.specializes(metadata_type, semantic_metadata)? {
             SettledSpecialization::Conforms => {}
             SettledSpecialization::DoesNotConform => continue,
             SettledSpecialization::Unresolved => {
@@ -2019,7 +2594,7 @@ pub(crate) fn synthesize_semantic_metadata_specializations(
             }
         }
         let mut value = None;
-        for candidate in storage.feature_values.iter() {
+        for candidate in base_type_values.iter().copied() {
             let Some(owner) = storage
                 .declaration(candidate.declaration)
                 .and_then(|decl| decl.owner)
@@ -2027,23 +2602,9 @@ pub(crate) fn synthesize_semantic_metadata_specializations(
                 continue;
             };
             if matches!(
-                settled_specializes(storage, resolution, metadata_type, owner)?,
+                specializations.specializes(metadata_type, owner)?,
                 SettledSpecialization::Conforms
-            ) && storage
-                .references
-                .iter()
-                .enumerate()
-                .any(|(index, reference)| {
-                    reference.source == candidate.declaration
-                        && reference.kind == ReferenceKind::Redefinition
-                        && AuthoredReferenceId::from_index(index)
-                            .ok()
-                            .is_some_and(|id| {
-                                resolution.outcome(id)
-                                    == Some(ResolutionStatus::Resolved(base_type))
-                            })
-                })
-            {
+            ) {
                 value = Some(candidate);
                 break;
             }
@@ -2085,6 +2646,7 @@ pub(crate) fn synthesize_semantic_metadata_specializations(
                             | crate::ElementKind::Connector
                             | crate::ElementKind::BindingConnector
                             | crate::ElementKind::Invariant
+                            | crate::ElementKind::MetadataFeature
                     )
             })
         };
@@ -2137,9 +2699,13 @@ pub(crate) fn synthesize_semantic_metadata_specializations(
     })
 }
 
+/// SysML 8.3.9.3, checkOccurrenceDefinitionMultiplicitySpecialization.
+pub(crate) const INDIVIDUAL_MULTIPLICITY_ANCHOR: &str = "Base::zeroOrOne";
+
 pub(crate) fn library_specialization_anchors(
     storage: &SemanticModelStorage,
 ) -> LibrarySpecializationAnchorFacts {
+    let names = LibraryAnchorNames::new(storage);
     let anchors = GENERATED_LIBRARY_SPECIALIZATION_RULES
         .iter()
         .map(|rule| {
@@ -2174,17 +2740,34 @@ pub(crate) fn library_specialization_anchors(
                 rule.anchor,
             )
         }))
+        .chain(
+            specialization_check_rule(SpecializationCheckKind::OccurrenceDefinitionMultiplicity)
+                .map(|rule| {
+                    (
+                        rule.rule_id,
+                        LibrarySpecializationAnchorBranch::Default,
+                        INDIVIDUAL_MULTIPLICITY_ANCHOR,
+                    )
+                }),
+        )
         .map(|(rule_id, branch, anchor)| {
             (
                 LibrarySpecializationAnchorKey {
                     rule: LibrarySpecializationRuleKey(rule_id),
                     branch,
                 },
-                resolve_library_specialization_anchor(storage, anchor),
+                names.resolve(anchor),
             )
         })
         .collect();
-    LibrarySpecializationAnchorFacts { by_rule: anchors }
+    LibrarySpecializationAnchorFacts {
+        by_rule: anchors,
+        roles: LibraryRoleAnchors::resolve(&names),
+        specialization_roles:
+            crate::resolve::role_specializations::LibrarySpecializationRoleAnchors::resolve(&names),
+        reflective_metaclasses:
+            crate::resolve::reflective_metaclasses::ReflectiveMetaclassAnchors::resolve(&names),
+    }
 }
 
 pub(crate) fn resolve_library_specialization_anchor(
@@ -2192,23 +2775,51 @@ pub(crate) fn resolve_library_specialization_anchor(
     anchor: &'static str,
 ) -> LibrarySpecializationAnchor {
     let parts = anchor.split("::").collect::<Vec<_>>();
+    resolve_library_anchor_path(storage, &parts)
+}
+
+/// Resolves one standard-library declaration by its structural path of decoded names, outermost
+/// first. A path segment may be any decoded name, including one (`'.'`) that a `::`-joined
+/// spelling could not carry unambiguously.
+pub(crate) fn resolve_library_anchor_path(
+    storage: &SemanticModelStorage,
+    parts: &[&str],
+) -> LibrarySpecializationAnchor {
     let Some((&last, owners)) = parts.split_last() else {
         return LibrarySpecializationAnchor::Missing;
     };
-    let mut candidates = storage
-        .declarations
-        .iter()
-        .enumerate()
-        .filter_map(|(index, declaration)| {
-            (storage
-                .document(declaration.document)
-                .is_some_and(|document| document.role == SourceRole::StandardLibrary)
-                && declaration
-                    .name
-                    .is_some_and(|name| storage.symbol(name) == Some(last))
-                && anchor_owner_path_matches(storage, declaration.owner, owners))
-            .then(|| DeclarationId::from_index(index).ok())
-            .flatten()
+    // Names are interned once each, so comparing the interned id is comparing the decoded name.
+    let Some(last) = storage.symbols.find(last) else {
+        return LibrarySpecializationAnchor::Missing;
+    };
+    library_anchor_from_candidates(
+        storage,
+        owners,
+        storage
+            .declarations
+            .iter()
+            .enumerate()
+            .filter(|(_, declaration)| declaration.name.resolved() == Some(last))
+            .filter_map(|(index, _)| DeclarationId::from_index(index).ok()),
+    )
+}
+
+/// The one acceptance rule for a library anchor: a standard-library declaration whose
+/// structural owner path matches `owners`. Both the single-anchor scan and
+/// [`LibraryAnchorNames`] feed it the declarations bearing the anchor's final name.
+fn library_anchor_from_candidates(
+    storage: &SemanticModelStorage,
+    owners: &[&str],
+    named: impl Iterator<Item = DeclarationId>,
+) -> LibrarySpecializationAnchor {
+    let mut candidates = named
+        .filter(|id| {
+            storage.declaration(*id).is_some_and(|declaration| {
+                storage
+                    .document(declaration.document)
+                    .is_some_and(|document| document.role == SourceRole::StandardLibrary)
+                    && anchor_owner_path_matches(storage, declaration.owner, owners)
+            })
         })
         .collect::<Vec<_>>();
     candidates.sort_unstable();
@@ -2217,6 +2828,62 @@ pub(crate) fn resolve_library_specialization_anchor(
         0 => LibrarySpecializationAnchor::Missing,
         1 => LibrarySpecializationAnchor::Resolved(candidates[0]),
         _ => LibrarySpecializationAnchor::Ambiguous(candidates.into_boxed_slice()),
+    }
+}
+
+/// A transient by-name view of the declarations, for resolving a batch of library anchors with
+/// one pass over the declaration arena instead of one pass per anchor.
+///
+/// Scoped to one call over one immutable storage and never retained, so it is not a cache: every
+/// anchor it answers is exactly what [`resolve_library_anchor_path`] answers for that storage.
+pub(crate) struct LibraryAnchorNames<'a> {
+    storage: &'a SemanticModelStorage,
+    by_name: std::collections::HashMap<crate::model::NameId, Vec<DeclarationId>>,
+}
+
+impl<'a> LibraryAnchorNames<'a> {
+    pub(crate) fn new(storage: &'a SemanticModelStorage) -> Self {
+        let mut by_name =
+            std::collections::HashMap::<crate::model::NameId, Vec<DeclarationId>>::new();
+        for (index, declaration) in storage.declarations.iter().enumerate() {
+            let Some(name) = declaration.name.resolved() else {
+                continue;
+            };
+            if let Ok(id) = DeclarationId::from_index(index) {
+                by_name.entry(name).or_default().push(id);
+            }
+        }
+        Self { storage, by_name }
+    }
+
+    pub(crate) fn storage(&self) -> &'a SemanticModelStorage {
+        self.storage
+    }
+
+    /// [`resolve_library_anchor_path`] over this view.
+    pub(crate) fn resolve_path(&self, parts: &[&str]) -> LibrarySpecializationAnchor {
+        let Some((&last, owners)) = parts.split_last() else {
+            return LibrarySpecializationAnchor::Missing;
+        };
+        let Some(last) = self.storage.symbols.find(last) else {
+            return LibrarySpecializationAnchor::Missing;
+        };
+        library_anchor_from_candidates(
+            self.storage,
+            owners,
+            self.by_name
+                .get(&last)
+                .map(Vec::as_slice)
+                .unwrap_or_default()
+                .iter()
+                .copied(),
+        )
+    }
+
+    /// [`resolve_library_specialization_anchor`] over this view.
+    pub(crate) fn resolve(&self, anchor: &str) -> LibrarySpecializationAnchor {
+        let parts = anchor.split("::").collect::<Vec<_>>();
+        self.resolve_path(&parts)
     }
 }
 
@@ -2239,6 +2906,7 @@ pub(crate) fn anchor_owner_path_matches(
         };
         if !declaration
             .name
+            .resolved()
             .is_some_and(|id| storage.symbol(id) == Some(*name))
         {
             return false;
@@ -2257,13 +2925,18 @@ pub(crate) fn synthesize_generated_library_specializations(
     anchor_facts: &LibrarySpecializationAnchorFacts,
 ) -> Result<Box<[ImpliedRelationship]>, ResolutionError> {
     let (ancestors, cyclic) = build_ancestor_closures(&storage.declarations, references, outcomes)?;
+    let owned_typings =
+        OwnedTypingTargets::collect(storage.declarations.len(), references, outcomes);
+    let variant_members = crate::resolve::usage_composition::variant_member_flags(storage)?;
+    let conjugated = conjugated_types(storage);
     let mut implied = Vec::new();
     for (index, declaration) in storage.declarations.iter().enumerate() {
         let source = DeclarationId::from_index(index).map_err(|_| ResolutionError::Capacity)?;
-        for metaclass in std::iter::once(library_rule_metaclass(declaration.kind))
-            .chain((declaration.kind == DeclarationKind::Flow).then_some("Flow"))
-        {
-            for rule in library_specialization_rules(metaclass) {
+        if conjugated.contains(&source) {
+            continue;
+        }
+        for metaclass in applicable_library_metaclasses(storage, source, declaration.kind) {
+            for rule in metaclass.rules() {
                 let Some(LibrarySpecializationAnchor::Resolved(anchor)) =
                     anchor_facts.generated_outcome(rule.rule_id)
                 else {
@@ -2283,9 +2956,13 @@ pub(crate) fn synthesize_generated_library_specializations(
                     target: *anchor,
                 });
             }
-            for rule in conditional_library_specialization_rules(metaclass) {
+            for rule in metaclass.conditional_rules() {
                 if !conditional_library_specialization_predicate_holds_with_resolution(
-                    storage, source, rule, references, outcomes,
+                    storage,
+                    &variant_members,
+                    source,
+                    rule,
+                    &owned_typings,
                 ) {
                     continue;
                 }
@@ -2312,6 +2989,18 @@ pub(crate) fn synthesize_generated_library_specializations(
             }
         }
     }
+    if let Some(LibrarySpecializationAnchor::Resolved(anchor)) =
+        specialization_check_rule(SpecializationCheckKind::OccurrenceDefinitionMultiplicity)
+            .and_then(|rule| anchor_facts.outcome(rule.rule_id))
+    {
+        for source in storage.individual_multiplicities() {
+            implied.push(ImpliedRelationship {
+                kind: ReferenceKind::Subsetting,
+                source,
+                target: *anchor,
+            });
+        }
+    }
     implied.sort_by_key(|relationship| (relationship.source.0, relationship.target.0));
     implied.dedup();
     Ok(implied.into_boxed_slice())
@@ -2330,13 +3019,16 @@ pub(crate) fn provisional_library_specializations(
     if !anchor_facts.has_resolved_anchor() {
         return Ok(Box::default());
     }
+    let variant_members = crate::resolve::usage_composition::variant_member_flags(storage)?;
+    let conjugated = conjugated_types(storage);
     let mut implied = Vec::new();
     for (index, declaration) in storage.declarations.iter().enumerate() {
         let source = DeclarationId::from_index(index).map_err(|_| ResolutionError::Capacity)?;
-        for metaclass in std::iter::once(library_rule_metaclass(declaration.kind))
-            .chain((declaration.kind == DeclarationKind::Flow).then_some("Flow"))
-        {
-            for rule in library_specialization_rules(metaclass) {
+        if conjugated.contains(&source) {
+            continue;
+        }
+        for metaclass in applicable_library_metaclasses(storage, source, declaration.kind) {
+            for rule in metaclass.rules() {
                 let Some(LibrarySpecializationAnchor::Resolved(anchor)) =
                     anchor_facts.generated_outcome(rule.rule_id)
                 else {
@@ -2351,8 +3043,13 @@ pub(crate) fn provisional_library_specializations(
                     target: *anchor,
                 });
             }
-            for rule in conditional_library_specialization_rules(metaclass) {
-                if !conditional_library_specialization_predicate_holds(storage, source, rule) {
+            for rule in metaclass.conditional_rules() {
+                if !conditional_library_specialization_predicate_holds_with_variants(
+                    storage,
+                    &variant_members,
+                    source,
+                    rule,
+                ) {
                     continue;
                 }
                 let branch =
@@ -2382,6 +3079,31 @@ pub(crate) fn provisional_library_specializations(
     });
     implied.dedup();
     Ok(implied.into_boxed_slice())
+}
+
+/// The Types that own a `Conjugation`: every minted `ConjugatedPortDefinition` (its
+/// `PortConjugation`) and every Type authoring `conjugates`. A conjugated Type takes its general
+/// types from its original type alone, so it gets no implicit library specialization (KerML
+/// `validateSpecializationSpecificNotConjugated`; Pilot `TypeAdapter` computes implicit general
+/// types only for a Type that is not conjugated).
+fn conjugated_types(storage: &SemanticModelStorage) -> std::collections::BTreeSet<DeclarationId> {
+    let mut conjugated = storage
+        .references
+        .iter()
+        .filter(|reference| reference.kind == ReferenceKind::Conjugation)
+        .map(|reference| reference.source)
+        .collect::<std::collections::BTreeSet<_>>();
+    conjugated.extend(
+        storage
+            .declarations
+            .iter()
+            .enumerate()
+            .filter(|(_, declaration)| {
+                declaration.kind == DeclarationKind::ConjugatedPortDefinition
+            })
+            .filter_map(|(index, _)| DeclarationId::from_index(index).ok()),
+    );
+    conjugated
 }
 
 /// The concrete specialization relationship required by the source and target metaclasses.
@@ -2416,11 +3138,50 @@ fn implied_library_specialization_kind(
     }
 }
 
+/// The ownership half of SysML `ActionUsage::isSubactionUsage()`: the owning type is an
+/// ActionDefinition or ActionUsage (`oclIsKindOf`, so state, calculation and case definitions and
+/// `if`, `while` and `for` actions count), and the usage is not the entry or exit action of a state
+/// (a `do` action is a subaction). The composite half is checked by the caller.
+fn owned_as_subaction(storage: &SemanticModelStorage, declaration: &Declaration) -> bool {
+    if matches!(
+        declaration.kind,
+        DeclarationKind::EntryActionBinding | DeclarationKind::ExitActionBinding
+    ) {
+        return false;
+    }
+    declaration.owner.is_some_and(|owner| {
+        storage.declaration(owner).is_some_and(|owner| {
+            let kind = crate::model::element_kind::element_kind(owner.kind);
+            kind.conforms_to(sysml_contract::ElementKind::ActionDefinition)
+                || kind.conforms_to(sysml_contract::ElementKind::ActionUsage)
+        })
+    })
+}
+
 /// Evaluates only the exact predicate vocabulary emitted by the pinned-manifest extractor.
 /// The predicate is the manifest's closed enum, so adding a contract requires an exhaustive
 /// resolver decision rather than falling through a similarly spelled string label.
+#[cfg(test)]
 pub(crate) fn conditional_library_specialization_predicate_holds(
     storage: &SemanticModelStorage,
+    source: DeclarationId,
+    rule: &ConditionalLibrarySpecializationRule,
+) -> bool {
+    let Ok(variant_members) = crate::resolve::usage_composition::variant_member_flags(storage)
+    else {
+        return false;
+    };
+    conditional_library_specialization_predicate_holds_with_variants(
+        storage,
+        &variant_members,
+        source,
+        rule,
+    )
+}
+
+pub(crate) fn conditional_library_specialization_predicate_holds_with_variants(
+    storage: &SemanticModelStorage,
+    variant_members: &[bool],
     source: DeclarationId,
     rule: &ConditionalLibrarySpecializationRule,
 ) -> bool {
@@ -2432,7 +3193,8 @@ pub(crate) fn conditional_library_specialization_predicate_holds(
     };
     match rule.predicate {
         LibrarySpecializationPredicate::IsIndividual => {
-            declaration.kind == DeclarationKind::OccurrenceDefinition && facts.modifiers.individual
+            crate::model::metaclass::is_occurrence_definition(declaration.kind)
+                && facts.modifiers.individual
         }
         LibrarySpecializationPredicate::PortionKindSnapshot => {
             declaration.kind == DeclarationKind::OccurrenceUsage
@@ -2443,13 +3205,16 @@ pub(crate) fn conditional_library_specialization_predicate_holds(
                 && facts.portion_kind == Some(PortionKind::Timeslice)
         }
         LibrarySpecializationPredicate::CompositeOwnedBy => {
-            facts.modifiers.composite
-                && declaration.owner.is_some_and(|owner| {
-                    storage.declaration(owner).is_some_and(|owner| {
-                        rule.owner_metaclasses
-                            .contains(&library_rule_metaclass(owner.kind))
-                    })
+            crate::resolve::usage_composition::feature_is_composite(
+                storage,
+                variant_members,
+                source,
+            ) && declaration.owner.is_some_and(|owner| {
+                storage.declaration(owner).is_some_and(|owner| {
+                    rule.owner_metaclasses
+                        .contains(&library_rule_metaclass(owner.kind))
                 })
+            })
         }
         LibrarySpecializationPredicate::OwnedBy => declaration.owner.is_some_and(|owner| {
             storage.declaration(owner).is_some_and(|owner| {
@@ -2458,19 +3223,11 @@ pub(crate) fn conditional_library_specialization_predicate_holds(
             })
         }),
         LibrarySpecializationPredicate::IsSubactionUsage => {
-            facts.modifiers.composite
-                && declaration.owner.is_some_and(|owner| {
-                    storage.declaration(owner).is_some_and(|owner| {
-                        matches!(
-                            owner.kind,
-                            DeclarationKind::ActionDefinition
-                                | DeclarationKind::ActionUsage
-                                | DeclarationKind::AcceptActionUsage
-                                | DeclarationKind::SendActionUsage
-                                | DeclarationKind::TerminateActionUsage
-                        )
-                    })
-                })
+            crate::resolve::usage_composition::feature_is_composite(
+                storage,
+                variant_members,
+                source,
+            ) && owned_as_subaction(storage, declaration)
         }
         LibrarySpecializationPredicate::IsNotTriggerAction => {
             declaration.kind == DeclarationKind::AcceptActionUsage
@@ -2479,19 +3236,12 @@ pub(crate) fn conditional_library_specialization_predicate_holds(
         LibrarySpecializationPredicate::IsSubactionUsageAndNotTriggerAction => {
             declaration.kind == DeclarationKind::AcceptActionUsage
                 && facts.is_trigger_action == Some(false)
-                && facts.modifiers.composite
-                && declaration.owner.is_some_and(|owner| {
-                    storage.declaration(owner).is_some_and(|owner| {
-                        matches!(
-                            owner.kind,
-                            DeclarationKind::ActionDefinition
-                                | DeclarationKind::ActionUsage
-                                | DeclarationKind::AcceptActionUsage
-                                | DeclarationKind::SendActionUsage
-                                | DeclarationKind::TerminateActionUsage
-                        )
-                    })
-                })
+                && crate::resolve::usage_composition::feature_is_composite(
+                    storage,
+                    variant_members,
+                    source,
+                )
+                && owned_as_subaction(storage, declaration)
         }
         LibrarySpecializationPredicate::IsTriggerAction => {
             declaration.kind == DeclarationKind::AcceptActionUsage
@@ -2513,14 +3263,17 @@ pub(crate) fn conditional_library_specialization_predicate_holds(
                 && positional_end_count(storage, source) == 2
         }
         LibrarySpecializationPredicate::OwnedEndFeaturesNotEmpty => {
-            declaration.kind == DeclarationKind::Flow
-                && facts.owned_end_feature_count.is_some_and(|count| count > 0)
+            matches!(
+                declaration.kind,
+                DeclarationKind::Flow | DeclarationKind::SuccessionFlow
+            ) && facts.owned_end_feature_count.is_some_and(|count| count > 0)
         }
         LibrarySpecializationPredicate::OwnedTypingDataType
         | LibrarySpecializationPredicate::OwnedTypingClass
         | LibrarySpecializationPredicate::OwnedTypingStructure
         | LibrarySpecializationPredicate::EndOwnedByAssociationOrConnector
-        | LibrarySpecializationPredicate::ConnectorAssociationStructure => false,
+        | LibrarySpecializationPredicate::ConnectorAssociationStructure
+        | LibrarySpecializationPredicate::ConnectorBinaryAssociationStructure => false,
         LibrarySpecializationPredicate::PolarityBranch => facts.negated.is_some(),
         LibrarySpecializationPredicate::FramedConcernMembership => {
             element_kind::membership_role(declaration.kind) == Some(MembershipRole::FramedConcern)
@@ -2549,28 +3302,28 @@ pub(crate) fn conditional_library_specialization_predicate_holds(
 /// resolved facts; this owner never rereads syntax or derives a type from a display name.
 pub(crate) fn conditional_library_specialization_predicate_holds_with_resolution(
     storage: &SemanticModelStorage,
+    variant_members: &[bool],
     source: DeclarationId,
     rule: &ConditionalLibrarySpecializationRule,
-    references: &[AuthoredReference],
-    outcomes: &[ResolutionStatus],
+    owned_typings: &OwnedTypingTargets,
 ) -> bool {
     match rule.predicate {
         LibrarySpecializationPredicate::OwnedTypingDataType => {
-            direct_owned_typing_targets(storage, source, references, outcomes).any(|target| {
+            owned_typings.of(storage, source).any(|target| {
                 storage
                     .declaration(target)
                     .is_some_and(|declaration| declaration.kind == DeclarationKind::KermlDataType)
             })
         }
         LibrarySpecializationPredicate::OwnedTypingClass => {
-            direct_owned_typing_targets(storage, source, references, outcomes).any(|target| {
+            owned_typings.of(storage, source).any(|target| {
                 storage
                     .declaration(target)
                     .is_some_and(|declaration| declaration_kind_is_class(declaration.kind))
             })
         }
         LibrarySpecializationPredicate::OwnedTypingStructure => {
-            direct_owned_typing_targets(storage, source, references, outcomes).any(|target| {
+            owned_typings.of(storage, source).any(|target| {
                 storage
                     .declaration(target)
                     .is_some_and(|declaration| declaration_kind_is_structure(declaration.kind))
@@ -2591,11 +3344,22 @@ pub(crate) fn conditional_library_specialization_predicate_holds_with_resolution
                     })
             }),
         LibrarySpecializationPredicate::ConnectorAssociationStructure => {
-            declaration_has_direct_association_structure_typing(
-                storage, source, references, outcomes,
-            )
+            declaration_has_direct_association_structure_typing(storage, source, owned_typings)
         }
-        _ => conditional_library_specialization_predicate_holds(storage, source, rule),
+        LibrarySpecializationPredicate::ConnectorBinaryAssociationStructure => {
+            positional_end_count(storage, source) == 2
+                && declaration_has_direct_association_structure_typing(
+                    storage,
+                    source,
+                    owned_typings,
+                )
+        }
+        _ => conditional_library_specialization_predicate_holds_with_variants(
+            storage,
+            variant_members,
+            source,
+            rule,
+        ),
     }
 }
 
@@ -2606,36 +3370,56 @@ pub(crate) fn conditional_library_specialization_predicate_holds_with_resolution
 pub(crate) fn declaration_has_direct_association_structure_typing(
     storage: &SemanticModelStorage,
     source: DeclarationId,
-    references: &[AuthoredReference],
-    outcomes: &[ResolutionStatus],
+    owned_typings: &OwnedTypingTargets,
 ) -> bool {
     storage
         .declaration(source)
         .is_some_and(|declaration| declaration.kind == DeclarationKind::KermlConnector)
-        && direct_owned_typing_targets(storage, source, references, outcomes).any(|target| {
+        && owned_typings.of(storage, source).any(|target| {
             storage.declaration(target).is_some_and(|declaration| {
                 declaration.kind == DeclarationKind::KermlAssociationStructure
             })
         })
 }
 
-pub(crate) fn direct_owned_typing_targets<'a>(
-    storage: &'a SemanticModelStorage,
-    source: DeclarationId,
-    references: &'a [AuthoredReference],
-    outcomes: &'a [ResolutionStatus],
-) -> impl Iterator<Item = DeclarationId> + 'a {
-    references
-        .iter()
-        .enumerate()
-        .filter(move |(_, reference)| {
-            reference.source == source && reference.kind == ReferenceKind::FeatureTyping
-        })
-        .filter_map(move |(index, _)| match outcomes.get(index) {
-            Some(ResolutionStatus::Resolved(target)) => Some(*target),
-            _ => None,
-        })
-        .filter(move |target| storage.declaration(*target).is_some())
+/// The settled targets of every declaration's direct authored `FeatureTyping`s, in authored
+/// order, indexed by source once per synthesis rather than rescanned per predicate.
+pub(crate) struct OwnedTypingTargets {
+    by_source: Vec<Vec<DeclarationId>>,
+}
+
+impl OwnedTypingTargets {
+    pub(crate) fn collect(
+        declaration_count: usize,
+        references: &[AuthoredReference],
+        outcomes: &[ResolutionStatus],
+    ) -> Self {
+        let mut by_source = vec![Vec::new(); declaration_count];
+        for (reference, outcome) in references.iter().zip(outcomes) {
+            if reference.kind != ReferenceKind::FeatureTyping {
+                continue;
+            }
+            if let (ResolutionStatus::Resolved(target), Some(slot)) =
+                (outcome, by_source.get_mut(reference.source.index()))
+            {
+                slot.push(*target);
+            }
+        }
+        Self { by_source }
+    }
+
+    fn of<'a>(
+        &'a self,
+        storage: &'a SemanticModelStorage,
+        source: DeclarationId,
+    ) -> impl Iterator<Item = DeclarationId> + 'a {
+        self.by_source
+            .get(source.index())
+            .into_iter()
+            .flatten()
+            .copied()
+            .filter(move |target| storage.declaration(*target).is_some())
+    }
 }
 
 /// KerML's static metaclass test for the concrete declaration kinds represented by this model.
@@ -2693,7 +3477,9 @@ pub(crate) fn conditional_library_specialization_anchor_branch(
             .is_some_and(|owner| {
                 matches!(
                     owner.kind,
-                    DeclarationKind::RequirementDefinition | DeclarationKind::RequirementUsage
+                    DeclarationKind::RequirementDefinition
+                        | DeclarationKind::RequirementUsage
+                        | DeclarationKind::ObjectiveRequirement
                 )
             }),
         LibrarySpecializationPredicate::IsIndividual
@@ -2711,6 +3497,7 @@ pub(crate) fn conditional_library_specialization_anchor_branch(
         | LibrarySpecializationPredicate::OwnedTypingStructure
         | LibrarySpecializationPredicate::EndOwnedByAssociationOrConnector
         | LibrarySpecializationPredicate::ConnectorAssociationStructure
+        | LibrarySpecializationPredicate::ConnectorBinaryAssociationStructure
         | LibrarySpecializationPredicate::OwnedBy
         | LibrarySpecializationPredicate::IsSubactionUsage
         | LibrarySpecializationPredicate::IsNotTriggerAction
@@ -2727,23 +3514,14 @@ pub(crate) fn conditional_library_specialization_anchor_branch(
     }
 }
 
-/// The canonical structural representation for the exact XMI end collections is each child
-/// declaration's owned positional-end fact. The generated rule's metaclass and closed predicate
-/// still distinguish `connectorEnd`, `associationEnd`, `endFeature`, and `ownedEndFeature`; this
-/// helper only owns their shared storage projection.
+/// The size of `owner`'s owned end collection, read from the canonical
+/// [`SemanticModelStorage::owned_end_features`]. The generated rule's metaclass and closed
+/// predicate still distinguish `connectorEnd`, `associationEnd`, `endFeature`, and
+/// `ownedEndFeature`; each is evaluated on the owned ends, which redefine any inherited ends
+/// positionally, so the owned collection is the one this resolution phase can state before the
+/// specialization closure it feeds exists.
 pub(crate) fn positional_end_count(storage: &SemanticModelStorage, owner: DeclarationId) -> usize {
-    storage
-        .declarations
-        .iter()
-        .enumerate()
-        .filter(|(index, declaration)| {
-            declaration.owner == Some(owner)
-                && DeclarationId::from_index(*index)
-                    .ok()
-                    .and_then(|member| storage.declaration_facts(member))
-                    .is_some_and(|facts| facts.positional_end.is_some())
-        })
-        .count()
+    storage.owned_end_features(owner).len()
 }
 
 /// Applies exact unconditional `redefinesFromLibrary` rules after authored references have
@@ -2767,9 +3545,13 @@ pub(crate) fn synthesize_generated_library_redefinitions(
         if authored_sources.contains(&source) {
             continue;
         }
-        for metaclass in std::iter::once(library_rule_metaclass(declaration.kind))
-            .chain((declaration.kind == DeclarationKind::Flow).then_some("Flow"))
-        {
+        for metaclass in std::iter::once(library_rule_metaclass(declaration.kind)).chain(
+            match declaration.kind {
+                DeclarationKind::Flow => Some("Flow"),
+                DeclarationKind::SuccessionFlow => Some("SuccessionFlow"),
+                _ => None,
+            },
+        ) {
             for rule in library_redefinition_rules(metaclass) {
                 let Some(LibrarySpecializationAnchor::Resolved(anchor)) =
                     anchor_facts.generated_outcome(rule.rule_id)
@@ -2832,14 +3614,7 @@ pub(crate) fn synthesize_feature_membership_type_featurings(
         let Some(owner_declaration) = storage.declaration(owner) else {
             return Err(ResolutionError::InvalidStorage);
         };
-        if matches!(
-            owner_declaration.kind,
-            DeclarationKind::Namespace
-                | DeclarationKind::Package
-                | DeclarationKind::LibraryPackage
-                | DeclarationKind::Import
-                | DeclarationKind::Alias
-        ) {
+        if !is_owning_type_kind(owner_declaration.kind) {
             continue;
         }
         implied.push(ImpliedRelationship {
@@ -2847,6 +3622,149 @@ pub(crate) fn synthesize_feature_membership_type_featurings(
             source: membership.member,
             target: owner,
         });
+    }
+    implied.sort_by_key(|relationship| (relationship.source.0, relationship.target.0));
+    implied.dedup();
+    Ok(implied.into_boxed_slice())
+}
+
+/// Whether a declaration of this kind is a Type, and so the `owningType` of the features it owns.
+/// Packages and the other non-Type namespace members are not.
+pub(crate) fn is_owning_type_kind(kind: DeclarationKind) -> bool {
+    !matches!(
+        kind,
+        DeclarationKind::Namespace
+            | DeclarationKind::Package
+            | DeclarationKind::LibraryPackage
+            | DeclarationKind::Import
+            | DeclarationKind::Alias
+    )
+}
+
+/// Materializes KerML's `checkExpressionTypeFeaturing` semantic consequence (8.3.4.7.3).
+///
+/// An Expression owned by a FeatureValue has the featuring types of that FeatureValue's
+/// `featureWithValue`, as the Pilot's `ExpressionAdapter.addImplicitFeaturingTypesIfNecessary`
+/// adds them. The featureWithValue's featuring types are its settled authored TypeFeaturings and
+/// the FeatureMembership featurings published by
+/// [`synthesize_feature_membership_type_featurings`]; a featureWithValue with neither (for example
+/// a `var` Feature, whose `snapshots` featuring is not lowered) implies nothing rather than a
+/// guessed featuring type.
+/// The settled `featuringType`s of every Feature that has one, from authored `featured by`
+/// references and the FeatureMembership featurings, plus the Features that author any
+/// `featured by` (whose featuring is then never implied).
+struct SettledFeaturings {
+    featuring: std::collections::BTreeMap<DeclarationId, Vec<DeclarationId>>,
+    authored_sources: std::collections::BTreeSet<DeclarationId>,
+}
+
+impl SettledFeaturings {
+    fn collect(
+        storage: &SemanticModelStorage,
+        outcomes: &[ResolutionStatus],
+        membership_featurings: &[ImpliedRelationship],
+    ) -> Self {
+        let mut featuring = std::collections::BTreeMap::<DeclarationId, Vec<DeclarationId>>::new();
+        let mut authored_sources = std::collections::BTreeSet::new();
+        for (reference, outcome) in storage.references.iter().zip(outcomes.iter()) {
+            if reference.kind != ReferenceKind::TypeFeaturing {
+                continue;
+            }
+            authored_sources.insert(reference.source);
+            if let ResolutionStatus::Resolved(target) = *outcome {
+                featuring.entry(reference.source).or_default().push(target);
+            }
+        }
+        for relationship in membership_featurings {
+            featuring
+                .entry(relationship.source)
+                .or_default()
+                .push(relationship.target);
+        }
+        Self {
+            featuring,
+            authored_sources,
+        }
+    }
+}
+
+/// `checkMultiplicityTypeFeaturing` (KerML 8.3.3.1.9) and
+/// `checkMultiplicityRangeExpressionTypeFeaturing` (8.3.4.11.2): a Multiplicity owned by a
+/// Feature, and each `bound` Expression of a MultiplicityRange so owned, is featured by that
+/// Feature's `featuringType`s (Pilot `MultiplicityAdapter`, `ExpressionAdapter.
+/// addImplicitFeaturingTypesIfNecessary`). A Multiplicity outside a Feature has none.
+pub(crate) fn synthesize_multiplicity_type_featurings(
+    storage: &SemanticModelStorage,
+    outcomes: &[ResolutionStatus],
+    membership_featurings: &[ImpliedRelationship],
+) -> Result<Box<[ImpliedRelationship]>, ResolutionError> {
+    let settled = SettledFeaturings::collect(storage, outcomes, membership_featurings);
+    let owning_feature = |multiplicity: DeclarationId| {
+        let owner = storage.declaration(multiplicity)?.owner?;
+        crate::resolve::is_feature_declaration(storage.declaration(owner)?.kind).then_some(owner)
+    };
+    let mut implied = Vec::new();
+    for (index, declaration) in storage.declarations.iter().enumerate() {
+        let source = DeclarationId::from_index(index).map_err(|_| ResolutionError::Capacity)?;
+        if settled.authored_sources.contains(&source) {
+            continue;
+        }
+        let multiplicity = match declaration.kind {
+            DeclarationKind::KermlMultiplicity | DeclarationKind::KermlMultiplicityRange => source,
+            kind if element_kind::element_kind(kind)
+                .conforms_to(sysml_contract::ElementKind::Expression) =>
+            {
+                match declaration.owner {
+                    Some(range)
+                        if storage.declaration(range).is_some_and(|range| {
+                            range.kind == DeclarationKind::KermlMultiplicityRange
+                        }) =>
+                    {
+                        range
+                    }
+                    _ => continue,
+                }
+            }
+            _ => continue,
+        };
+        let Some(types) =
+            owning_feature(multiplicity).and_then(|feature| settled.featuring.get(&feature))
+        else {
+            continue;
+        };
+        implied.extend(types.iter().map(|target| ImpliedRelationship {
+            kind: ReferenceKind::TypeFeaturing,
+            source,
+            target: *target,
+        }));
+    }
+    implied.sort_by_key(|relationship| (relationship.source.0, relationship.target.0));
+    implied.dedup();
+    Ok(implied.into_boxed_slice())
+}
+
+pub(crate) fn synthesize_feature_value_expression_type_featurings(
+    storage: &SemanticModelStorage,
+    outcomes: &[ResolutionStatus],
+    membership_featurings: &[ImpliedRelationship],
+) -> Result<Box<[ImpliedRelationship]>, ResolutionError> {
+    let SettledFeaturings {
+        featuring,
+        authored_sources,
+    } = SettledFeaturings::collect(storage, outcomes, membership_featurings);
+    let mut implied = Vec::new();
+    for value in storage.feature_values.iter() {
+        if authored_sources.contains(&value.value) {
+            continue;
+        }
+        let Some(types) = featuring.get(&value.declaration) else {
+            continue;
+        };
+        implied.extend(types.iter().map(|target| ImpliedRelationship {
+            kind: ReferenceKind::TypeFeaturing,
+            source: value.value,
+            target: *target,
+        }));
     }
     implied.sort_by_key(|relationship| (relationship.source.0, relationship.target.0));
     implied.dedup();
@@ -2863,14 +3781,39 @@ pub(crate) fn library_rule_metaclass(kind: DeclarationKind) -> &'static str {
     match kind {
         DeclarationKind::FlowDefinition => "FlowDefinition",
         DeclarationKind::Flow => "FlowUsage",
+        DeclarationKind::SuccessionFlow => "SuccessionFlowUsage",
         DeclarationKind::CalcDefinition => "CalculationDefinition",
         DeclarationKind::CalcUsage => "CalculationUsage",
         _ => element_kind::element_kind(kind).as_str(),
     }
 }
 
-/// Compatibility spelling for specialization-only consumers. New generated-rule owners use
-/// `library_rule_metaclass`, which is the single normalization boundary for both exact families.
-pub(crate) fn library_specialization_metaclass(kind: DeclarationKind) -> &'static str {
-    library_rule_metaclass(kind)
+/// Feed the canonical expression-result derivations into name resolution when a member
+/// lookup starts from an owned expression result. These are the same derivation owners
+/// used at final settlement; iteration changes prerequisites, never their meaning.
+pub(crate) fn synthesize_access_expression_result_relationships(
+    storage: &SemanticModelStorage,
+    resolution: &ResolutionResults,
+) -> Result<Vec<ImpliedRelationship>, ResolutionError> {
+    let mut relationships =
+        synthesize_feature_reference_expression_result_specializations(storage, resolution)?
+            .implied_relationships
+            .into_vec();
+    relationships.extend(
+        synthesize_feature_chain_expression_result_specializations(storage, resolution)?
+            .implied_relationships,
+    );
+    relationships.extend(
+        synthesize_operator_expression_result_specializations(storage, resolution)?
+            .implied_relationships,
+    );
+    relationships.sort_by_key(|relationship| {
+        (
+            relationship.kind,
+            relationship.source.0,
+            relationship.target.0,
+        )
+    });
+    relationships.dedup();
+    Ok(relationships)
 }

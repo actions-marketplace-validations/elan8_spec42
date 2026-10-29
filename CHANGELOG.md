@@ -7,6 +7,1209 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.57.0] - 2026-10-22
+
+- **Upgrade notes.** Diagram products are **schema 7**: browser metadata carries `rows` (row
+  key, membership, member state), and grid metadata carries a `layout`, node-index `columns`, and
+  cells naming the edge they show; consumers must accept `schemaVersion` 7. The generator ABI
+  fingerprint changed: **a generator plugin built against 0.56.0 must be rebuilt.** The semantic
+  contract version is now `spec-rule-burndown-element-kinds-v52`, so earlier publications and
+  serialised models are not reused. The informational `view_expose_empty` diagnostic is gone. Join
+  and control nodes no longer report `missing_library_anchor`. Projects can now limit their
+  sources with `syside.toml` `include`/`exclude`. The bundled domain libraries are now
+  [0.5.0](https://github.com/elan8/sysml-domain-libraries/releases/tag/v0.5.0), which adds
+  systems-engineering roles, document composition and software architecture vocabulary; existing
+  0.4.0 definitions keep their names.
+
+- **Diagrams of real models read better.**
+  - Sequence views draw lifelines in declaration order, headed `name : Type`, and label messages
+    `name : Payload`.
+  - State transitions are labelled `trigger [guard] / effect` with their authored guard and
+    effect, each label laid out on its own transition.
+  - Action flows run from one parameter square to the other, around actions and parameter names,
+    and an action holding a flow shows its own parameters on its border.
+  - Interconnection ports stand on their part's boundary, and a flow along a connector is drawn as
+    an arrow on that connector instead of a second line.
+  - General-view edge labels such as «allocate» keep clear of nodes and other lines.
+  - Every standard view is drawn in its native SysML `«view»` frame.
+- **Browser views are membership trees** of the exposed elements in declaration order, inherited
+  members marked with `^`; deeper branches load when they are expanded, so large models stay
+  responsive.
+- **Grid views are relationship matrices** of the allocations, dependencies, bindings and
+  specializations between the exposed elements (rows are source ends, columns target ends), or a
+  table of the exposed elements when none relates them.
+- **Views panel.** The VS Code Diagram panel is now **Views**: views are grouped by owning
+  namespace and sorted by name, *Go to definition* opens a view's declaration, the canvas follows
+  the editor theme, the viewport survives refreshes, and SVG/PNG export uses a white or transparent
+  background.
+- **Feature Inspector** leads with the element's qualified name, its kind and its documentation.
+- **Views typed by inherited view definitions and Boolean metaclass filters** are listed and
+  drawn, and a state-transition or action-flow view is no longer also listed as an interconnection
+  view.
+- **Syntax highlighting** colours `flow` and `message` usages in every owning body.
+- **Calculation expressions resolve their callbacks and indexed accesses.** A collection
+  callback such as `sum(contributions->select { in c; c.active })` keeps its body in its own
+  scope, so its parameters and locals resolve there instead of in the caller. Indexed member
+  access such as `edges#(i).vertices` resolves the member through the indexed result's type,
+  including nested indices and casts (`(edges#(i) as Edge).vertices`). Calculation aliases and
+  bare returns are accepted. Evaluating callbacks and indexed occurrences remains explicitly
+  unsupported; see [Calculation expressions](docs/user/CALCULATION-EXPRESSIONS.md).
+
+- **Quieter view validation.** Remove the informational `view_expose_empty` check from
+  Spec42, including the CLI and VS Code. Unresolved expose targets are still reported.
+
+- **Generator runtime security.** Upgrade Wasmtime to 48.0.7, addressing
+  RUSTSEC-2026-0378 and RUSTSEC-2026-0379.
+
+- **Project source scope and installed Sysand dependencies.** CLI and VS Code share project-root
+  `syside.toml` source selection and load locked dependencies from Sysand environment metadata,
+  with explicit errors for missing, stale, or unsupported installations and no implicit downloads.
+
+- **Smaller diagram products (schema 6).** A diagram product now carries only authored
+  relationships. The library-implied subsetting, type featuring and redefinitions of every
+  projected element, and the references, sources and library documents they pulled in, were most
+  of its bytes, and no drawing read them; they remain available through the semantic query. The
+  language server also sends products as compact JSON. Together, a product the editor receives is
+  about a third of its previous size (35% across the example and robot-vacuum views), so large
+  views stay well clear of the editor's 16 MiB limit, and a view that still exceeds it is
+  reported with its size and element counts. `spec42 diagram --view … --stats` shows where a
+  product's bytes go. This release ships it as part of schema 7 (see the upgrade notes); the
+  existing field names and shapes are unchanged, and `spec42 diagram --format json` still writes
+  pretty-printed JSON.
+
+- **Bounded concurrent publication checks.** Snapshot runs time out with phase, active-fixture
+  and thread-state evidence. A repeatable stress runner exercises snapshot and LSP integration
+  workloads together, preserves individual logs and kills timed-out process trees.
+
+- **Project analysis reliability.** Relative custom-library paths use the original first workspace
+  folder at startup and after configuration changes. Missing-file containment uses the same Windows
+  drive-letter identity as admitted library roots. Project diagnostic counts remain visible
+  while the server is rebuilding. A failed publication reports its phase and source identity, and
+  the editor warns when the previous analysis remains visible.
+
+- **Parser 0.58.0 / AST 284.** Retains all usage typing targets (except `occurrence` usages,
+  which the parser still types with a single target), extended body members,
+  nested action definitions and case usages, variants, and complete state-action declarations,
+  specializations and values. `model-export` and generator consumers should process every authored
+  typing relationship; a usage may have several targets. State-action names and values now appear
+  in the existing declaration and expression contracts. The wire schema is unchanged.
+
+- **Domain libraries 0.4.0, packed by `spec42 bundle` everywhere.** Pins the redesigned Elan8
+  domain libraries (generic and technical vocabulary under `model/`, with `Elan8` as the umbrella
+  package); archive paths are now `model/generic/...` and `model/technical/...`. A library
+  checkout is packed from its own `.project.json` with the config's `pack.exclude`, exactly as its
+  release is, in `spec42 bundle`, the library catalog build script and
+  `scripts/fetch-kpar-libraries-bundle.sh`; `pack.kind` and the `domain-roots` layout are removed.
+  A sibling checkout that is not the pinned version is skipped rather than packed under the pin.
+  A library archive left by an earlier build is reused only when it is the pinned version, so a
+  pin bump no longer embeds the previous library.
+
+## [0.56.0] - 2026-10-17
+
+- **Upgrade notes.** The semantic contract version is now
+  `spec-rule-burndown-element-kinds-v49`; consumers of `model-export` and the published model
+  must accept the new element kinds, derived collections and the diagram `Conjugation`
+  relationship kind listed below. The diagram compatibility token changed: **a generator plugin
+  built against 0.55.0 must be rebuilt.** The `method` managed library is no longer bundled.
+  Results can change for models that were clean on 0.55.0: the non-normative
+  `missing_final_state` advisory is gone, SysML definitions using KerML-only `disjoint from`
+  headers report syntax errors, and new KerML/SysML validations can report on existing models.
+  Pins sysml-v2-parser `3ac51ee4` (`PARSE_AST_VERSION` 283).
+
+- **Workspaces with several documents no longer lose their semantic publication.** Per-document
+  lowering left each authored reference pointing at the first document. A feature-reference
+  check then read a later document's ranges against the first document's lines: the diagnostic
+  landed in the wrong file, or the whole build failed with `ConstructionFailed`, as on a
+  SysML-v2-Release workspace where `workspace/symbol` returned nothing.
+
+- **Semantic metadata keywords supply inherited members (#279).** Keyword-implied
+  specialization participates in name resolution, including chained semantic metadata and
+  bare `#keyword def` declarations. SysML definitions using KerML-only `disjoint from` headers
+  now report syntax errors; KerML classifier disjoining remains valid.
+
+- **State behavior may remain active.** Stop emitting the non-normative
+  `missing_final_state` advisory; SysML 2.0 does not require a transition to `done`.
+
+- **Views and behavior follow declared model facts (#284–#287).** General, Browser and Grid
+  views retain port-definition conjugation without panicking. Action bodies admit typed view
+  usages, and semicolon entry/do/exit action declarations no longer produce false unresolved
+  references. Sequence messages follow event successions and transfer causality rather than
+  message names; cyclic ordering remains explicit. Adds the diagram `Conjugation` relationship
+  kind and advances the semantic vocabulary to v49; pins parser AST 282.
+
+- **Repeated redefinitions resolve inherited targets consistently (#255).** Sibling features no
+  longer shadow a redefinition target as their effective names settle. Repeated anonymous ends
+  retain namespace collision warnings without spurious target ambiguity; genuinely ambiguous
+  inherited targets remain ambiguous.
+
+- **State entry, do, and exit actions are derived collections.** `deriveStateDefinitionEntryAction`,
+  `deriveStateDefinitionDoAction`, `deriveStateDefinitionExitAction`, and the matching state-usage
+  rules project the first owned state subaction of that kind. `deriveStateDefinitionState` projects
+  the nested state usages. Calculation, allocation, rendering, and view definitions project their
+  matching owned usages. Case definitions and usages project their actor and subject parameters
+  and their first objective requirement. A view projects its first rendering and its composite
+  satisfied viewpoints. A port definition projects its conjugated port definition. A classifier
+  projects its owned subclassifications, and a feature projects its first reference subsetting
+  and cross subsetting, its cross feature, and its feature target. A function or expression
+  projects its first owned return parameter. A behavior projects its steps. A multiplicity
+  range projects its lower bound, upper bound, and bound sequence from the expressions it owns.
+
+- **Feature chain targets and inverses are derived collections.** `deriveFeatureChainingFeature`
+  projects the owned feature-chaining relationship, and `deriveFeatureOwnedFeatureInverting`
+  projects an owned `inverse of` relationship. The other KerML element, namespace, and feature
+  derivations stay uncovered where the pinned body branches, calls an operation, or needs a
+  relationship identity this publication does not own.
+
+- **A control node outside an action is reported.** `validateControlNodeOwningType` (SysML
+  8.3.17.6) warns with `control_node_invalid_owner` when a decide, merge, fork, or join node is
+  owned by a type that is neither an action definition nor an action usage, such as a constraint
+  definition. Calculation and state definitions still qualify, because they specialize action
+  definitions.
+
+- **Nested usages take their library specializations.** Composite SysML usages now use the
+  effective `isComposite` derivation, so a part inside an item subsets `Items::Item::subparts`,
+  a step inside a behavior subsets `Performances::Performance::enclosedPerformances`, and the
+  other contracted nested-usage checks resolve the same way. `event occurrence` consults the
+  `EventOccurrenceUsage` contracts. A bare `connect` and an interface end count as owned ends,
+  so binary connections and interfaces specialize `binaryConnections`, `BinaryInterface`, and
+  `binaryInterfaces`. The XMI anchor `Items::Item::subitem` resolves to the library feature
+  `Items::Item::subitems`. A two-ended connector typed by an association structure subsets
+  `Objects::binaryLinkObjects`.
+
+- **The Elan8 method libraries are no longer bundled.** `elan8/mbse-methodology` no longer ships a
+  SysML library: its decisions, assumptions and risks overlap the standard `ModelingMetadata` and
+  `RiskMetadata` libraries, and real models did not use the rest. The `method` managed library,
+  its pin (`config/libraries/method.json`), its reference page and its CI bundle are removed; the
+  domain libraries remain. `--disable-kpar-library method` and a `method` entry in
+  `spec42.disabledLibraries` are still accepted and have no effect.
+
+- **General views retain hierarchy and cross-links.** Ownership is drawn with nested boxes;
+  filtered allocations between exposed endpoints are included even when their owner is outside
+  the view. Reference membership stays distinct from composition, and allocation, redefinition
+  and reference-subsetting symbols follow SysML 2.0 graphical notation.
+  Explicit per-node expansion choices take precedence over the export depth default.
+  Interconnection views retain connections owned outside separately exposed modules;
+  closing a module also hides its internally owned boundary-to-boundary connections.
+  Edge labels stay on routed segments, and interconnection exports include their full view frames.
+
+- **The editor opens an interconnection view one part at a time (#262).** It drew every level
+  of parts. It now starts with the exposed parts and their direct parts closed; a part with parts
+  of its own carries the `+` / `-` control the general view has, and a connector ending inside a
+  closed part ends on a proxy at its boundary. `spec42 diagram` output is unchanged.
+- **Interconnection views follow the notation (#262).** A port shows the direction of its
+  directed features and those of its definitions, reversed by a conjugated typing; the derived
+  direction is a lowering fact kept apart from the authored one. A flow between features of two
+  ports is drawn between those ports, with its item. Names and port labels are written in full,
+  and a conjugated port is labelled `name : ~Type`.
+- **General views follow the notation (#262).** Compartment labels are centred, italic and lower
+  case, with `…` for members left out; a long member list continues in columns; typing,
+  subsetting and specialization lines go around boxes instead of through them.
+- **Diagram product and generator ABI (#262).** A diagram node carries `featureDirection`;
+  `DiagramElement` gains `feature_direction`, which changes the compatibility token again.
+
+- **Action flow views show the whole flow (#262).** Only `first a then b;` between two named
+  actions was drawn. Now drawn as well:
+  - the `then` shorthand. Its succession starts at the nearest occurrence usage written before it
+    (SysML 7.17.4), settled where the body is lowered and published to the diagram projection;
+  - start and done nodes; decision, merge, fork and join nodes; accept, send, perform,
+    assignment, if and loop actions. Kinds the generator vocabulary has no name for take their
+    notation role from the metamodel instead of `unsupported`;
+  - parameters on the boundary of their action, inherited ones included, and flows between the
+    actions that own two parameters. Accept and send actions carry their flags; a send action
+    was drawn as a final node;
+  - conditional successions with their guard in brackets, and `[else]`.
+- **Two lowering corrections (#262).** `if g then x; else y;` without braces is a guarded and a
+  default target succession of the body it is written in (8.2.2.17.8), not an `IfActionUsage`;
+  `if g { … } else { … }` is unchanged. `then accept …;` is the anonymous `AcceptActionUsage` it
+  declares, not a trigger on the enclosing action. No diagnostics change.
+- **State transition views show state actions and nested states (#262).** Entry, do and exit
+  actions are listed in a `state actions` compartment; a state that owns states shows them,
+  their transitions and its initial node inside it. Three or more transitions with one trigger
+  into one state share a line and one label. Both behaviour views are drawn in a frame carrying
+  the view's name, and action flows and sequences are spaced by the labels they hold.
+- **Diagram product and generator ABI (#262).** A diagram node carries `stateSubaction` and
+  `successionGuard`, and `direction` is set for every directed feature; `schemaVersion` stays 5.
+  `DiagramElement` gains `state_subaction` and `succession_guard`, which changes the
+  compatibility token: **a generator plugin built against 0.55.0 must be rebuilt.**
+
+- **Malformed textual notation is diagnosed precisely.** Unquoted reserved declaration names,
+  bare imports, and semicolons terminating result expressions produce parser diagnostics.
+  Quoted names remain valid, malformed names remain unresolved, and parsing and cache identity
+  preserve the source language. Pins sysml-v2-parser `5d5455b4` (AST 280) and semantic contract
+  v47 (#230).
+
+- **Inherited names and literal bindings are checked.** Typed usages report inherited feature
+  collisions and missing `:>>` operators. Namespace comparisons use metaclass conformance and
+  effective names; scalar literals must satisfy every receiver type, including quantity types (#230).
+
+- **Engineering constants evaluate through quantities and feature chains.** Same-unit arithmetic,
+  numeric scaling, and `NumericalFunctions::sum`, `max`, and `min` fold constant operands.
+  Feature chains honor usage redefinitions, compound unit literals retain their authored unit
+  syntax, and operations needing unit conversion report an explicit failure (#259).
+
+- **Feature queries preserve redefinition and member order.** Effective feature lists exclude
+  replaced inherited features, ordered owned/nested derivations retain authored order, and a
+  dedicated query exposes effective names with provenance while retaining authored names (#208).
+
+## [0.55.0] - 2026-10-12
+
+- **Feature Inspector starts with directly inherited features.** Features declared by more
+  distant ancestors remain available under **Show all inherited features**, with their declaring
+  types preserved.
+
+- **Inspecting standard-library definitions works outside the workspace.** Navigating to a
+  definition such as `Boolean` or `String` no longer produces feature-inspector errors about
+  the document being outside the configured projects. Library inspection uses an admitted
+  project publication and retains project context when navigating into shared libraries.
+- **Upgrade notes.** The semantic contract version is now
+  `spec-rule-burndown-element-kinds-v43`; consumers of `model-export` and the published model
+  must accept the new element kinds and memberships listed below. Three changes alter results
+  for models that were clean on 0.54.1: members without authored visibility are public in every
+  namespace (#231), comment and documentation bodies are published processed instead of as
+  authored (#210), and the many new KerML/SysML validations can report on existing models.
+  Pins sysml-v2-parser `c28ca768` (`PARSE_AST_VERSION` 268).
+- **An inherited `perform Pkg::action;` can be redefined by name.** `part variant :> family {
+  perform action :>> providePower { ... } }` reported `unresolved_reference` when `family` wrote
+  `perform Tree::providePower;`. An anonymous perform usage is named by the action it performs
+  (`PerformActionUsage::namingFeature`); spec42 only derived names from redefinitions, so it
+  resolved the name only when the action happened to be lexically visible. That name does not
+  also implied-redefine the performed action, and a qualified redefinition can step through the
+  perform (`action :>> providePower::generate`).
+- **`perform` in an action usage body is accepted (#256).** `action group { perform stepA; }`
+  reported `unexpected keyword perform in action body`; only an action definition body took the
+  member, although both are the same `ActionBody`. A function tree can now be written with
+  usages. Accepted with it: an action usage with a value (`action :>> generate = fourCylinder;`),
+  `then while`, `then loop` and `then for` succession targets, `perform` inside a `timeslice` or
+  other occurrence usage body, `perform a redefines b;`, and a keyword-less action body member
+  that starts with `:`, `:>` or `:>>`. Pins sysml-v2-parser `c28ca768` (`PARSE_AST_VERSION` 268),
+  the merge commit of `elan8/sysml-v2-parser#185`.
+
+- **Diagram notation follows SysML 8.2.3 more closely.** An assessment of the general,
+  interconnection, state transition and action flow views against the graphical notation is
+  in `docs/reference/DIAGRAM-NOTATION-ASSESSMENT.md`. Fixed from it:
+  - A transition ends in an open arrowhead and its label is plain text, not a framed box.
+  - A state shows `Â«stateÂ»` above its name.
+  - A part that shows its parts keeps the solid outline of a part; it was dashed, which is the
+    notation of a reference.
+  - A part drawn closed is marked by `...` in its lower left corner, and a connector that ends
+    on a feature inside it ends on a proxy, a filled dot on the boundary labelled with the
+    feature's path. Each proxy has its own row, like a port. Parallel relationships retain
+    their identities and kinds when they share a proxy.
+  - Names and types in an interconnection view are no longer cut at 18 characters, nor port
+    labels at 20; the part is as wide as its labels need.
+  - A port label sits outside the part, beside its port, and a port usage with an authored
+    direction carries an arrow in its square. A part is as wide as its name and type.
+  - In a general view the definition (typing) line is solid with a hollow triangle and two
+    dots at the definition, and the subsetting line is solid with a hollow triangle. Both were
+    dashed with an open arrowhead.
+  - The shaded header of a part in an interconnection view holds its keyword, name and type;
+    the type line hung below it. The shading no longer paints over the part's border.
+  - Roots of an interconnection view that are not connected to each other are spread over
+    columns with layout partitions instead of stacking in one. The same is prepared for the
+    parts inside a container, but the pinned `elkrs` honours partitions on the top-level
+    graph only.
+  - A sequence view places lifelines 176 px apart and messages 52 px, and an exported one is
+    as wide as its lifelines and title, so long titles are not cropped.
+  - The figure of an interconnection view includes its ports and their labels.
+
+- **Diagrams are laid out to be read on a page.** A figure exported for a document came out
+  with text of 0.2 to 4 pt once it was fitted to an A4 page: boxes had a fixed size whatever
+  they held, parts and states were 140 to 230 px apart, a state machine always ran left to
+  right, and every figure was padded out to a 1280 x 900 canvas. The editor shows the same
+  layout, so the same diagrams needed constant panning there.
+  - A state is as large as its name and its `entry`/`do`/`exit` lines; a part in an
+    interconnection view as large as its name, type and port labels. A container takes the size
+    of its content.
+  - Spacing is what orthogonal routing and labels need. In an interconnection view the gap
+    between facing parts grows with the longest connector name it has to hold.
+  - A state machine is laid out both across and down, and the one that is larger on an A4 page
+    is kept, unless `stateLayoutDirection` chooses. It starts at its initial state.
+  - A port of the outermost part of an interconnection view sits on the side its inner
+    connectors lead away from.
+  - An exported figure is as large as its content plus a 16 px margin; the background covers
+    exactly the view box.
+  - A general view that shows containment is laid out as a compact tree instead of one row
+    for each depth: members without members of their own are listed below their owner, other
+    members stand side by side and wrap into rows, and the wrap that is largest on an A4 page
+    is kept. A box is as narrow as 120 px when its text allows.
+  - `spec42 diagram --depth <levels|all>` (default `1`) limits how many levels a view draws
+    below its exposed elements. In an interconnection view a part with deeper content is drawn
+    closed, and a connector that ends inside it ends on a proxy on its boundary. In a general view deeper members stay listed in the compartments
+    of the last level drawn, as in the editor before an element is expanded. The diagram
+    product is unchanged. `diagram_draw::Nesting` and
+    `pipeline::render_svg_from_payload_str_nested` expose the same choice to embedders; the
+    editor still draws every level of an interconnection view.
+
+- **`satisfy` of a requirement definition is reported (#251).** `satisfy ReqDef by drone;`
+  reported nothing: `satisfy_invalid_endpoint_kind` accepted any requirement, definition or
+  usage. `validateSatisfyRequirementUsageReference` requires a requirement usage. Write `satisfy
+  requirement : ReqDef by drone;`.
+- **A usage typed by a usage is reported (#251).** `out power : electricPower;`, where
+  `electricPower` is an ISQ attribute usage, types a feature by a feature. `incompatible_type_kind`
+  covered only a part typed by a part; it now covers every SysML usage, since `Usage::definition`
+  is a Classifier. KerML features are not affected. Pins sysml-v2-parser `b4a26e22`
+  (`PARSE_AST_VERSION` 267), which reads `ref x :> y` in an action body as a subsetting; before,
+  the Systems Library's `ForLoopAction` would have been reported.
+- **`#Tag` before a member of a part, requirement or action definition body annotates that
+  member.** `part def P { #Tag calc c; }` and `requirement def R { #Tag attribute note; }`
+  reported `unsupported_part_definition_member` / `unsupported_requirement_definition_member` and
+  dropped the annotation; only `#Tag dependency` was bound there. These bodies now use the same
+  binding as package and part usage bodies.
+
+- **Keyword-less members of a `metadata def` are reference usages.** `metadata def M { :>
+  annotatedElement : SysML::RequirementUsage; }` was lowered as an attribute, because the parser
+  returned the same node for it as for `attribute x;`. An attribute implies `Base::DataValue`,
+  which no metaclass specializes, so `metadata_annotated_element_incompatible` fired on every
+  use of such a definition, including the standard library's `MeasureOfPerformance`,
+  `CauseMetadata` and `DerivedRequirementMetadata`. The member is now a `DefaultReferenceUsage`
+  (`ref :>> annotatedElement : T;` a `ReferenceUsage`), per the grammar. Their type references
+  also seed the library closure, so `SysML::â€¦` resolves when only such a member names it. Pins
+  sysml-v2-parser `7217b9e4` (`PARSE_AST_VERSION` 266).
+- **Association end-type rules wait for the Links library.** An end with no authored type takes
+  its type from the `Links::BinaryLink` / `Links::Link` end it redefines. Without that library
+  `assoc Pair { end feature x; end feature y; }` reported `association_end_type_not_one` twice
+  and `association_related_types_insufficient` once. An empty type set is now left unanswered
+  when the publication has no resolved link anchor.
+- **`#Tag` prefix metadata is owned through an OwningMembership.** It was published with a
+  feature membership, so `#Security enum def Level { â€¦ }` reported
+  `variation_owns_feature_membership` at the tag. `PrefixMetadataMember` is an OwningMembership,
+  as `@Tag` already was.
+- **`calc` usages keep their full prefix and every type.** `individual calc c;` and `calc c :
+  C1, C2;` lower through the shared `OccurrenceUsagePrefix` and `Typings`, and a constraint body
+  lowers its action-body members (`constraint def C { fork f; }`).
+
+- **Body result expressions are elements.** A calculation, constraint, function or KerML type
+  body expression is now its own Expression, owned through a `ResultExpressionMembership` (role
+  `result-expression`) with its own result, and owns its evaluation, operand references and
+  nested expressions; the owner's value and expression body are derived from it. The implied
+  binding connector between the owner's result and the result expression's result is published,
+  so `checkExpressionResultBindingConnector` and `checkFunctionResultBindingConnector` are decided
+  (KerML 8.3.4.7.3/4).
+
+- **Result expression memberships are checked.** A function, calculation or constraint body with
+  more than one result expression reports `function_multiple_result_expressions`, an expression
+  body `expression_multiple_result_expressions`, and a result expression in the body of a type
+  that is neither reports `result_expression_membership_invalid_owner` (KerML 8.3.4.7.3/4/7).
+
+- **Namespace-level `connection X;`, `interface X;` and `calc X;` are usages.** They take the
+  usage library-specialization anchors (`Connections::connections`, `Interfaces::interfaces`,
+  `Calculations::calculations`), and an interface usage now records its prefix modifiers,
+  direction, multiplicity and `#` extension keywords; a calculation usage records `ref` and
+  `ordered`/`nonunique`.
+
+- **A type owns at most one multiplicity.** A KerML type with both a `[m..n]` and a
+  `multiplicity` body member (or two such members) reports `type_multiple_multiplicities` at each
+  extra one (KerML 8.3.3.1.10 validateTypeOwnedMultiplicity).
+
+- **Directed control nodes are referential.** A `ControlNodePrefix` (`in fork g;`, `individual`,
+  a portion kind, `#Tag`) is now lowered onto the control node, and a control node that is not
+  composite reports `control_node_not_composite` (SysML 8.3.17.6 validateControlNodeIsComposite).
+
+- **`*` is a LiteralInfinity expression.** An unbounded multiplicity bound (`[*]`, `[0..*]`) and a
+  `*` written as a value are now published as `LiteralInfinity` elements specializing
+  `Performances::literalInfinityEvaluations` (KerML 8.3.4.8.13), and a single-bound `[n]` keeps
+  its authored form (no `lowerBound`) while its effective lower bound equals `n`. The generator
+  wire `Metaclass` gains `LiteralInfinity`, so generator guests must be rebuilt.
+
+- **Non-literal multiplicity bounds are type-checked.** A bound that references a feature (`[count]`)
+  or does integer arithmetic over feature references now resolves those names, and a bound whose
+  result is not an Integer (e.g. a `Real` feature) reports `multiplicity_bound_invalid`
+  (KerML 8.3.4.11.2).
+
+- **Filter conditions must be model-level evaluable.** A package or view `filter` whose condition
+  references a feature featured by an ordinary type (so its value depends on an instance) reports
+  `filter_condition_not_model_level_evaluable` (KerML 8.3.4.13.2).
+
+- **Metadata annotated-element restrictions are checked.** A metadata feature whose metaclass
+  restricts `annotatedElement` (for example `SemanticMetadata`, which annotates only types) now
+  reports `metadata_annotated_element_incompatible` when it annotates an element of another
+  metaclass, comparing against the reflective `KerML`/`SysML` library metaclasses.
+
+- **Feature chains resolve through imports and check featured-within conformance.** Each `.` hop
+  of a feature chain now also sees the previous feature's public imports, as a qualified name
+  does, and a hop that is not featured within the previous chaining feature is reported as
+  `feature_chaining_not_featured_within_previous` (KerML validateFeatureChainingFeatureConformance).
+
+- **Non-integer literal multiplicity bounds are rejected.** A bound written from literals alone
+  that is not an integer (`[1.5]`, `["a"]`, `[true]`) is published as a `NonIntegerLiteral`
+  multiplicity bound and reported as `multiplicity_bound_invalid` (KerML 8.3.4.11.2).
+
+- **`X.metadata` resolves its referenced element.** A metadata access expression's qualified name
+  now resolves (any Element) as a `metadataAccessTarget` relationship from its
+  `MetadataAccessExpression`, so the expression is no longer reported as unsupported. The diagram
+  relationship vocabulary gains `metadataAccessTarget`.
+
+- **Comments, documentation and textual representations are elements.** Every `comment`, `doc`
+  and `rep` member is published as a `Comment`/`Documentation`/`TextualRepresentation` element
+  owned by the namespace it is written in, carrying its body. Each `about` target of a comment is
+  an `annotation` relationship from the Comment to the named element, so `comment about Thing`
+  now annotates `Thing` rather than appearing as documentation of its package. The generator wire
+  `Metaclass` vocabulary gains `Comment` (compatibility token changed; guests must be rebuilt).
+
+- **Literal, null and metadata-access expressions are elements.** Every literal (`LiteralBoolean`,
+  `LiteralInteger`, `LiteralRational`, `LiteralString`), `null`/`()` (`NullExpression`) and
+  `X.metadata` (`MetadataAccessExpression`) is published as its own anonymous Expression of that
+  metaclass -- a FeatureValue's value Expression, a multiplicity bound, an operator argument, or a
+  node nested in a body -- and specializes its `Performances` library anchor
+  (`literalIntegerEvaluations`, ...). The generator wire `Metaclass` vocabulary gains these
+  metaclasses (compatibility token changed; guests must be rebuilt).
+
+- **Conjugated specific types.** The new `specialization_specific_conjugated` error checks KerML
+  `validateSpecializationSpecificNotConjugated` for owned specializations and standalone KerML
+  relationship declarations (`subclassifier C specializes B;` where `C` conjugates a type).
+
+- **Every state action form is a state subaction.** A bare `entry;` and the effect forms
+  (`entry assign ...;`, `do send ...;`, `do accept ...;`) now publish the action that occupies the
+  state's entry/do/exit membership and redefines `States::StateAction::entryAction`/`doAction`/
+  `exitAction`, so SysML `checkActionUsageStateActionRedefinition` is evaluated. Effect operands
+  and an entry/do/exit body on the reference form, which were silently dropped, are now reported
+  as `unsupported_state_definition_member`.
+
+- **Exhibit states.** `exhibit state s;` and `exhibit <path>;` now publish an ExhibitStateUsage
+  (`exhibit-state`), a state usage that is also a perform action usage; the path form references
+  the exhibited state, and the new `exhibit_target_invalid_kind` diagnostic checks SysML
+  `validateExhibitStateUsageReference`. An exhibited state of a part specializes
+  `Parts::Part::exhibitedStates` and keeps the `States::stateActions` default. A generated
+  library rule set with no default-supertype rule (exhibit and perform usages, occurrence
+  definitions) no longer hides the nearest general's default, so `occurrence def` now
+  specializes `Occurrences::Occurrence` and `perform` usages `Actions::actions`.
+
+- **State and transition role specializations.** A composite substate now subsets
+  `States::StateAction::exclusiveStates` (or `substates` in a parallel state), a composite
+  transition from a state in a state subsets `States::StateAction::stateTransitions`, and one in
+  an action whose source is not a state subsets `Actions::Action::decisionTransitions`, so SysML
+  `checkStateUsageExclusiveStateSpecialization`, `checkStateUsageSubstateSpecialization`,
+  `checkTransitionUsageStateSpecialization` and `checkTransitionUsageActionSpecialization` are
+  evaluated.
+
+- **Trigger argument validation.** `accept when|at|after <argument>` now lowers its
+  TriggerInvocationExpression with its kind. New diagnostics check SysML
+  `validateTriggerInvocationExpressionWhenArgument` (`trigger_when_argument_not_boolean`),
+  `validateTriggerInvocationExpressionAtArgument` (`trigger_at_argument_not_time_instant`) and
+  `validateTriggerInvocationExpressionAfterArgument` (`trigger_after_argument_not_duration`) for a
+  literal or feature-reference argument.
+
+- **Constructor argument redefinitions.** A positional `new T(...)` argument now redefines the
+  public feature of `T` at its position (owned features first, then inherited ones), and KerML
+  `checkConstructorExpressionResultFeatureRedefinition` checks that every argument redefines
+  exactly one public feature of the instantiated type.
+
+- **Positional parameter redefinitions.** A parameter of a behavior, step, calculation or action
+  now redefines the parameter at its position of every behavior or step its owner specializes
+  (KerML `checkFeatureParameterRedefinition`), and a positional invocation argument redefines the
+  callee's parameter at its position. The parameter and result redefinition checks report an
+  unsupported prerequisite, rather than a verdict, while the publication has expressions or
+  action parameters lowering does not represent.
+
+- **Assignment target parameters.** An `assign` now owns its `target` parameter, whose
+  `startingAt` feature owns the `accessedFeature`. They redefine the library's
+  `startingAt`/`accessedFeature`, and the accessed feature redefines the assignment's referent, so
+  SysML `checkAssignmentActionUsageStartingAtRedefinition`,
+  `checkAssignmentActionUsageAccessedFeatureRedefinition` and
+  `checkAssignmentActionUsageReferentRedefinition` are evaluated.
+
+- **Result redefinitions.** A Function's or Expression's result now redefines the result of
+  every Function or Expression its owner directly specializes, including the result it inherits
+  (KerML `checkFeatureResultRedefinition`): a calculation's `return` redefines
+  `Performances::Evaluation::result`, and an invocation's result redefines its Function's result
+  and so takes its type.
+
+- **Every invocation is its own expression.** A nested invocation or constructor (`f(g(x))`,
+  `new A(new B())`), and one written directly in a constraint, calculation or filter body, is now
+  its own Expression with its own result and argument features. A nested callee no longer types
+  the expression it is nested in, a nested constructor settles its own instantiated type, and a
+  calculation or constraint callee is classified as a Function, so its invocation's result is not
+  typed by it. A subject, actor or stakeholder named as an argument is an `in` parameter.
+
+- **Instantiation argument validation.** Each argument of a feature value's top-level invocation
+  or `new T(...)` is now an argument feature, and a named argument redefines the parameter it
+  names, resolved among the invoked type's members. New diagnostics check KerML
+  `validateInvocationExpressionParameterRedefinition` (`invocation_argument_redefines_no_parameter`),
+  `validateInvocationExpressionNoDuplicateParameterRedefinition`
+  (`invocation_duplicate_parameter_redefinition`) and
+  `validateConstructorExpressionNoDuplicateFeatureRedefinition`
+  (`constructor_duplicate_feature_redefinition`) over named arguments. A named argument that
+  names no member of the invoked type is now reported unresolved.
+
+- **Feature reference referent validation.** KerML 8.3.4.8.5
+  `validateFeatureReferenceExpressionReferentIsFeature` (`feature_reference_referent_not_feature`)
+  reports a name used as a value that references a type or other non-feature. The operand of
+  `meta`, a `->f g` function reference and an `accept T` payload type are not feature references.
+
+- **Implied library specializations follow the metaclass hierarchy.** A generated
+  `specializesFromLibrary` rule now applies to the specializations of its metaclass through the
+  nearest rule-carrying metaclass, as the Pilot's `ImplicitGeneralizationMap` does: successions
+  subset `Occurrences::happensBeforeLinks`, `bind` connectors `Links::selfLinks`, enumeration
+  definitions specialize `Base::DataValue` and their literals subset `Base::dataValues`. The
+  published metaclass vocabulary gains the abstract `Succession` and `ControlNode`. Dotted
+  succession ends now resolve in the succession's owning namespace.
+
+- **Cross subsetting validation.** New diagnostics check KerML 8.3.3.3.2
+  `validateCrossSubsettingCrossingFeature` (`cross_subsetting_crossing_feature_invalid`) and
+  `validateCrossSubsettingCrossedFeature` (`cross_subsetting_crossed_feature_invalid`).
+
+- **Event occurrence references.** The new `event_occurrence_reference_not_occurrence` diagnostic
+  checks SysML 8.3.9.2 `validateEventOccurrenceUsageReference`.
+
+- **Asserted constraint references.** `assert <name>;` now lowers as an `AssertConstraintUsage`
+  reference-subsetting the named feature instead of an unsupported member, and the new
+  `assert_target_invalid_kind` diagnostic checks SysML 8.3.20.2
+  `validateAssertConstraintUsageReference`.
+
+- **State subaction kind validation.** New diagnostic `state_duplicate_subaction_kind` checks SysML
+  8.3.18.5 `validateStateDefinitionStateSubactionKind` and 8.3.18.6
+  `validateStateUsageStateSubactionKind`: a state owns at most one `entry`, `do` and `exit` action.
+
+- **Invocation instantiated type validation.** KerML 8.3.4.8.8
+  `validateInvocationExpressionInstantiatedType` (`invocation_instantiated_type_not_behavior`)
+  reports an invocation `F(...)` whose callee is neither a behavior nor a feature typed by one;
+  constructing a structure or data value requires `new T(...)`.
+
+- **Return parameter memberships.** An authored `return` parameter now publishes its
+  `ReturnParameterMembership` as the `return-parameter` membership role, and new diagnostics check
+  KerML 8.3.4.7.8 `validateReturnParameterMembershipOwningType`
+  (`return_parameter_membership_invalid_owner`) and, as the Pilot does, at most one owned return
+  parameter per function or expression (`function_result_parameter_count`,
+  `expression_result_parameter_count`).
+
+- **Membership owner and metadata typing validations.** New diagnostics check SysML 8.3.26.2
+  `validateExposeOwningNamespace` (`expose_invalid_owner`), 8.3.24.2
+  `validateRequirementVerificationMembershipOwningType` (`verification_membership_invalid_owner`),
+  8.3.21.7 `validateRequirementConstraintMembershipOwningType`
+  (`requirement_constraint_invalid_owner`), 8.3.18.9 `validateTransitionUsageTriggerActions`
+  (`transition_trigger_source_not_state`), and KerML 8.3.4.12.3
+  `validateMetadataFeatureMetaclass` (`metadata_type_not_metaclass`) and
+  `validateMetadataFeatureMetaclassNotAbstract` (`metadata_metaclass_abstract`).
+  `transition_endpoint_invalid_state` now applies only to transitions owned by a state; a
+  transition in an action body legitimately moves between actions.
+
+- **Usage referentiality follows the SysML derivation.** The published `Usage::isReference` (and
+  the composition every rule reads) now treats a directed usage, an end usage, a usage with no
+  featuring type (such as a package-level part), an `event` occurrence, a perform action, and a
+  port usage outside a port as referential, as the Pilot's usage post-processing does, so
+  `validateUsageIsReferential` holds by construction. A package-level usage now reports
+  `isReference = true`.
+
+- **Feature variability and portion validations.** New diagnostics check KerML 1.0 8.3.3.3.4
+  `validateFeatureIsVariable` (`variable_feature_owner_not_occurrence`), KerML
+  `validateFeaturePortionNotVariable` (`portion_feature_is_variable`), KerML 8.3.4.10.2
+  `validateFeatureValueIsInitial` (`initial_value_feature_not_variable`, an `:=` value on a
+  feature that is not variable) and SysML 8.3.9.4 `validateOccurrenceUsagePortionKind`
+  (`portion_owner_not_occurrence`), and KerML `validateFeatureValueOverriding`
+  (`feature_value_overrides_non_default`, a value on a feature that redefines a feature whose
+  value is bound rather than `default`).
+
+- **Individual occurrence validations.** SysML 8.3.9.4 `validateOccurrenceUsageIndividualDefinition`
+  (`occurrence_multiple_individual_definitions`) and `validateOccurrenceUsageIndividualUsage`
+  (`individual_usage_without_individual_definition`) are now checked over each occurrence usage's
+  effective types.
+
+- **Namespace, type-relationship, subsetting and objective validations.** New diagnostics check
+  KerML 8.3.2.4.2 `validateImportTopLevelVisibility` (`top_level_import_not_private`), KerML
+  8.3.3.1.10 `validateType{Unioning,Intersecting,Differencing}TypesNotSelf`
+  (`type_relationship_operand_is_self`) and KerML 8.3.3.3.10
+  `validateSubsettingConstantConformance` (`subsetting_constant_mismatch`, for authored and
+  implied subsettings and redefinitions); `duplicate_role_member` now also reports a second
+  objective of a case definition or usage (SysML `validateCase{Definition,Usage}OnlyOneObjective`).
+
+- **Feature chaining validations.** KerML 8.3.3.3.4 `validateFeatureChainingFeatureNotOne`
+  (`feature_chaining_single_operand`) and `validateFeatureChainingFeaturesNotSelf`
+  (`feature_chaining_includes_self`) are now checked, as are KerML
+  `validateFeatureOwnedReferenceSubsetting` (`feature_multiple_reference_subsettings`) and
+  `validateFeatureOwnedCrossSubsetting` (`feature_multiple_cross_subsettings`).
+
+- **KerML classifier specialization kinds.** `incompatible_specializes_kind` now also reports KerML
+  `validate{DataType,Class,Structure,Behavior}Specialization` violations for KerML classifiers and
+  SysML definitions alike, at the specialization reference.
+
+- **KerML namespace distinguishability.** `duplicate_namespace_member` now also reports same-named
+  members of a package or KerML type when either member is a KerML element (or a usage form the
+  SysML family table does not classify) and one member's metaclass conforms to the other's
+  (KerML `Membership::isDistinguishableFrom`).
+
+- **Redefinitions between features with the same featuring types.**
+  `redefinition_featuring_type_incompatible` now also reports a redefinition whose redefining and
+  redefined features have the same effective featuring types, such as a feature redefining a
+  sibling (KerML `validateRedefinitionFeaturingTypes`).
+
+- **Subsetted feature accessibility.** `subsetting_target_not_accessible` reports a subsetting or
+  reference subsetting whose subsetted feature is featured by types none of the subsetting
+  feature's featuring types specialize (KerML `validateSubsettingFeaturingTypes`).
+
+- **Negative multiplicity bounds.** A signed integer literal bound (`[-1]`) is now published as a
+  literal, and a negative bound is reported as `multiplicity_bound_invalid` (KerML
+  `validateMultiplicityRangeBoundResultTypes`) instead of `invalid_multiplicity`, which now means
+  only an upper bound below the lower bound.
+
+- **Case objectives redefine the objectives they specialize.** An `objective` is now published as
+  an `objective-requirement` (a `RequirementUsage` under an `ObjectiveMembership`, membership role
+  `objective`) and implicitly redefines the objective of every case definition or case usage its
+  owner specializes, including `Cases::Case::obj` (SysML `checkRequirementUsageObjectiveRedefinition`,
+  now evaluated). Objective element identities change accordingly (kind `objective-requirement`).
+
+- **Positional end redefinitions follow KerML `checkFeatureEndRedefinition`.** An owned end now
+  redefines the end at its position in each direct supertype's full `endFeature` list (including
+  ends the supertype inherits and the ends of implied library supertypes such as
+  `Links::BinaryLink::source`/`target` or `Connections::BinaryConnection::source`/`target`), a
+  bare connector end occupies its position, and the pairing is implied alongside an authored
+  redefinition. The check is evaluated; an obligation involving a bare connector end is reported
+  unresolved. An end's owned cross feature now also subsets the cross feature of every end it
+  redefines (`checkFeatureOwnedCrossFeatureRedefinitionSpecialization`), and a connector end's
+  `[m]` is published as its cross multiplicity rather than the end's own multiplicity.
+
+- **Library-anchored implied redefinitions.** A `for` loop variable now redefines
+  `Actions::ForLoopAction::var`, a feature-chain expression's source target redefines
+  `ControlFunctions::'.'::source::target`, and an `entry`/`do`/`exit` action redefines
+  `States::StateAction::entryAction`/`doAction`/`exitAction`, as implied relationships published
+  alongside any authored redefinition. The KerML/SysML `checkForLoopActionUsageVarRedefinition`
+  and both feature-chain redefinition checks are now evaluated instead of reported unsupported.
+
+- **KerML association, connector, flow and end-feature validations.** New diagnostics check KerML
+  1.0 8.3.3.3.4 / 8.3.4.4.2 / 8.3.4.5.2-3 / 8.3.4.9.2: an end feature with a non-1..1 multiplicity
+  (`end_feature_multiplicity_not_one`), an association end without exactly one type
+  (`association_end_type_not_one`), a concrete association or connector relating fewer than two
+  types or features (`association_related_types_insufficient`,
+  `connector_related_features_insufficient`), a non-binary binding (`binding_connector_not_binary`),
+  a more-than-binary association or connector specializing `Links::BinaryLink`
+  (`binary_association_end_count`, `binary_connector_end_count`), and a flow with more than one
+  `of` payload (`flow_multiple_payload_features`). KerML `end feature` and bare
+  connector ends now count toward the implied `BinaryLink` / `BinaryLinkObject` / `binaryLinks`
+  specializations.
+
+- **Variation rules.** A `variation` definition or usage is now effectively abstract (published as
+  an implied modifier, distinct from an authored `abstract`), and new diagnostics report a
+  variation that owns non-variant features (`variation_owns_feature_membership`) or specializes
+  another variation (`variation_specializes_variation`).
+
+- **Assignment targets must be variable.** `assign x := v;` now reports
+  `assignment_target_not_time_varying` when `x` cannot have time-varying values (SysML
+  `validateAssignmentActionUsage`), e.g. a package-owned attribute or a composite action.
+
+- **Control-node succession validations.** Successions attached to `decide` / `merge` / `fork` /
+  `join` nodes are now checked against SysML 8.3.17.6-13: authored end multiplicities
+  (`control_node_incoming_multiplicity`, `control_node_outgoing_multiplicity`,
+  `decision_node_outgoing_multiplicity`, `merge_node_incoming_multiplicity`) and at-most-one
+  incoming/outgoing successions (`decision_node_multiple_incoming`, `fork_node_multiple_incoming`,
+  `join_node_multiple_outgoing`, `merge_node_multiple_outgoing`). Succession end multiplicities
+  (`first [m] a then [n] b`) are now published facts.
+- **`metadata Tag about x;` is typed by `Tag`.** A `metadata` usage without `:` or `typed by`
+  was published as an untyped usage *named* `Tag`. So the SysML training examples'
+  `metadata SafetyFeature about â€¦` and `metadata ToolExecution { â€¦ }` had no metadata type, their
+  body redefinitions did not resolve, and `metadata Thing about Thing;` reported spurious
+  `ambiguous_reference` errors. Per `MetadataUsageDeclaration` the lone name is the type; a name
+  is declared only before `:` / `typed by`. Pins sysml-v2-parser `827f9b44`.
+- **`#Tag` prefix metadata in package and part-usage bodies annotates the member after it.**
+  `#Tag requirement r;` in a package and `#moe attribute range;` in a part body were reported as
+  `unsupported_package_member` / `unsupported_part_usage_member` and the annotation was dropped.
+  They now publish a metadata annotation on that member, like `@Tag` and `#refinement
+  dependency` already did. A tag with no member to bind to (before an `import`, say) is still
+  reported as unsupported.
+- **Metadata annotations no longer count as owned usages or metadata body features.** `@Tag`
+  inside a `port def`, a port usage or a metadata usage's body reported
+  `port_owned_usage_composite`, `port_nested_usage_composite` or `metadata_body_feature_invalid`.
+  An annotation is owned through an OwningMembership, so it is not an `ownedUsage` or
+  `ownedFeature` of its owner.
+- **Members without authored visibility are public in every namespace (#231).** A member of a
+  definition or usage with no `public`/`private`/`protected` keyword was treated as private,
+  because only package members got the public default. So `import vehicle::*;` (a part usage) and
+  `import Vehicle::*;` (a part definition) imported nothing, and inspection published
+  `(visibility private)` for such members. KerML/SysML make every membership public by default
+  except imports, which stay private. `expose vehicle::*` now uses the same rule instead of its
+  own workaround.
+- **Comment, documentation and textual-representation bodies are published as KerML defines
+  them (#210).** The published body was the authored text between `/*` and `*/`, so a multi-line
+  `doc` kept every continuation `*` and the indentation before it, and consumers (hover, reports,
+  generated documents) each had to strip them. Bodies are now processed per KerML 8.2.3.3.2
+  note 1: the white space after `/*` up to the first line break is dropped, and on each later
+  line the leading white space, one `*`, and one following space are removed. Line structure
+  (paragraphs, list items) is kept. `doc /* a wheel */` now publishes `"a wheel "` instead of
+  `" a wheel "`.
+
+## [0.54.1] - 2026-10-02
+
+- **Short names are published wherever SysML's `Identification` allows them (#236).** A short name
+  (`<'V1'>`) is legal on every definition and usage, but on `verification`, `analysis`, `case`,
+  `state`, `exhibit state`, `concern` (and `concern def`), `viewpoint`, `rendering`, `enum`,
+  `allocation`, `interface`, `metadata`, `assert constraint`, `succession`, `binding`,
+  `transition`, directed parameters (`in`/`out`/`inout`), `stakeholder` and `dependency` it made
+  the declaration fail to parse (`unsupported_grammar_form`, or an `unexpected keyword` error
+  inside a body), so the element dropped out of the model. Each of these now publishes its short
+  name, which also resolves as a name. Short-name-only (`verification <'V1'> : V;`) and
+  anonymous declarations are accepted too, and `concern`/`case` usages are modelled inside part
+  bodies. Pins sysml-v2-parser `3ccf83ea` (elan8/sysml-v2-parser#157 and #160).
+  - A named `binding b bind x = y;` member now publishes its declared name as well; it was
+    lowered as an anonymous binding.
+
+- **Repeated `#derivation` connections resolve quickly (#239).** Each metadata annotation
+  walked the specialization graph for every library feature value while looking up
+  `SemanticMetadata::baseType`. That lookup now happens once per model, so a requirements
+  model with hundreds of derivation connections resolves in seconds instead of minutes.
+
+## [0.54.0] - 2026-10-01
+
+- **Requirement derivation, and `#` prefix metadata on connections (#221, #222, #223).** Pins
+  `elan8/sysml-v2-parser` to the `ConnectionUsage` prefix migration (elan8/sysml-v2-parser#152).
+  - `#derivation`, `#original`, `#derive` (and `#multicausation`, `#cause`, `#effect`, ...) are
+    lowered as ordinary prefix metadata, whose `SemanticMetadata` `baseType` specializes the
+    annotated connection or end (a `#derivation connection def` specializes `Derivation`; an
+    `#original` end subsets `originalRequirements`). The hard-coded derivation shorthand
+    (`synthesize_derivation_shorthand`) is gone, so the metadata now resolves through
+    `RequirementDerivation` like any other: a model that uses it without importing the library
+    reports `unresolved_reference`, and ends keep their authored name (`end #original r1 : Req1`).
+  - A `#derivation connection` (or any prefixed connection) inside a part usage body is modelled
+    instead of reported as `unsupported_part_usage_member` (#221).
+  - A `def`-less `connection d { end â€¦ }` is a `ConnectionUsage`, not a `ConnectionDefinition`
+    (#222). Connection usages carry their full prefix, typing, multiplicity, `nonunique` and
+    specialization clauses; standard-library connection features (`Connections::connections`,
+    `DerivationConnections::derivations`, ...) are usages too, so a connector now implicitly
+    *subsets* `connections` instead of being typed by it.
+  - New `derivation_relationships()` query (`sysml_query`, `generator_api`, generator protocol
+    operation `DerivationRelationships`): each `DerivationConnections::Derivation` connection
+    usage with its `original`, `derived` and `unclassified` ends, with the same outcome shape as
+    satisfy ends, including feature chains (#223). The generator compatibility token moves.
+
+- **A feature-chain satisfying element resolves (#213).** `satisfy R by a.b` names a feature chain
+  (SysML v2 8.2.2.21.2), and the chain as a whole is the satisfying feature (8.3.21.10). It used to
+  publish `SatisfyEndpoint::Unsupported`; it now publishes `SatisfyEndpoint::FeatureChain` with the
+  feature each segment resolves to, in order (`a`, then `b`), and the authored segments. A chain
+  with an unresolved hop is `Unresolved`. The dotted operand keeps its `satisfyTarget` reference
+  kind (it was `memberAccessOperand`), resolved hop by hop.
+  - Generator ABI: `SatisfyEndpoint` gains `FeatureChain { path, authored }`. The wire schema
+    fingerprint and compatibility token move, so every guest must be rebuilt.
+- **`satisfy requirement r : R by x` publishes its requirement (#220).** The inline-declaration
+  form of satisfy published its requirement end as `Unsupported` and dropped its `: R` typing. The
+  satisfy usage is itself the declared requirement usage (SysML v2 8.4.17.3), so its requirement
+  end is now the usage itself, typed by `R`. The satisfy usage's own specialization clauses
+  (`:`, `:>`, `:>>`, `::>`, `crosses`) are lowered in both forms.
+
+- **Interconnection connectors show their name or type (#215).** A connector is labelled with its
+  authored name, else its type (`: PowerLink`); an anonymous, untyped `connect a to b` stays
+  unlabelled instead of reading `connector`. Labels inside a container part are placed again:
+  only the container's name header is an obstacle, not its whole box. A label with no clear place
+  still falls back to the connector tooltip.
+
+- **Formatter layout converges when a protected line ends in extra carriage returns.**
+  A line that begins inside an unrestricted name, string, or block comment is copied
+  verbatim. The line splitter removed only one trailing `\r`, so the next pass treated
+  another as a CRLF ending and `format(format(text))` never settled. Nightly
+  `sysml_formatter` fuzzing failed on that input
+  ([run 36654784316](https://github.com/elan8/spec42/actions/runs/36654784316)).
+
+- **Wasmtime 48.0.3.** `generator_host` was on 47.0.4, which is affected by
+  [RUSTSEC-2026-0315](https://rustsec.org/advisories/RUSTSEC-2026-0315) and
+  [RUSTSEC-2026-0316](https://rustsec.org/advisories/RUSTSEC-2026-0316). 48.0.3 is in
+  the patched range for both, so the nightly full-tree `cargo audit` passes again.
+
+- **`brace-expansion` 2.1.7 in the VS Code extension.** The extension shipped 2.1.4 (through
+  `vscode-languageclient` â†’ `minimatch`), which is affected by
+  [GHSA-q2hr-2g5m-vwhr](https://github.com/advisories/GHSA-q2hr-2g5m-vwhr),
+  [GHSA-qhr7-859c-m2p7](https://github.com/advisories/GHSA-qhr7-859c-m2p7) and
+  [GHSA-6j4f-fj2g-mc7p](https://github.com/advisories/GHSA-6j4f-fj2g-mc7p). 2.1.7 is in
+  `minimatch`'s range and patched for all three, so the nightly npm audit of shipped packages
+  passes again.
+
+- **Graphical notation inventory matches the `2026-04` release tip.** The coverage JSON
+  now records `subsetting` as supported, the same status the markdown inventory and the
+  generator already used.
+
+- **Nested view usages are modelled.** A `view` nested in a view usage or view definition body
+  (`view def D { view intro; }`, `view doc : D { view :>> intro { ... } }`) used to fail to parse
+  (`missing_body_or_semicolon`) and swallow the rest of the body. It now lowers as an owned view
+  declaration, recursively, with its typing, `:>>`/`redefines`/`:>` relationships, multiplicity,
+  and `expose` members, and implicitly subsets `View::subviews`.
+
+- **View usages publish their whole declaration.** Every typing target (`view v : A, B;` used to
+  publish only `A`), `::>`/`references` and `=>`/`crosses` relationships, the full
+  `OccurrenceUsagePrefix` (`abstract`, `variation`, `derived`, `constant`, a direction,
+  `individual`, a portion kind, `#Tag` extension keywords), and a value (`view v = w;`) now lower
+  exactly as they do for part usages. Anonymous declarations (`view;`, `view : V;`) and these
+  forms parsed as errors before. Pins `elan8/sysml-v2-parser@6097d83` (`main`: `#147` fixing
+  `#146`, and `#149` fixing `#148`).
+
+- **Diagrams are built natively; the diagram Wasm plugin is gone.** The diagram product (the
+  schema-5 `diagram.json` that `diagram_draw` renders) is now the `diagram_product` crate, called
+  directly by the LSP, the CLI and the snapshot tool. Output is byte-identical to the former
+  plugin across every diagram snapshot.
+  - New `spec42 diagram <path>` lists the model's diagram views; `--view <qualified name>` renders
+    one as SVG, or as its diagram product with `--format json`. `--kind` and `--document` select
+    among catalog entries that share a qualified name.
+  - New LSP request `spec42/diagram` (`modelUri`, `handle`, optional `expectedModelDigest`) returns
+    the product for a `spec42/diagramViews` handle. The VS Code diagram view uses it instead of
+    sending `diagram.wasm` through `spec42/generate`.
+  - A view typed by several standard view definitions (`view v : GeneralView,
+    InterconnectionView`) renders as each kind. Its catalog entries used to share one handle, so
+    every entry projected the first kind. Catalog handles are now per (view, kind).
+  - A catalog handle stays valid for as long as its publication is current, including after the
+    LSP's model-view cache has evicted and rebuilt that publication's view.
+  - Removed: `generator-plugins/diagram`, `generators/diagram.wasm` in the VSIX and in the CLI
+    platform archives (added in 0.53.1), the bundled-plugin lookup in `spec42 generate`, and the
+    `spec42.diagramViewer.pluginPath` setting. `spec42 generate` and the generator ABI are
+    unchanged for other plugins.
+
+## [0.53.1] - 2026-09-24
+
+- **CLI platform archives include the diagram Wasm plugin.** Each `spec42-<version>-<platform>`
+  archive now ships `generators/diagram.wasm` beside the `spec42` binary, the same plugin the
+  VSIX packages. `spec42 generate generators/diagram.wasm <model>` finds that file next to the
+  executable when it is not in the working directory.
+
+## [0.53.0] - 2026-09-24
+
+- **`use case` usages accept a short name.** `UseCaseUsage` had no `short_name` field at all in
+  the parser AST, unlike every sibling usage kind, so `use case <'S-01'> prepareEquipment { ... }`
+  fell through to opaque body-element recovery instead of parsing. Pins
+  `elan8/sysml-v2-parser@f60951e` (`main`), which includes the merged short-name support
+  (`#144`) and the later stack-overflow probes (`#142`, `#145`). Those probes do not change
+  the AST.
+
+- **Three metadata/comment/redefinition export gaps fixed (#201).** A named `comment` (`comment
+  aboutP about p /* ... */`) now mints a real, referenceable declaration, so a later `metadata ...
+  about aboutP;` reference resolves instead of reporting `This reference does not resolve`. A
+  marker `metadata m : Tag;` nested in an `item`/`attribute` body now publishes resolved typing in
+  `model-export`, matching the identical syntax at package/part/action body level (both lowering
+  paths now push a `FeatureTyping` reference). A `MetadataBodyUsage` redefinition (`order = 1;`
+  inside a metadata usage body) now publishes its redefinition token as its own name, instead of an
+  empty name and a qualified name ending in `::`.
+
+- **Native diagram layout pins the elkrs crossings fix.** `crates/diagram_layout` now depends on
+  `elan8/elkrs` at `84f95ae55688fe1e0d269d3a5080edf61b218c87` (merge of
+  `fix-hierarchy-crossing-port-panic`). That revision no longer panics when a hierarchy-crossing
+  edge uses a container port.
+
+- **Model export and interconnection views keep derivation, conjugation, constraint
+  equations, and delegation bindings.** A `#derivation` connection specializes
+  `DerivationConnections::Derivation`, and its `#original` / `#derive` ends are named
+  `originalRequirement` and `derivedRequirements` and redefine those library features.
+  An unlabeled `end :>> name` publishes that name and its redefinition. A conjugated port
+  (`port p : ~T`) exports `conjugated: true` beside the original type. Comparison
+  constraints whose operands are dotted feature chains export as resolved operator trees.
+  An interconnection view composes `bind a = b.c` from its two ends instead of reporting
+  the dotted end as an unresolved connector.
+
+- **Project diagnostics stay attached to the files on disk (#187, #188, #189, #190, #191, #192).**
+  Closing an editor tab replaces an unsaved buffer with the on-disk source when that file exists,
+  and refreshes dependent diagnostics. Watched-file events are grouped by project, so a
+  delete/create rename is one semantic publication with no intermediate "file missing" error;
+  unchanged save echoes are skipped. Renaming a `.sysml`/`.kerml` file from the VS Code Explorer
+  uses `workspace/didRenameFiles` on that same path. A part usage used as the type of another part
+  usage is an error with a related declaration location. The `unconnected_port` information
+  diagnostic is retired.
+
+- **Diagrams are drawn in Rust and served as SVG (#176, #181).** `diagram_draw` prepares and
+  draws General, Interconnection, Sequence, Action-Flow, and State-Transition views, plus Browser,
+  Grid, and Geometry. The webview mounts that SVG over `spec42/draw` and keeps zoom, pan,
+  tooltips, and click-to-source; disclosure toggles ask the server to redraw. Headless
+  `spec42 diagrams export` no longer uses QuickJS or ELK.js. Browser hierarchy collapse is
+  presentation state on the draw request. `SPEC42_LAYOUT_ENGINE=legacy` declines the native draw
+  and layout requests.
+
+- **Interactive diagram relayout runs in the language server (#118, #119).** Disclosure changes
+  send a versioned `spec42/layout` request. The server lays the client-supplied graph out with
+  `elkrs` and echoes the model digest, view handle, and presentation revision so a late response
+  is dropped. A new request cancels the one in flight. `elkrs` is in the default `spec42` binary.
+
+- **Owned feature memberships publish canonical identities (#178).** Type feature-membership
+  derivations return `MembershipId` values, including `deriveTypeOwnedFeatureMembership`.
+
+- **Wrap in package applies to bare root members (#65).** A file whose top-level members or
+  imports have no package, library package, or namespace wrapper offers the action. Applying it
+  wraps the document in `package Generated`.
+
+- **The bundled standard library keeps only upstream diagnostics (#135).** Spec42-owned
+  diagnostics on the 2026-04 bundle are resolved, including SelfLink cycle equivalence,
+  `crosses sameThing.self`, inherited `ref item` / `ref action` members, connector-end
+  `references` in the owning namespace, `satisfy â€¦ by that`, and effective typing through
+  `references` / `crosses`. The artifact ratchet admits all 94 standard-library documents. The
+  two remaining errors are the upstream SI `MagneticDipoleMomentUnit` ambiguities.
+
+- **Textual SysML/KerML grammar audit against the pinned BNF (#194).** Spec42 now keeps a
+  production-level inventory (`docs/reference/TEXTUAL-SYNTAX-INVENTORY.md`) versioned with the
+  parser revision and the bundled 2026-04 kebnf. Several validation fixtures that blamed parser
+  gaps were using spellings the grammar does not contain (`if â€¦ then`, `then â€¦ do`, `abstract
+  variation`, SysML `var`, KerML `connector â€¦ specializes`); they now author the productions,
+  and dual-keyword `abstract variation` is an explicit grammar exclusion. Ports, connections,
+  interfaces, and actions have dedicated accept/reject snapshots: SysML `connect`/`bind` parse,
+  KerML `connector â€¦ from` / `binding â€¦ of` in a SysML fence recover, and the keyword-less n-ary
+  `connect (e1, e2, e3)` alternative recovers in a part definition body while named
+  `connection â€¦ connect (â€¦)` parses. States, requirements, items, and flows have accept/reject
+  snapshots: `entry`/`do`/`exit`, `parallel`, `satisfy`, `flow`/`message`, and `item def` parse;
+  missing terminators recover; `state s initial` is not a StateDefBody production and is
+  `unsupported_state_definition_member`.
+
+- **Workspace dependency hygiene and incremental-vs-full publication parity (#43).** `walkdir`,
+  `sha2`, `toml`, and `zip` are declared once in `[workspace.dependencies]` and inherited by
+  member crates. A deterministic edit-sequence harness in `sysml_resolution` proves a warm
+  (incremental memo) publication is the cold (full) one for identity, model digest, and
+  diagnostics after each edit, and snapshots that sequence with `insta`.
+
+- Individual definitions now publish their implicit multiplicity and specialization to
+  `Base::zeroOrOne`, including the `individual def` shorthand and specialized definition kinds.
+
+- **Semantic tokens use parser name spans and can be traced from the editor (#35).** Definition
+  names come from `Identification` rather than a first-line text search; transition /
+  satisfy / dependency members keep source, accept, and target spans instead of painting the
+  whole statement; and `spec42.semanticTokens.debug` opts into AST-merge logging. The
+  text-search refine pass and `span_len > 2 * token` merge guard are gone: collectors emit
+  parser name spans or nothing.
+
+- Inherited expression queries can now return effective bodies and redefined feature targets in
+  a specified type or usage context. Connector endpoints retain every resolved path segment,
+  with explicit missing and ambiguous hops (#84).
+
+- **`spec42 model-summary` is renamed `spec42 model-export`, and now emits a typed structural
+  projection of the publication (#157). BREAKING: the CLI subcommand, the VS Code Language
+  Model Tool id (`spec42_model_summary` -> `spec42_model_export`), and the MCP-era `#spec42Model*`
+  chat reference all move to the new name; nothing accepts the old name.** The command's
+  `nodes_total: 0` placeholder is gone: it now carries a read-only, deterministic,
+  `schema_version`-stamped `projection` of the workspace's resolved structure. New `sysml_query`
+  query group `PublishedModel::projection().model(max_nodes)` returns a
+  `PublishedModelProjection` that composes the existing per-element query groups --
+  `element_details`, the `#84` resolved-expression / metadata-annotation / connection families
+  -- into one whole-model answer: every workspace-authored element in canonical order with its
+  relationship families, resolved expression tree and metadata annotations; every `connect` /
+  `interface` connector; and a publication envelope (phase, completeness, evaluation state,
+  admitted standard-library / library / external counts, source and model digests). It adds no
+  analysis and holds no new state. Admitted libraries are reported as counts, not enumerated.
+  The facade contract is an in-process `SymbolId` value; `crates/server` owns the JSON
+  materialisation (a `SymbolToken` per identity, interned text per `TextId` handle).
+  `--max-nodes` bounds the element list and the per-element composition work and now defaults to
+  **unbounded** (was 500); the response's only truncation record is `projection.truncation`
+  (the former duplicate top-level `truncation` field is gone), which also reports
+  `elements_incomplete` -- elements dropped because a non-converged publication left their
+  details unsettled, which `--max-nodes` cannot fix and does not count as truncation. This is the
+  serialisation format the read-only Python SDK (#52) will bind; it is not the OMG Systems
+  Modeling API JSON and carries no element-mutation surface.
+
+## [0.52.0] - 2026-09-10
+
+- **The standard-library ratchet no longer reports 21 Spec42 false positives (#135).** SysML
+  definition-family compatibility now follows the normative general-family hierarchy (for
+  example, connections are parts, flows and calculations are actions, and views are parts),
+  eliminating 17 invalid specialization/subsetting warnings. State-definition lowering now
+  preserves its authored `abstract`/`variation` prefix so abstract state templates are not
+  diagnosed as incomplete machines. The standard-view check accepts the normative base `View`
+  definition, and the empty-view authoring hint no longer treats a view nested in a rendering as
+  a top-level view that renders nothing. The artifact ratchet consequently moves from 43 to 22
+  diagnostics; its two `SI.sysml` ambiguities remain upstream library issues.
+
+- **The shipped standard-library bundle has an artifact-level ratchet again (#135).** The
+  "Standard-library publication ratchet" Mini CI step only exercised the curated corpus under
+  `tests/snapshots/sysml.library/`, not the pinned KPAR archives the binary embeds -- so a
+  bundle, parser, lowering, resolution or diagnostic change could regress the real standard
+  library silently (the retired `planning/STDLIB_SELF_CHECK.md` contract had no replacement).
+  New `crates/server` integration test `stdlib_bundle_ratchet` materializes the embedded
+  bundle, admits every document with `StandardLibrary` provenance into one canonical
+  publication, requests diagnostics for every library document, and asserts the bundle unpacks
+  to its full inventory (10 KPARs, 94 documents for `2026-04`) and matches the reviewed
+  diagnostic inventory (currently 43 diagnostics). Wired into `scripts/minici.sh` alongside the
+  curated snapshot check.
+
+- **`inspection().connections(root)` publishes the `connect` / `interface` topology reachable
+  from an element.** Sibling of `binding_connectors()`: a `PublishedConnectionGraph` of every
+  connector `root` owns (directly or transitively), each with its `:` type and its resolved
+  ends. A bare end (`connect a to b`) is a single resolved feature; a dotted end
+  (`connect a.b.port to ...`) carries the resolved *terminal* feature plus the path as authored
+  (the intermediate hops are a later refinement -- the resolver keeps no per-hop state); a
+  named end (`connect x references a.b`) carries its own identity and multiplicity. It adds no
+  analysis -- every end is an authored reference resolution already settled. Third and final
+  slice of #84.
+
+- **`inspection().metadata_annotations(symbol)` publishes each metadata annotation bound to an
+  element.** `ElementDetails::metadata` only answered "which metadata definitions annotate this
+  element", collapsing every authored annotation into a deduplicated set of definition
+  identities -- enough to detect a tag, not to act on one. The new query returns, per authored
+  annotation, its form (`#Tag` prefix vs `@Tag` / `metadata Tag` annotating member vs `metadata
+  m : Tag;` usage), the resolved annotating definition, the resolved `about` targets, and the
+  resolved values its body redefines (`@Risk { probability = 0.3; }`) -- a body value that is
+  itself an expression is the same `PublishedExpression` tree `structure().expression()`
+  publishes. It adds no analysis: the annotation-to-definition reference, the body's redefining
+  `AttributeUsage` members, and their value expressions were all lowered and resolved already.
+  The `about` clause (`@Tag ... about X, Y;` / `metadata m : Tag about X;`) is now lowered and
+  resolved through a new `MetadataAnnotationAbout` reference (`DeclarationDomain::Any` lexical
+  lookup), so its targets also resolve for hover and go-to-definition. Second slice of #84.
+
+- **A workspace package named like a standard-library anchor package can be namespace-imported
+  again.** `import Requirements::*` (or `Parts`, `Views`, `Actions`, `Items`, ... -- any of the
+  resolver's ~20 library anchor packages) over a workspace package of that name reported
+  `ambiguous_import_target`, and every reference that depended on the import then failed to
+  resolve. The library closure already declines to admit a library package a workspace package
+  shadows -- except anchor packages, which stay admitted so the generated library-specialization
+  rules can resolve `Requirements::RequirementCheck` and the like. Anchor resolution filters by
+  `SourceRole::StandardLibrary` and never consults the bare-name index, so the admitted anchor
+  root's bare name was pure downside. `build_direct_name_index` now excludes a standard-library
+  root a workspace root of the same name shadows; the shadowed root stays in storage for
+  role-filtered anchor resolution. Non-anchor library names (`ScalarValues`, ...) and qualified
+  member references were already unaffected. Fixes #159.
+
+## [0.51.0] - 2026-09-06
+
+- **The bundled standard library is never diagnosed as a workspace document.** Opening any
+  project in the VS Code extension produced ~150 diagnostics against the server-bundled SysML v2
+  standard library itself. Two causes: the debounced workspace sweep did not exclude the
+  `standard_library_paths` root (only the KPAR/domain `library_paths` root), and -- the real
+  bug -- `ProjectRegistry::admitted_library_paths` built its library-root URLs as
+  `file:///C:/...` while every indexed document URI is normalised to a lower-case drive letter
+  (`file:///c:/...`), so the lexical "is this path under a library root" check never matched and
+  every bundled-stdlib file was treated as an authored workspace file. The sweep now excludes
+  both library-root sets, and manifest-admitted library roots are routed through the same URI
+  normalisation as document URIs. Fixes #136.
+
+- **`first` / `then` / `then done` succession members in a use-case, `analysis`, or
+  `verification` body lower.** A `CaseBodyItem` is an `ActionBodyItem`, so these bodies may carry
+  the same action-flow successions as an action body. The parser bump below makes them parse into
+  the shared `FirstStmt` / `ThenAction` nodes; `lower_case_family_def_body` now lowers them
+  through the same `lower_first_stmt` / `lower_then_action` used by action definitions and
+  `entry` / `do` / `exit` state bodies, and lowers `then use case <name> { ... }` through
+  `lower_use_case_usage`. Previously each one was reported as
+  `unsupported_use_case_definition_member` (8 occurrences in the robot-vacuum showcase). Fixes #138.
+
+- **The viewpoint specialization constraints anchor to the names the 2026-04 standard library
+  actually publishes.** `checkViewpointDefinitionSpecialization` and
+  `checkViewpointUsageSpecialization` referenced `Views::Viewpoint` / `Views::viewpoints`, but
+  the library renamed those to `Views::ViewpointCheck` / `Views::viewpointChecks` (OMG erratum
+  SYSML21-301), so a model with an authored viewpoint reported `missing_library_anchor`. Added
+  the two `[[library_anchor_corrections]]` entries (`sysml21_301`, constraint-manifest schema
+  19), and the `build.rs` code path that emits `specializes_from_library` constraints now routes
+  its anchor through `executable_library_anchor`. Fixes #139.
+
+- **`verify requirement <feature-chain>;` gets a targeted diagnostic.** This form is invalid
+  SysML v2 -- the `requirement` keyword after `verify` needs a full
+  `ConstraintUsageDeclaration`, not a bare reference -- but the parser recovered it generically
+  as `recovered_requirement_body_element`. The pinned parser revision
+  (`0a76cb6` -> `9f00caf`, `elan8/sysml-v2-parser#139`) now emits
+  `verify_requirement_expects_declaration` with the fix suggestion `verify <chain>;`; the
+  change is diagnostic-only, with no AST shape effect. Fixes #140.
+
+- **The Library view's version badges line up.** Each section header laid the version pill and a
+  variable number of action buttons in a single `margin-left: auto` flex trail, so every
+  section's badge stopped at a different x. The header is now a two-column grid (title |
+  version) so every badge ends at the same right edge, and the per-section action buttons moved
+  to their own right-aligned row below the header. Fixes #144.
+
+- **Retired the VitePress documentation site (`docs-site/`, deployed to
+  `elan8.github.io/spec42`) in favor of GitHub-native docs.** The hosted site duplicated content
+  that already lived (or now lives) in `README.md` and `docs/`, and its second copy of the
+  SysML quick reference had drifted from the one built into the extension
+  (`Spec42: SysML v2 Quick Reference`). Getting Started, Diagram view, Feature Inspector,
+  Libraries, Examples, and Validation guides moved to `docs/user/`; What's Included and the
+  domain/method library trees are still generated from product configuration, now by
+  `scripts/sync-docs-meta.mjs` writing `docs/reference/WHATS-INCLUDED.md`,
+  `docs/reference/DOMAIN-LIBRARIES.md`, and `docs/reference/METHOD-LIBRARIES.md` (checked in
+  `scripts/minici.sh`). The generic SysML-v2-tutorial pages that duplicated the OMG specification
+  were dropped rather than migrated. The extension's **Help** view now links to a
+  `spec42.diagram.open`-backed "Open Diagram view" item and a `spec42Library.focus`-backed
+  "Browse or add a library" item instead of only external links. Fixes #122.
+
+- **A named interface/connection usage's connector-endpoint feature chain resolves the sibling
+  feature it names, not the interface definition's own same-named `end`.** `interface
+  lesConnection : LESInterface connect commandServiceModule.commandModule.lesInterfacePort to
+  launchEscapeSystem.cmInterfacePort;` (Apollo 11 `Technical/SystemPackage.sysml` and
+  `TechnicalComponentsPackage.sysml`) left `launchEscapeSystem.cmInterfacePort` and three other
+  endpoint chains `unresolved_reference`, cascading into four further `unconnected_port`
+  diagnostics on the ports those connectors should have counted as connected. `LESInterface`
+  names its own abstract `end launchEscapeSystem : ...;` to match the part it is meant to
+  connect -- an ordinary interface-authoring idiom -- and that inherited end was shadowing the
+  sibling `part launchEscapeSystem` the endpoint actually names, because the dotted connector-end
+  resolver started its root-segment lookup at the named usage's own scope instead of its owning
+  namespace. Fixed to start there instead, matching the equivalent, already-correct rule for a
+  single-segment (non-dotted) connector end (KerML 8.2.3.5.2). Fixes #130.
+
+- **An item usage's `:>` subsetting clause trailing its own brace body attaches to that usage,
+  not a new member.** `item concern1 : Concern { doc /* ... */ } :> concerns;` (Apollo 11
+  `Purpose/StakeholderPackage.sysml`, 40 occurrences) previously split into two declarations --
+  `concern1` and a synthetic anonymous `attribute` member for the trailing `:> concerns` -- so
+  `spec42 check` reported a spurious `incompatible_subset_redefine_kind` warning (an
+  `Attribute`-family feature "subsetting" an `Item`-family one). Fixed upstream in the parser
+  (`elan8/sysml-v2-parser#137`), generalizing the existing `:>>`-trailing-a-body support
+  (`exhibit_state`) to `:>` and to item usage. Bumped the pinned parser revision. Fixes #128.
+
+- **A qualified reference to a standard-library symbol resolves inside a value expression, not
+  only a typing clause or an import.** `attribute conversionFactor = RationalFunctions::rat(1,
+  100);` (Apollo 11 `CoSMA/CoSMAQuantitiesAndUnitsPackage.sysml`) named `RationalFunctions` in
+  neither a typing clause nor an import, so the library-closure scan that decides which admitted
+  packages a workspace build actually needs never found it, the package was never admitted, and
+  the reference was `unresolved_reference` for a function that is, in fact, part of the model. The
+  closure scan now walks a value expression's invocation callees, feature references, and member
+  accesses the same way it already walks typing clauses. Resolution itself needed no change: a
+  fully-qualified reference to an admitted symbol always resolved correctly once the symbol was
+  actually in the model. Fixes #129.
+
+- **Interconnection View publishes each port's authored direction and typing conjugation, and
+  the renderer no longer guesses a side from a name.** `DiagramElement` gains `direction` (`in` /
+  `out` / `inout`, resolved the same way the Feature Inspector already reads it) and `conjugated`
+  (whether the port's typing conjugates the definition it names, `port p : ~PD;`) -- settled
+  facts, not derived from any element's name. `None` / `false` for every non-port element and for
+  a port that authors neither. The renderer's `sideForPort` used to fall back through name and
+  owner-label regexes (`sensor`/`camera`/`in`/`out` word lists) once no structural signal was
+  available; that fallback is deleted, and an authored direction now decides before connector
+  topology is even consulted. A port with no authored direction and no connector-usage skew lands
+  by a stable hash of its identity, not a guess. Fixes #126.
+
+- **`npm audit` no longer gates unrelated PRs.** An npm advisory published against an existing
+  dependency was turning any open PR red, exactly the case the `cargo audit` split already
+  avoids. The `npm audit --omit=dev` steps move out of the per-PR `frontend-unit` job into a
+  dedicated `npm-audit` job that runs only when a push or PR touches an npm `package-lock.json`
+  (mirroring the `audit` job's lockfile detection), plus an unconditional nightly run over the
+  shipped packages. A shared `scripts/npm-audit.sh` retries a transient registry-endpoint error
+  a few times so a network blip is not reported as a finding. Fixes #124.
+
+- **`structure().expression(symbol)` publishes the resolved shape of an authored expression.**
+  `EvaluationState` is terminal: a constraint or `calc` body with a free variable folds to
+  `NonConstant` and there was no way to ask what it is *made of*. The new query returns a
+  `PublishedExpression` â€” a flat arena of `ExpressionNode`s (literals, feature references each
+  paired with the specific inherited or redefined feature they name, and the arithmetic /
+  comparison / boolean / prefix operators) with a `root` index, for a consumer that has to
+  interpret a model (assemble equations, emit interface stubs, drive an external solver) rather
+  than fold it. It adds no analysis: resolution already builds and resolves these trees to fold
+  constants, and the classifier that gates constant folding also gates this. A shape outside the
+  published slice (an invocation, a `select` / `collect` body, a constructor, an index expression,
+  a meta cast, a type check) is an `Unsupported` node that still lists its resolved subtree rather
+  than being dropped, mirroring `EvaluationState::Unsupported`. First slice of #84 (the metadata
+  annotation-body and connection-topology queries are follow-ups).
+
+- **Interconnection View projects connector edges and scopes its node list.** A `connect a to b`
+  usage now composes one `connection` edge between the projected port or part occurrences,
+  including the dotted `connect a.b to c.d` spelling whose ends are published as member-access
+  chains. The node list is scoped to parts and ports (SysML 8.2.3.11) -- attributes, expressions,
+  actions, and states are no longer peer boxes, and connection usages are edge origins rather than
+  boxes. A connector whose end is unresolved, ambiguous, or outside the view records a typed
+  `relationship-unresolved` / `-ambiguous` / `-unsupported` reason and draws no line. Fixes #97.
+
+- **General View draws authored subsetting, subclassification, redefinition, and feature typing.**
+  When both ends of an authored `:>` / `:>` (specializes) / `:>>` / `:` are elements the view
+  projects, the query now composes a graph edge of that kind and the renderer draws the SysML
+  8.2.3.6 glyph (subsetting: dashed, open arrowhead â€” not the specialize triangle). Implied
+  library subsetting (`Parts::parts`, `Items::items`, the kernel chain) stays a relationship-only
+  fact and never sprouts a line; an unresolved, ambiguous, or out-of-view end yields no edge.
+  Fixes #98.
+
+- **Hover and the Feature Inspector no longer dump the implied stdlib type closure.** Every `part`
+  effectively has `Item`, `Part`, `Anything`, `Object`, `Occurrence` through implied library
+  subsetting of `Parts::parts`, `Items::items`, and the rest of the kernel chain. Compact editor
+  surfaces now show only the direct type and types reached through an *authored* subsetting or
+  redefinition (`part engine :>> vehicle.powerplant` keeps the powerplant's authored type, not the
+  kernel types that usage inherited implied); the implied closure is dropped from the hover
+  "Inherited type" lines and from the inspector's Effective type section. Effective-type entries
+  carry a `provenance` (`authored` / `implied`) so consumers filter on the published fact rather
+  than a name or `stdlib`-path heuristic; "Inherited features" and the `effective_types()` query
+  are unchanged. Fixes #96.
+
+- **Metadata annotation body references resolve.** In `@EngineeringConcern { concern = purpose; }`
+  the redefined feature on the left of `=` and the value on its right were reported as
+  `unresolved_reference` even when the `metadata def` resolved and its library was loaded. A
+  `@Name { ... }` annotation is the FeatureTyping of its implicit metadata usage in all but
+  spelling, so the annotated definition's features are now inherited members of the annotation:
+  `concern` binds to `EngineeringConcern::concern` and `purpose` resolves against its type. The
+  idiomatic typed-metadata spelling the Elan8 Method libraries rely on no longer emits spurious
+  diagnostics. Fixes #106.
+
+- **Directed flow items in a `port def` / `port` no longer trip `port_owned_usage_composite`.**
+  `in item rx : Signal;` / `out item tx : Signal;` are flow-feature declarations, not composite
+  subparts: a feature direction makes the usage referential (the Pilot's `isReferenceDefault`),
+  so `validatePortDefinitionOwnedUsagesNotComposite` (8.3.12.5) and
+  `validatePortUsageNestedUsagesNotComposite` (8.3.12.6) now skip them. Only undirected composite
+  usages (`part owned : Component;`) inside a port still report. Fixes #105.
+
 - **Metadata-prefixed dependencies lower in definition bodies.** `#refinement dependency X to Y;`
   in a `requirement def`, `action def`, or `part def` body no longer reports the `#refinement`
   prefix as an `unsupported_*_definition_member`. The dependency lowers with resolved
@@ -29,6 +1232,39 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   and its subtree stay excluded. Filtered recursive imports (`import P::** [ ... ]`) remain
   unsupported. Fixes #102.
 
+- **Bumped the pinned `sysml-v2-parser` revision `f04d51e` -> `a5557ea`.** Picks up all of the
+  Apollo 11 normative-form parser fixes (`elan8/sysml-v2-parser#133` + `#135`, for `#132` / `#134`
+  / issue #100). All five forms now reach typed lowering in spec42:
+  - A keyword-less feature usage with an explicit typing/redefinition/value in a use-case-family
+    body (`analysis`/`use case`/`verification` and their `def`s) lowers as a `DefaultReferenceUsage`
+    instead of `recovered_use_case_body_element`; a nested `action` usage with a multiplicity
+    written before the typing (`action subfunctions[*] : Function :>> subactions;`) and a `def`-less
+    `abstract connection` usage of the same shape both parse without recovery or
+    `unsupported_grammar_form`.
+  - A calc-body `return :>>` now lowers its `::`-qualified redefinition target as an authored
+    `Redefinition` reference and `return :> <Feature>` (named or anonymous) as a `Subsetting`
+    reference against a feature rather than a failing `FeatureTyping` against a classifier -- both
+    matching the case-family `return`. So `return deltaV :> ISQ::speed = â€¦;` (Apollo 11
+    `Analysis/CalculationsPackage.sysml`, and the official SysML v2 spec Annex A vehicle model) no
+    longer reports `unresolved_type_reference`, and a leading `return :>> <target>` no longer
+    silently drops the authored intent. The anonymous `return :> <Feature> = <expr>->select { â€¦ }
+    ->collect { â€¦ }->sum()` value (Apollo `rollupPowerGeneration`) is retained by the parser
+    instead of recovering the whole calc body; its collection-operator value stays typed-but-
+    unevaluated.
+  - `do`/`entry`/`exit` `action <name> { <body> }` -- a body-carrying nested action declared, not
+    referenced -- now lowers as the named `{Entry,Do,Exit}ActionBinding` declaration (keeping its
+    `StateSubaction` membership role) with its `: Type` / `:>>` clause and its `first` / `then
+    action` body walked against the action's own scope. Previously the name was parsed as an
+    action reference, so `spec42 check` emitted a spurious `unresolved_reference` and every feature
+    chain through `.<name>.` cascaded (Apollo 11 `Purpose/MissionPhasesPackage.sysml` and the
+    `satisfy â€¦ by â€¦operations.<action>` chains in `MissionSpecificationPackage.sysml`). The same
+    fix models the Gap-43 `entry action entryAction :>> 'entry';` forms in the Systems Library,
+    which were silently dropped before.
+  - `first`/`then` action-flow statements are accepted in the `StateDefBodyElement::FirstStmt` /
+    `ThenAction` members.
+
+  Fixes #100.
+
 - **Bumped the pinned `sysml-v2-parser` revision `4b65812` -> `f04d51e`.** Picks up keyword-less
   `first ... then ...` succession usages in occurrence and item definition bodies (authored
   `succession` spelling preserved, malformed attribute-body recovery no longer swallows a following
@@ -41,7 +1277,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   SysML 8.2.3.11 interconnection notation (the same IBD layout the pre-schema-5 scene used).
 
 - **Diagram node labels show authored types only.** Compact `typing` on a projected element is
-  the FeatureTyping the author wrote (`part root : Assembly` → `: Assembly`), not the effective
+  the FeatureTyping the author wrote (`part root : Assembly` â†’ `: Assembly`), not the effective
   type closure that every `part` inherits from `Parts::parts`, `Items::items`, and the rest of
   the kernel chain. Untyped usages render with no `: Type` line. Hover and the Feature Inspector
   still list the full effective-type set.
@@ -286,8 +1522,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   `FACADE_OWNED_STRING_FIELDS` inventory in `architecture.rs` shrank from 29 entries to 23.
 
 - **The editor host and the batch host are siblings again: `lsp_server` no longer depends on
-  `workspace`.** Batch validation — walk a directory, publish once, collect the diagnostics the
-  publication settled — moved from `lsp_server::validation` to `workspace::validation`, where the
+  `workspace`.** Batch validation â€” walk a directory, publish once, collect the diagnostics the
+  publication settled â€” moved from `lsp_server::validation` to `workspace::validation`, where the
   rest of the batch path already lived. There is now one validation report type
   (`HostValidationReport`, grown an `advice` field and shared with the snapshot's own eager
   validation), one summariser, one target-discovery helper, and one entry point whose reporting
@@ -297,8 +1533,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   crosses the graph as neutral `SemanticDiagnostic` values, and `spec42 check --format json` keeps
   publishing the LSP diagnostic shape as a CLI projection, so existing baselines still apply.
   Enforcement: `architecture.rs` pins the exact dependency sets of both hosts, fails if
-  `lsp_server/src/validation` reappears, and adds two AST guards — no host function takes SysML
-  text as a parameter, and no host field keys derived data by document — each against an
+  `lsp_server/src/validation` reappears, and adds two AST guards â€” no host function takes SysML
+  text as a parameter, and no host field keys derived data by document â€” each against an
   allow-list that only ever shrinks.
 
 - **Spec42 now has a sole-authority pipeline: the parser is depended on only by `sysml_resolution`,
@@ -308,8 +1544,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   policy, providers, digests), a semantic authority (`sysml_resolution`: the one parser call and
   its memo, lowering, resolution, library closure, publication and its session lifecycle), and the
   `sysml_query` facade with `source`, `syntax`, `library` and `publication` services obtained from
-  one `Services` per host. A source revision is now parsed once — the editor's syntax queries and
-  the semantic build share one memoised tree — and the editor host's index holds reference-counted
+  one `Services` per host. A source revision is now parsed once â€” the editor's syntax queries and
+  the semantic build share one memoised tree â€” and the editor host's index holds reference-counted
   documents and trees, so its actor's copy-on-write clone on every mutation no longer copies every
   file's text and tree. `semantic_publication` and `workspace_session` are retired
   (`session_actor` is the generic actor that remains); `workspace` is split into the
@@ -323,7 +1559,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   still exempts are recorded with their retiring queries in `planning/SYNTAX_FOLLOW_UPS.md`.
 - **Editor answers about declarations, imports and the cursor now come from the syntax service,
   with visible differences.** The outline publishes a typed `SyntaxOutlineKind` with the authored
-  keyword as an accessor, each declaration's short name, its typing, and — new — its true
+  keyword as an accessor, each declaration's short name, its typing, and â€” new â€” its true
   multi-line extent, its header range and its body range; `ParsedSource` answers
   `declaration_at`/`enclosing_declarations`, `imports`, `type_references`,
   `referenced_namespace_roots`, `token_at`, `unit_literal_at` and `occurrences_of`. Consequences a
@@ -340,15 +1576,15 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   A `SysML::` mention in a comment no longer admits the `SysML` package (authored imports and
   typing references do); `import sysml::*` admits every package under a standard-library root by
   provenance rather than by a `sysml.library` path suffix; a unit catalogue is recognised by an
-  attribute with a short name typed by a `…Unit` anywhere in the file, including at package level;
+  attribute with a short name typed by a `â€¦Unit` anywhere in the file, including at package level;
   a malformed library file still contributes the packages and imports it did declare.
 - **Semantic-token highlighting no longer paints `provides`, `requires` or `value` as keywords.**
   The lexer's keyword table was a second copy that included three words OMG 8.2.2.1.2 does not
   reserve; both tables are now the facade's single 128-word vocabulary.
 - **Every publication now admits the standard-library packages its implied specializations
   anchor into.** The library closure seeds the root packages of the resolver's generated library
-  rules (`Parts`, `Items`, `States`, `Views`, `Requirements`, …) from standard-library roots, so
-  `missing_library_anchor` no longer appears for models that never import them — including a
+  rules (`Parts`, `Items`, `States`, `Views`, `Requirements`, â€¦) from standard-library roots, so
+  `missing_library_anchor` no longer appears for models that never import them â€” including a
   workspace that declares its own `package Views`, since anchors resolve by standard-library
   role, not by bare name. `crates/server/tests/examples_are_clean.rs` now asserts every
   `examples/` workspace validates with no errors, warnings or infos.
@@ -429,12 +1665,15 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   usage families are reported as unsupported members rather than dropped.
 
 
-- **Diagrams now cross the generator boundary.** The repository-owned Rust WASM diagram plugin
-  emits a versioned JSON render product from the immutable model query API, and the VS Code webview
-  renders it with the relocated D3/ELK package. All eight view kinds are selectable from the start:
-  state transitions use their typed projection, while views awaiting owner-defined queries report
-  explicit incomplete products instead of reconstructing semantic graphs. The obsolete Rust
-  `diagram` crate is removed and `generator-plugins` is the home for production WASM plugins.
+- **The diagram and model-navigation surfaces are rebuilt on the immutable publication.** The
+  legacy in-process semantic graph (`sysml_model`) and its `sysml/model` graph query are retired,
+  and the built-in **Model Explorer** view is removed with them -- model navigation is served by
+  the Feature Inspector, document symbols, and hierarchy queries over typed facts. Diagram viewing
+  is now a repository-owned Rust WASM plugin that emits a versioned JSON render product from the
+  model query API, drawn by the bundled `diagram-renderer` (see the persistent VS Code **Diagram**
+  view below). The General, Interconnection, Action Flow, State Transition, Sequence, Browser, and
+  Grid view kinds consume typed projections; Geometry stays partial. The obsolete Rust `diagram`
+  crate is removed and `generator-plugins` is the home for production WASM plugins.
 
 - **Every diagnostic Spec42 reports is settled by the immutable publication.** `sysml_resolution`
   now owns the conformance families the graph engine ran -- namespace identity, connection,
@@ -505,7 +1744,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   unrelated to its feature's. Hover reads the published evaluation for both the evaluated value and
   the unit literal.
 
-- **Bumped the pinned `sysml-v2-parser` revision `b6291cc` → `ec47463`.** One upstream commit,
+- **Bumped the pinned `sysml-v2-parser` revision `b6291cc` â†’ `ec47463`.** One upstream commit,
   closing the two gaps the previous bump left open. A keyword-less block comment ahead of a typed
   feature carrying a KerML type-relationship clause (`/* c */ feature f : T unions x;`) parses
   again in every calc-shaped body, for all four of `unions`, `intersects`, `differences` and
@@ -517,8 +1756,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   in any scope and reports unsupported exactly as it does in part-usage and state-def bodies.
   `FirstMergeBody` became the shared `Body<E>` container, so its brace arm is destructured by field.
 
-  Corpus-wide against the pre-bump baseline, parser recovery diagnostics fall 106 → 82 and
-  `unsupported_*` diagnostics 489 → 462.
+  Corpus-wide against the pre-bump baseline, parser recovery diagnostics fall 106 â†’ 82 and
+  `unsupported_*` diagnostics 489 â†’ 462.
 
   **One pre-existing upstream defect is newly visible**, filed as gap 61 in
   `planning/UPSTREAM_PARSER_GAPS.md`: a calc-shaped body shreds `flow a.y to b.x1;`,
@@ -527,10 +1766,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   `classifier`, `struct` and `behavior` bodies did this at `204ca48` already; `class` bodies joined
   them when `b6291cc` routed `class` through the shared KerML classifier declaration, moving it off
   the attribute-shaped body that parsed these members correctly. Keyword-shaped expression operands
-  rise 23 → 38 across eight fixtures, concentrated in `tests/snapshots/kerml/moments.md`, whose
+  rise 23 â†’ 38 across eight fixtures, concentrated in `tests/snapshots/kerml/moments.md`, whose
   `class` bodies author eleven `redefines <target> [mult];` members. The snapshots pin it.
 
-- **Bumped the pinned `sysml-v2-parser` revision `204ca48` → `b6291cc`.** Upstream replaced the
+- **Bumped the pinned `sysml-v2-parser` revision `204ca48` â†’ `b6291cc`.** Upstream replaced the
   loose modifier booleans with the prefix components the grammar actually spells, and
   `sysml_resolution` reads them through three new splitters. `OccurrenceUsagePrefix` (SysML BNF 564)
   now carries `abstract`/`variation`, `derived`, `constant`, `ref`, `individual`, the portion kind
@@ -559,7 +1798,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
   Two follow-on effects of that refactor were resolved by the `ec47463` bump below.
 
-- **Bumped the pinned `sysml-v2-parser-next` revision `7eb7869` → `7d4fd85`.** The shared
+- **Bumped the pinned `sysml-v2-parser-next` revision `7eb7869` â†’ `7d4fd85`.** The shared
   `RefPrefix` modifier chain (`abstract`/`variation`, `derived`, `constant`, `ref`, and the
   `in`/`out`/`inout` direction) is now accepted on every usage rather than a hand-picked few, and
   nine body-element sets gained the members the spec always allowed them: `ref` declarations in
@@ -571,17 +1810,17 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   existed for each node kind, and `item` usages now carry their `variation`, `derived` and
   `constant` modifier facts (`ItemUsage`'s bare `is_abstract` flag became the two-valued
   `usage_prefix`, so `variation item` is representable for the first time). Across the snapshot
-  corpus `unsupported_parser_construct` falls 230 → 6 and `unsupported_grammar_form` 270 → 46,
-  parser recovery diagnostics fall 114 → 104, and resolved references rise 16839 → 17497 with no
+  corpus `unsupported_parser_construct` falls 230 â†’ 6 and `unsupported_grammar_form` 270 â†’ 46,
+  parser recovery diagnostics fall 114 â†’ 104, and resolved references rise 16839 â†’ 17497 with no
   fixture losing a resolution.
-- **Bumped the pinned `sysml-v2-parser-next` revision `cb026cd` → `7eb7869`.** The parser's opaque
+- **Bumped the pinned `sysml-v2-parser-next` revision `cb026cd` â†’ `7eb7869`.** The parser's opaque
   `Other(String)` body member is gone from eleven scopes: content a scope cannot parse is now a
   recovery node with its authored span and a diagnostic, and a spec-valid member the scope does not
   model is an explicit `Unsupported` node. Body delimiters are retained (`Body<E>` is one container
   for all 27 declaration bodies), the four annotating members are one `AnnotatingMember` production,
   a `ref` body is the general usage-member set, an `if` branch keeps its authored braced/brace-less
   spelling, and an action usage's absent body is distinct from `;`. Across the snapshot corpus,
-  parser recovery errors fall 224 → 81 and 49 fixtures reach `complete`; members that used to be
+  parser recovery errors fall 224 â†’ 81 and 49 fixtures reach `complete`; members that used to be
   swallowed opaquely now lower for real (KerML classifier/connector/feature/invariant members in
   part, attribute, package and relationship bodies; `bind`, `calc`, `connection` and constraint
   members in attribute bodies; `attribute`/`calc`/nested `action def` in action bodies; `ref` and
@@ -595,10 +1834,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [0.50.0] - 2026-08-07
 
-- **Bumped `sysml-v2-parser` 0.53.0 → 0.54.0** ([#18](https://github.com/elan8/spec42/issues/18)) —
+- **Bumped `sysml-v2-parser` 0.53.0 â†’ 0.54.0** ([#18](https://github.com/elan8/spec42/issues/18)) â€”
   pulls in #70 (`parse()`/`parse_for_editor()` equivalence), the #78 follow-up (full-library
   strict-diagnostics gaps: `in`/`ref`/`calc` redefinition forms, nested `calc def`, `abstract
-  calc`), and #85 (connector-end/interface/flow shorthand gaps). `PARSE_AST_VERSION` moved 70 → 71
+  calc`), and #85 (connector-end/interface/flow shorthand gaps). `PARSE_AST_VERSION` moved 70 â†’ 71
   for this release's AST-shape changes, which broke exhaustive matches across `sysml_model` and
   `sysml_tokens`: new `InOutDecl.is_redefinition`, `CalcDefBodyElement::{CalcUsage,CalcDef,
   PartUsage}`, `ConstraintDefBodyElement::{Constraint,AttributeUsage}`,
@@ -628,7 +1867,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   all clean. This is a partial step on #18, not a 1.0 pin confirmation -- the OMG-library-baseline
   and roadmap-documentation acceptance criteria are still open.
 
-- **Removed the MCP server and read-only HTTP API** ([#51](https://github.com/elan8/spec42/issues/51)) —
+- **Removed the MCP server and read-only HTTP API** ([#51](https://github.com/elan8/spec42/issues/51)) â€”
   `spec42-mcp` (stdio MCP server) and `spec42 api serve` (read-only HTTP API, `docs/api/`) are gone.
   Investigation found no AI host actually depended on either surface: VS Code Language Model Tools
   and Cursor already call the `spec42` CLI directly, and no external/partner consumer of the HTTP
@@ -637,14 +1876,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   AI-integration surface for 1.0. `diagnostic_catalog` (shared by the CLI and the removed MCP tools)
   moved from `crates/server/src/mcp/` to `crates/server/src/diagnostic_catalog.rs`.
 
-- **Fixed interconnection-view layout non-determinism** (O-6, tracked since 0.35.0's Known Issues below and [#22](https://github.com/elan8/spec42/issues/22)) — repeated `spec42 diagrams export` for the same unchanged model could produce different node coordinates each run. Root cause: `merge_ibd_payloads_inner` and `normalize_ibd_to_instance_paths` (`crates/sysml_model/src/semantic/ibd/{merge,instance_paths}.rs`) deduplicate parts/ports/connectors through a `HashMap`, then collect the deduped values straight into the output `Vec` via `.into_values()` — `HashMap`'s default hasher is randomly seeded per process, so that order (stable within one run) differed across separate CLI invocations, silently propagating into `finalize_merged_ibd_connectors`'s instance/def remap and from there into which of several structurally-equal-but-differently-worded connector representations survived dedup, and ultimately into ELK's node/edge order. Fixed by sorting every `HashMap`-derived collection by its DTO's own natural key right after collection, and switching `IbdDataDto.root_views` from `HashMap` to `BTreeMap` (it serializes directly to a JSON object, so its hash-randomized key order was a second, independent source of byte-level non-determinism). Verified byte-identical SVG output across repeated exports of both `examples/webshop` and the larger `sysml-robot-vacuum-cleaner` fixture; action-flow-view was independently re-verified deterministic on both fixtures too (the underlying `activity_graph.rs` extraction doesn't use the `HashMap`-to-`Vec` pattern that caused the interconnection-view bug). Remaining known non-determinism: `stats.modelBuildTimeMs` in the JSON payload is a real wall-clock measurement and legitimately varies run to run — structural (not byte) comparison is still required for that one field.
+- **Fixed interconnection-view layout non-determinism** (O-6, tracked since 0.35.0's Known Issues below and [#22](https://github.com/elan8/spec42/issues/22)) â€” repeated `spec42 diagrams export` for the same unchanged model could produce different node coordinates each run. Root cause: `merge_ibd_payloads_inner` and `normalize_ibd_to_instance_paths` (`crates/sysml_model/src/semantic/ibd/{merge,instance_paths}.rs`) deduplicate parts/ports/connectors through a `HashMap`, then collect the deduped values straight into the output `Vec` via `.into_values()` â€” `HashMap`'s default hasher is randomly seeded per process, so that order (stable within one run) differed across separate CLI invocations, silently propagating into `finalize_merged_ibd_connectors`'s instance/def remap and from there into which of several structurally-equal-but-differently-worded connector representations survived dedup, and ultimately into ELK's node/edge order. Fixed by sorting every `HashMap`-derived collection by its DTO's own natural key right after collection, and switching `IbdDataDto.root_views` from `HashMap` to `BTreeMap` (it serializes directly to a JSON object, so its hash-randomized key order was a second, independent source of byte-level non-determinism). Verified byte-identical SVG output across repeated exports of both `examples/webshop` and the larger `sysml-robot-vacuum-cleaner` fixture; action-flow-view was independently re-verified deterministic on both fixtures too (the underlying `activity_graph.rs` extraction doesn't use the `HashMap`-to-`Vec` pattern that caused the interconnection-view bug). Remaining known non-determinism: `stats.modelBuildTimeMs` in the JSON payload is a real wall-clock measurement and legitimately varies run to run â€” structural (not byte) comparison is still required for that one field.
 
 - **Supports typed numeric analysis results and objective evaluation.** Analysis `return attribute`
   declarations are materialized with their type and expression, inherited by typed analysis usages,
   evaluated as numeric values rather than Boolean verdicts, and checked against typed objective
   requirement constraints. Existing `return ref` and verification verdict behavior is preserved.
 
-- **Fixed a high-severity DNS rebinding vulnerability in the bundled MCP server** ([RUSTSEC-2026-0189](https://rustsec.org/advisories/RUSTSEC-2026-0189)) — `rmcp` (the crate backing `spec42-mcp`'s Streamable HTTP server transport) was pinned to 0.9.1; upgraded to 1.4+ (resolved to 1.8.0), which also drops the unmaintained `paste` dependency (replaced upstream by `pastey`). The upgrade's API changes (tool/result construction moved to non-exhaustive structs with builder methods) are internal to `crates/server/src/mcp/server.rs`; MCP tool behavior is unchanged (confirmed via the existing `mcp_tools`/`mcp_protocol`/`mcp_binary` integration suites).
+- **Fixed a high-severity DNS rebinding vulnerability in the bundled MCP server** ([RUSTSEC-2026-0189](https://rustsec.org/advisories/RUSTSEC-2026-0189)) â€” `rmcp` (the crate backing `spec42-mcp`'s Streamable HTTP server transport) was pinned to 0.9.1; upgraded to 1.4+ (resolved to 1.8.0), which also drops the unmaintained `paste` dependency (replaced upstream by `pastey`). The upgrade's API changes (tool/result construction moved to non-exhaustive structs with builder methods) are internal to `crates/server/src/mcp/server.rs`; MCP tool behavior is unchanged (confirmed via the existing `mcp_tools`/`mcp_protocol`/`mcp_binary` integration suites).
 - **Removed the unused `adm-zip` VS Code extension dependency**, which carried a high-severity vulnerability ([GHSA-xcpc-8h2w-3j85](https://github.com/advisories/GHSA-xcpc-8h2w-3j85)). Neither `adm-zip` nor `@types/adm-zip` were referenced anywhere in the extension's source; the scripts that do handle VSIX/zip files already use `@vscode/test-electron`'s downloader and the shell `unzip` command. Also picked up a `brace-expansion` fix via `npm audit fix` (no source changes needed).
 - **Hardened CI**: added a `cargo audit` job (dependency vulnerability scanning), `npm audit --omit=dev` steps for both `shared/diagram-renderer` and `vscode`, and a `cargo doc --no-deps --workspace` step with `RUSTDOCFLAGS=-D warnings` to `ci.yml`'s `rust-core` job (fixed the 14 pre-existing broken/private intra-doc links this surfaced, across `sysml_model`, `workspace`, and `server`). Also pinned `rust-toolchain.toml` and every CI/release Rust-install step to an exact version (`1.97.1`) instead of the floating `stable` channel, so a new stable Rust release adding a default-warn lint can no longer break CI on an unrelated day.
 
@@ -693,8 +1932,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   path the VS Code webview uses) and the headless virtual DOM (`spec42 diagrams export` /
   `POST /v1/diagrams/export`), and assert identical structural SVG markers (node classes,
   edge classes, marker ids) against a checked-in golden fixture per view. A regression that
-  breaks parity between the two paths — for example a renderer change relying on a DOM API
-  the headless virtual DOM doesn't implement — now fails CI instead of silently shipping a
+  breaks parity between the two paths â€” for example a renderer change relying on a DOM API
+  the headless virtual DOM doesn't implement â€” now fails CI instead of silently shipping a
   divergent CLI/API export. See `docs/engineering/DIAGRAM-EXPORT-QUALITY-ANALYSIS.md`.
 
 ## [0.47.1] - 2026-07-27
@@ -784,9 +2023,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
     nested or pathological expressions could overflow the parser's native stack before the fix in
     0.46.1, and 0.47.0 additionally fixes real, previously-silent misparses this surfaced while
     hardening it: `notEmpty(x)` (Kernel Semantic Library, used ~16 times) was parsed as
-    `not Empty(x)`, and `newSeq` (Kernel Function Library) as `new Seq()` — both `Unsupported`
+    `not Empty(x)`, and `newSeq` (Kernel Function Library) as `new Seq()` â€” both `Unsupported`
     keyword-boundary bugs, not crashes, so nothing previously caught them. See that crate's own
-    changelog for full detail. `PARSE_AST_VERSION` moved `43` → `44`; both the parse cache and the
+    changelog for full detail. `PARSE_AST_VERSION` moved `43` â†’ `44`; both the parse cache and the
     library graph cache (see below) invalidate automatically.
 
   - **Spec42's own expression-tree code made stack-safe too.** The parser fix alone only moved the
@@ -794,18 +2033,18 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
     expression tree (semantic-fact normalization, attribute/diagnostic text rendering, the
     quantity- and analysis-expression evaluators, host/API snapshot projection) using native
     recursion with no depth limit of their own, previously safe only because the old parser
-    rejected pathologically deep input before any of this code ever saw it. All of them —
+    rejected pathologically deep input before any of this code ever saw it. All of them â€”
     `sysml_model::semantic::ast_util::declared_expression`, `graph_builder::expressions::{
     expression_to_debug_string, expr_node_to_qualified_string, classify_expression}`,
     `extracted_model::expr_to_string`, the `QuantityParser` and `AnalysisExprParser` evaluators,
-    and `workspace::snapshot::facts::project_expression` — are now iterative (explicit heap-`Vec`
+    and `workspace::snapshot::facts::project_expression` â€” are now iterative (explicit heap-`Vec`
     work stacks instead of call-stack recursion), verified output-identical against the full test
     suite plus new 200,000-deep regression tests for each. `DeclaredExpression` and the analysis
     evaluator's own `AnalysisExpr` also picked up custom iterative `Drop` impls, since Rust's
     default derive walks a deeply nested recursive value's teardown the same unsafe way.
 
   - **`library_graph_cache`'s version check now also covers the parser's AST schema
-    (`PARSE_AST_VERSION`)**, not just spec42's own version — previously a parser-only dependency
+    (`PARSE_AST_VERSION`)**, not just spec42's own version â€” previously a parser-only dependency
     bump like this one could leave a stale, pre-fix library graph cached on disk until spec42's
     own version next changed.
 
@@ -815,25 +2054,25 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
     matching the existing safe pattern in `workspace::scan`.
 
 - **Fixes duplicated views and slow startup when a workspace has a gitignored `target/` (or
-  similar) directory containing stray `.sysml`/`.kerml` files** — e.g. leftover manual negative-test
+  similar) directory containing stray `.sysml`/`.kerml` files** â€” e.g. leftover manual negative-test
   fixtures or exported diagram artifacts. `lsp_server::workspace::scan::scan_sysml_files` previously
   walked every file under a workspace root unconditionally (`walkdir::WalkDir`, no exclusions), so
   such directories were scanned and merged into the live workspace model right alongside the real
   source files, producing duplicate/triplicate entries for anything named the same across copies and
   needlessly bloating startup time. Now uses `ignore::WalkBuilder` (`follow_links(false)`,
-  `require_git(false)` so `.gitignore` is honored even outside an actual git working tree) — the
-  same ignore-rule engine ripgrep and rust-analyzer use — so gitignored directories are skipped like
+  `require_git(false)` so `.gitignore` is honored even outside an actual git working tree) â€” the
+  same ignore-rule engine ripgrep and rust-analyzer use â€” so gitignored directories are skipped like
   everywhere else in the project. Verified against the real `sysml-robot-vacuum-cleaner` project:
   candidate files dropped from 84 to the real 28, with 0 remaining under `target/`.
 
 - **Fixes a stack-overflow crash on ordinary, valid edits** (e.g. opening/relinking
   `PhysicalArchitecture.sysml` after the fixes above) that is unrelated to either of them: on
   Windows, the OS gives a process's initial thread a 1 MiB stack by default (vs. 8 MiB typical on
-  Linux/macOS), while every other thread Rust spawns — including tokio's own worker and
-  blocking-pool threads — defaults to a larger stack. Debug builds don't inline nom's heavily-generic
+  Linux/macOS), while every other thread Rust spawns â€” including tokio's own worker and
+  blocking-pool threads â€” defaults to a larger stack. Debug builds don't inline nom's heavily-generic
   combinator chains, so ordinary, only-a-few-levels-deep SysML constructs (a `part` nested inside a
   `part def`, with a `port` inside that) can genuinely need more than 1 MiB of native stack to parse,
-  with no pathological nesting or unbounded recursion involved — confirmed by reproducing the crash
+  with no pathological nesting or unbounded recursion involved â€” confirmed by reproducing the crash
   in complete isolation with a ~10-line file, and confirming it disappears entirely either in a
   release build or by simply moving the same parse call onto any Rust-spawned thread. `spec42`'s
   `main()` now spawns the actual server/CLI logic onto a dedicated thread with a 64 MiB stack instead
@@ -843,9 +2082,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ## [0.45.0] - 2026-07-24
 
 - **Parser dependency `sysml-v2-parser` 0.46.0.** Part-body `ref action` / `ref state` /
-  nested `action`·`state` (Systems Library `Parts.sysml` `performedActions` shape) materialize
+  nested `action`Â·`state` (Systems Library `Parts.sysml` `performedActions` shape) materialize
   as real `action`/`state` nodes with reference ownership facts, typed headers, and
-  `subsetsFeature` — not `"opaque member"`. Plain `ref` visibility is projected. Token ranges
+  `subsetsFeature` â€” not `"opaque member"`. Plain `ref` visibility is projected. Token ranges
   cover the new `PartDefBodyElement` / `PartUsageBodyElement` variants. Full P5+ unified
   definition/usage rewrite remains deferred.
 
@@ -877,10 +2116,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   imports (not diagram nodes), so Babel42 Explorer Views hide them immediately.
   Coverage: `omits documentation and comment nodes from general-view diagrams`.
 
-- **General View no longer draws documentation/comment as standalone boxes.** SysML §7.4
+- **General View no longer draws documentation/comment as standalone boxes.** SysML Â§7.4
   Documentation annotates its owning element; Spec42's notation inventory already marks
   `documentation-node` as not shipped and expects compartment text instead. Anonymous
-  `documentation` children (empty name → renderer "Unnamed") plus membership + Annotation
+  `documentation` children (empty name â†’ renderer "Unnamed") plus membership + Annotation
   edges were appearing as dual-arrow boxes under action defs in General View. They are now
   filtered like parameters/require-constraints in `is_general_view_inline_detail`, while the
   owner's `doc` attribute remains. Coverage:
@@ -890,7 +2129,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   `@annotations` already recorded membership/`parent_id` on the annotated owner, but
   `add_metadata_annotation_node` built the usage QN from the caller's type-resolution
   prefix. Requirement (and concern/view) bodies deliberately keep that prefix as the
-  enclosing package so typing of `subject`/`actor`/etc. resolves siblings — which made
+  enclosing package so typing of `subject`/`actor`/etc. resolves siblings â€” which made
   `@RequirementRole` appear as `Pkg::RequirementRole` instead of `Pkg::Req::RequirementRole`.
   The same helper mismatch also affected nested owners when the body walker passed an
   outer container (e.g. metadata inside a `calc def`). Fixed by always nesting the usage QN
@@ -1159,19 +2398,19 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   graph-builder layer stores the resolved qualified name; `workspace`'s `project_host_semantic_model`
   translates it into the same semantic-ID space as `source_id`/`target_id` before exposing it,
   mirroring the existing two-step handoff. New `ElementKind::TextualRepresentation`
-  (kind-string `"textualRep"`, unchanged) gives `rep <name>? language "..." { ... }` nodes —
+  (kind-string `"textualRep"`, unchanged) gives `rep <name>? language "..." { ... }` nodes â€”
   already fully materialized by `materialize_textual_rep`/`requirement_body.rs` with
-  `language`/`text` attributes, just previously falling into `Unknown("textualRep")` — a
-  distinct, addressable classification instead. `PROJECTION_SCHEMA_VERSION` bumped `12` → `13`:
+  `language`/`text` attributes, just previously falling into `Unknown("textualRep")` â€” a
+  distinct, addressable classification instead. `PROJECTION_SCHEMA_VERSION` bumped `12` â†’ `13`:
   new `FlowStatementDetail` field, same class as the 0.44.9 `isPortion`/`portionKind` addition.
   Regression coverage: `crates/workspace/tests/snapshot_single_build.rs`'s
   `snapshot_projects_flow_detail_with_payload_and_succession_kind` (extended) and new
   `snapshot_materializes_textual_representation_as_addressable_node`.
 - **S42-009 (conjugated ports) status clarified.** `isConjugated` was already fully wired and
   tested (a `port p : ~P` usage already reports `isConjugated: true` via `HostFeatureProperties`).
-  The remaining gap — synthesizing implicit `ConjugatedPortDefinition`/`ConjugatedPortTyping`
+  The remaining gap â€” synthesizing implicit `ConjugatedPortDefinition`/`ConjugatedPortTyping`
   elements per the KerML metamodel, so `p`'s typing points at the conjugated definition rather
-  than directly at `P` — is deliberately deferred: it would be the first "implicit node not
+  than directly at `P` â€” is deliberately deferred: it would be the first "implicit node not
   present in source text" pattern in this codebase, a genuine architectural decision on the
   same footing as S42-004/S42-005, not a small fix. See
   spec42-systems-modeling-api-gaps.md S42-009 for the updated status.
@@ -1201,22 +2440,22 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   and `HostFeatureProperties` gain `is_portion: bool` and `portion_kind: Option<String>`.
   `occurrence_usage_feature_properties` (`ast_util.rs`) now populates both from
   `OccurrenceUsage::portion_kind` (already set by the `snapshot`/`timeslice`/`then timeslice`
-  parser forms, unchanged this round) — previously only the raw `"portionKind"` debug attribute
+  parser forms, unchanged this round) â€” previously only the raw `"portionKind"` debug attribute
   existed, with no slot in the typed feature-properties system Babel42's `isPortion`/`portionKind`
   DTO fields actually read. All other `*_feature_properties` builders (`part`/`attribute`/`port`/
   `item`/`definition`) explicitly set `is_portion: false, portion_kind: None`, since only
-  occurrences have portion semantics. `PROJECTION_SCHEMA_VERSION` bumped `11` → `12`: new
+  occurrences have portion semantics. `PROJECTION_SCHEMA_VERSION` bumped `11` â†’ `12`: new
   `HostFeatureProperties` fields, same class as the 0.44.0 `content_expression_id` addition.
   Regression coverage: `crates/workspace/tests/snapshot_single_build.rs`'s
   `snapshot_populates_occurrence_def_and_usage_facts`, extended with `is_portion`/`portion_kind`
   assertions for `snapshot`/`timeslice`/plain `occurrence` usages.
 - **`isReadOnly`/`isSufficient`/`isVariable`/`mayTimeVary` confirmed out of scope.** Exhaustive
   search of `sysml-v2-parser`'s grammar found no `readonly`, `variable`, `sufficient`, or
-  time-varying keyword production anywhere — `readonly`/`variable` were already documented as
+  time-varying keyword production anywhere â€” `readonly`/`variable` were already documented as
   deliberately out of scope (not SysML textual keywords, "Modifier completeness audit"); this
   extends the same finding to `sufficient` and time-varying, none of which have a textual BNF
   production either. Babel42's hardcoded `null` for these four properties is therefore not a gap
-  to close via keyword wiring — see spec42-systems-modeling-api-gaps.md S42-008 for the
+  to close via keyword wiring â€” see spec42-systems-modeling-api-gaps.md S42-008 for the
   reclassification.
 
 ## [0.44.8] - 2026-07-18
@@ -1256,7 +2495,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - **`OccurrenceDef.isAbstract` fix.** 0.44.6 set a raw `"isAbstract"` attribute on `occurrence
   def` nodes, but Babel42's `isAbstract` DTO field only reads
   `node.facts.feature_properties.is_abstract` or a `"definitionPrefix"` string attribute (the
-  `PartDef`-only convention) — a raw attribute alone was silently dropped.
+  `PartDef`-only convention) â€” a raw attribute alone was silently dropped.
   `materialize_occurrence_def` now builds `DeclaredFeatureProperties` directly (`OccurrenceDef`
   has a plain `is_abstract: bool`, not the `DefinitionPrefix` enum
   `definition_feature_properties` expects) and attaches it the same way `PartDef` does. Caught
@@ -1272,7 +2511,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   called `attach_feature_properties` at all (so `is_individual` was silently
   discarded) and never surfaced `portionKind`/`isThen`/the `subsets`/
   `redefines`/`references`/`crosses` subsetting-clause targets already
-  parsed onto `OccurrenceUsage` — all four AST fields existed, unlike
+  parsed onto `OccurrenceUsage` â€” all four AST fields existed, unlike
   `AttributeUsage`'s identical shape, which already projects them. Both
   gaps closed: `occurrence def` now sets `isAbstract`; `occurrence`/
   `individual`/`snapshot`/`timeslice`/`then timeslice` usages now attach
@@ -1369,14 +2608,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 - **`CaseUsage` classification and nested `case`/`case def` support (S42-003 follow-up).**
   `ElementKind` had a `"case def"` string arm but no `"case"` arm, so a bare `case c : X;`
-  usage — even at package level, where it already materialized — fell to
+  usage â€” even at package level, where it already materialized â€” fell to
   `ElementKind::Unknown("case")` and could never become a concrete API resource. Added
   `ElementKind::Case` plus its `Display`/`FromStr` arms
   (`crates/sysml_model/src/semantic/model.rs`). Separately, `case`/`case def` nested inside a
   `part def { ... }` body had no dispatch arm at all in
   `crates/sysml_model/src/semantic/graph_builder/part_def.rs` (unlike the sibling
   `PartDefBodyElement::CalcUsage` arm), so it was silently dropped from the graph entirely at
-  both the definition and usage level — not merely misclassified. Fixed by adding
+  both the definition and usage level â€” not merely misclassified. Fixed by adding
   `PartDefBodyElement::CaseDef`/`::CaseUsage` dispatch arms that reuse the existing
   `materialize_case_def`/`materialize_case_usage` builders package-level dispatch already
   calls, widening those two functions from `pub(super)` to `pub(crate)` so the sibling
@@ -1389,7 +2628,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [0.44.0] - 2026-07-17
 
-- **`TransitionFeatureMembership` baseline (S42-003)** — a `transition` statement's `accept`
+- **`TransitionFeatureMembership` baseline (S42-003)** â€” a `transition` statement's `accept`
   trigger, `if` guard, and `do` effect now materialize as real, addressable child graph nodes
   (`ElementKind::TransitionTrigger`/`TransitionGuard`/`TransitionEffect`) owned via a new
   `HostMembershipKind::TransitionFeatureMembership`, mirroring how every other owned node gets a
@@ -1402,46 +2641,46 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   `Expression`, referenced from the new `HostElementFacts::content_expression_id` field
   (`crates/sysml_model/src/semantic/graph_builder/state.rs`,
   `crates/workspace/src/snapshot/facts.rs`).
-  **Design note — a `FeatureValue`-reuse approach was considered and rejected:** an earlier draft
+  **Design note â€” a `FeatureValue`-reuse approach was considered and rejected:** an earlier draft
   planned to attach guard/trigger/effect content by reusing `HostFeatureValue`
   (`DeclaredFeatureValueKind`) to avoid a schema bump, but `HostFeatureValue` normatively means
-  "this feature's value is X" (a KerML value-assignment) — none of guard/trigger/effect are
+  "this feature's value is X" (a KerML value-assignment) â€” none of guard/trigger/effect are
   value-assignments, so that would have shipped an incorrect `@type: FeatureValue` label on the
   consuming API. `content_expression_id` instead represents "this element's substance is X",
   a distinct, correctly-scoped concept.
 - **Fix: the `transition` node's own membership was `OwningMembership`, should be
-  `FeatureMembership`** — `ElementKind::Transition` was missing from `membership_kind()`'s
+  `FeatureMembership`** â€” `ElementKind::Transition` was missing from `membership_kind()`'s
   `FeatureMembership` arm (documented as a known gap in 0.43.2). Fixed alongside the above since
   both required touching the same function.
 - All existing flattened string attributes on the `transition` node (`source`, `target`,
   `guardExpression`, `conditionIsBoolean`, `exprClass`, `effectExpression`, `actionKind`,
-  `payloadType`, `acceptType`, `acceptName`, …) are unchanged — purely additive; zero changes
+  `payloadType`, `acceptType`, `acceptName`, â€¦) are unchanged â€” purely additive; zero changes
   required in `behavior_conformance.rs` or `state_views/graph_extractor.rs`.
-- **`PROJECTION_SCHEMA_VERSION` bump: 10 → 11.** Unlike 0.43.1/0.43.2's pure enum widening (no
+- **`PROJECTION_SCHEMA_VERSION` bump: 10 â†’ 11.** Unlike 0.43.1/0.43.2's pure enum widening (no
   bump needed, since `Option<HostMembershipKind>` and `HostFeatureValue.kind: String` were
   already open wire fields), this release adds a genuinely new field
-  (`HostElementFacts::content_expression_id`) to a core wire struct — closer in kind to the
-  `feature_properties: Option<HostFeatureProperties>` addition that bumped v5→v6, so bumped for
+  (`HostElementFacts::content_expression_id`) to a core wire struct â€” closer in kind to the
+  `feature_properties: Option<HostFeatureProperties>` addition that bumped v5â†’v6, so bumped for
   consistency and to force reprojection of cached artifacts.
   **Deferred, not in scope:** `transitionLinkSource`/`payload` `ParameterMembership`s, `Succession`
   as an addressable owned `Feature`, `BindingConnector`s, and full `AcceptActionUsage`/
-  `ActionUsage` typing of trigger/effect remain open — see spec42-systems-modeling-api-gaps.md
+  `ActionUsage` typing of trigger/effect remain open â€” see spec42-systems-modeling-api-gaps.md
   (babel42-v2) S42-003.
 
 ## [0.43.2] - 2026-07-17
 
-- **Specialized memberships: Parameter/ViewRendering (S42-003)** — `HostMembershipKind` gains
+- **Specialized memberships: Parameter/ViewRendering (S42-003)** â€” `HostMembershipKind` gains
   `ParameterMembership` and `ViewRenderingMembership` variants. `view rendering` member nodes
   previously fell into the generic `FeatureMembership` bucket. `membership_kind()`
   (`crates/workspace/src/snapshot/facts.rs`) now also takes the owner's `ElementKind`:
   `InOutDecl` (`in`/`out`/`inout`) is shared grammar between genuine Behavior parameters
-  (Action/Calc definition and usage bodies — KerML 8.3.19.2 `ParameterMembership`) and Port/
+  (Action/Calc definition and usage bodies â€” KerML 8.3.19.2 `ParameterMembership`) and Port/
   PortDef directed features, which reuse the same production but are ordinary
   `FeatureMembership`, not parameters. Both previously defaulted to `OwningMembership` since
   `InOutParameter` wasn't dispatched at all. No `PROJECTION_SCHEMA_VERSION` bump: this only
   changes which value some node kinds receive, not the wire shape.
   **Known remaining gap:** `TransitionFeatureMembership` (trigger/guard/effect of a
-  `TransitionUsage`) is not yet implementable — Spec42 flattens a transition's guard/effect into
+  `TransitionUsage`) is not yet implementable â€” Spec42 flattens a transition's guard/effect into
   string attributes (`guardExpression`/`effectExpression`) on the `transition` node rather than
   materializing them as addressable child features, so there is no node to classify as
   `TransitionFeatureMembership` yet. The `transition` node's own membership within its owning
@@ -1450,26 +2689,26 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [0.43.1] - 2026-07-16
 
-- **Specialized memberships: Subject/Stakeholder/Objective (S42-003)** — `HostMembershipKind`
+- **Specialized memberships: Subject/Stakeholder/Objective (S42-003)** â€” `HostMembershipKind`
   gains `SubjectMembership`, `StakeholderMembership`, and `ObjectiveMembership` variants,
   alongside the existing `ActorMembership`/`VariantMembership`. `subject`/`stakeholder` member
   nodes previously fell into the generic `FeatureMembership` bucket in `membership_kind()`
   (`crates/workspace/src/snapshot/facts.rs`); `objective` member nodes weren't handled at all and
-  silently defaulted to `OwningMembership` — a real misclassification, not a deliberate choice.
+  silently defaulted to `OwningMembership` â€” a real misclassification, not a deliberate choice.
   No `PROJECTION_SCHEMA_VERSION` bump: `membership_kind: Option<HostMembershipKind>` already
   exists on the wire shape, this only changes which value three node kinds receive.
 
 ## [0.43.0] - 2026-07-16
 
-- **Enumeration vertical slice** — requires `sysml-v2-parser` **0.39.0**, which gives each
+- **Enumeration vertical slice** â€” requires `sysml-v2-parser` **0.39.0**, which gives each
   enumerated value inside `enum def { ... }` a real spanned AST node (`EnumeratedValue`) instead
   of a bare `String`.
-  - New `ElementKind::EnumeratedValue` (`"enumerated value"`) — `materialize_enum_def` now walks
+  - New `ElementKind::EnumeratedValue` (`"enumerated value"`) â€” `materialize_enum_def` now walks
     `EnumerationBody::Brace { values }` and materializes each enumerated value as its own
     addressable child node, owned by the enclosing `EnumDef`. Initializer expressions (`= expr`)
     and inline bodies (`active { ... }`) remain discarded; only name + span are retained, matching
     the parser's own scope for this construct.
-  - New `ElementKind::Enumeration` (`"enumeration"`) — the kind-string an `enum status : Status;`
+  - New `ElementKind::Enumeration` (`"enumeration"`) â€” the kind-string an `enum status : Status;`
     usage node was already materialized with by `graph_builder/part_def.rs`'s nested-in-`part def`
     handler, but which had no `ElementKind::parse` mapping (fell to `Unknown("enumeration")`) and
     no package-level dispatch at all (`PackageBodyElement::EnumerationUsage` was a no-op).
@@ -1481,24 +2720,24 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [0.42.1] - 2026-07-16
 
-- **Fix: `ConstraintDef`/`CalcDef`/`CaseDef` typing resolution** — added the three to
+- **Fix: `ConstraintDef`/`CalcDef`/`CaseDef` typing resolution** â€” added the three to
   `TYPING_TARGET_KINDS` (`crates/sysml_model/src/semantic/kinds.rs`), matching what
   `SPECIALIZES_TARGET_KINDS` already allowed. A nested `calc`/`case` usage's Typing edge to its
   definition previously never resolved.
-- **Fix: `materialize_case_usage` never wired a typing edge** — unlike its sibling
+- **Fix: `materialize_case_usage` never wired a typing edge** â€” unlike its sibling
   analysis/verification/use-case usage builders, it never called `add_typing_edge_if_exists` even
   though `CaseUsage.type_name` is captured by the parser. Fixed alongside the allowlist change
   above, since the allowlist fix alone wasn't sufficient to make `case` usage typing resolve.
-- No `PROJECTION_SCHEMA_VERSION` bump — both fixes only improve resolution fidelity of an
+- No `PROJECTION_SCHEMA_VERSION` bump â€” both fixes only improve resolution fidelity of an
   already-projected fact; `HostSemanticProjection`'s shape is unchanged.
 
 ## [0.42.0] - 2026-07-16
 
-- **Host projection schema v10** — `Satisfy` and `Subject` relationships classify as
+- **Host projection schema v10** â€” `Satisfy` and `Subject` relationships classify as
   their own `HostRelationshipMetaclass` instead of the generic `Relationship` fallback.
   Both were already real, resolved graph edges; only the metaclass classification was
   missing.
-- **Bug fix: `case`/`case def` bodies were silently dropped** — `materialize_case_def`/
+- **Bug fix: `case`/`case def` bodies were silently dropped** â€” `materialize_case_def`/
   `materialize_case_usage` created the case node but never walked its body, unlike the
   sibling `use_case`/`analysis_case`/`verification_case` builders. `subject`/`actor`/
   `objective`/`include` members inside a `case`/`case def` are now materialized the same
@@ -1506,87 +2745,87 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [0.41.0] - 2026-07-16
 
-- **Host projection schema v9** — Addressable `HostConnectorEnd` facts for resolved
+- **Host projection schema v9** â€” Addressable `HostConnectorEnd` facts for resolved
   `Connection`/`Interface` connect statements, and a `FlowStatementDetail` (payload,
   source/target expression text) plus a distinct `SuccessionFlow` relationship kind for
   `flow`/`succession flow` usages. Requires `sysml-v2-parser` **0.38.0**, which fixes a
   parser bug (PAR-007) where a package-level `connection`/`interface` usage typed with an
   inline `connect ... to ...` clause was misclassified as a definition with the clause
   silently discarded.
-- **Connector ends** — `HostSemanticProjection.connector_ends` projects the binary
+- **Connector ends** â€” `HostSemanticProjection.connector_ends` projects the binary
   `from`/`to` ends of a resolved `connect` statement as addressable, explicitly-ordered
   facts (`end_index` 0/1), derived from the relationship's already-resolved
   `source_id`/`target_id`. N-ary `connect (a, b, c, ...)` ends beyond the binary pair are
   parsed (`ConnectStmt::extra_ends`) but not yet resolved to feature IDs anywhere in the
-  graph builder, so they are not projected yet — tracked as a follow-up.
-- **Flow detail** — `HostSemanticModelRelationship.flow` carries payload and source/target
+  graph builder, so they are not projected yet â€” tracked as a follow-up.
+- **Flow detail** â€” `HostSemanticModelRelationship.flow` carries payload and source/target
   expression text for `Flow`/`SuccessionFlow` edges, mirroring `Connection`'s existing
   `connect` field. `RelationshipKind::SuccessionFlow` distinguishes `succession flow` from
   plain `flow`/`message` (previously all three collapsed into one generic `Flow` edge kind).
 
 ## [0.40.0] - 2026-07-16
 
-- **Host projection schema v8** — Addressable Documentation elements with Annotation
+- **Host projection schema v8** â€” Addressable Documentation elements with Annotation
   edges, Import/Alias as NamespaceImport / MembershipImport / AliasMembership
   relationships (with visibility), first-class `element_type` for ReferenceUsage,
   and AttributeUsage multiplicity projection. Requires `sysml-v2-parser` **0.37.0**.
-- **Documentation** — `doc /* … */` materializes as `ElementKind::Documentation`
+- **Documentation** â€” `doc /* â€¦ */` materializes as `ElementKind::Documentation`
   children while keeping `HostElementFacts.documentation` text on the annotated element.
-- **Import / Alias relationships** — Containment memberships for import/alias nodes
+- **Import / Alias relationships** â€” Containment memberships for import/alias nodes
   use dedicated metaclasses instead of generic Membership.
-- **ReferenceUsage** — `ElementKind::Ref` projects `facts.element_type = "ReferenceUsage"`.
-- **AttributeUsage multiplicity** — Structured multiplicity ranges from parser 0.37
+- **ReferenceUsage** â€” `ElementKind::Ref` projects `facts.element_type = "ReferenceUsage"`.
+- **AttributeUsage multiplicity** â€” Structured multiplicity ranges from parser 0.37
   project as addressable `HostMultiplicity` facts.
 
 ## [0.39.0] - 2026-07-16
 
-- **Host projection schema v7** — Extends v6 feature properties with composite/reference
+- **Host projection schema v7** â€” Extends v6 feature properties with composite/reference
   ownership and conjugation, adds documentation/short-name facts, library-element flagging,
   richer membership kinds, and relationship metaclasses for Subsetting, Redefinition,
   Subclassification, and Annotation.
-- **RefDecl ownership** — Package-level and nested `ref` declarations materialize as
+- **RefDecl ownership** â€” Package-level and nested `ref` declarations materialize as
   `ElementKind::Ref` with `is_reference=true` / `is_composite=false` and retain typed
   feature values when present. Ordinary part/item/port/attribute usages default to
   composite ownership.
-- **Membership taxonomy** — Containment memberships distinguish FeatureMembership (usages),
+- **Membership taxonomy** â€” Containment memberships distinguish FeatureMembership (usages),
   OwningMembership (definitions/packages), plus Import, Alias, VariantMembership, and
   ActorMembership.
-- **Relationship family** — Graph edges for `subsets`/`redefines` resolve to Subsetting /
+- **Relationship family** â€” Graph edges for `subsets`/`redefines` resolve to Subsetting /
   Redefinition; def `specializes` projects as Subclassification; Annotation edges keep an
   Annotation metaclass.
-- **Library / conjugation / names** — `is_library_element` uses the library URI set;
+- **Library / conjugation / names** â€” `is_library_element` uses the library URI set;
   conjugated port typing (`~Type`) sets `is_conjugated`; `doc` and `shortName` attributes
   lift into typed `HostElementFacts` fields.
 
 ## [0.38.0] - 2026-07-16
 
-- **Host projection schema v6** — Projected elements now carry typed
+- **Host projection schema v6** â€” Projected elements now carry typed
   `feature_properties` on `HostElementFacts` for explicitly declared modifiers:
   direction, abstract/variation, individual, derived, constant, end, ordered,
   and unique. These facts come from the parser AST via `DeclaredFeatureProperties`
   and are separate from the legacy display attribute map.
-- **Feature property materialization** — Part, attribute, port, and item usages,
+- **Feature property materialization** â€” Part, attribute, port, and item usages,
   part definitions, attribute definitions, and directed port parameters retain
   declaration modifiers as semantic facts instead of dropping them after parse.
 
 ## [0.37.0] - 2026-07-16
 
-- **Typed host projection v5** — Added API-oriented element facts for declared
+- **Typed host projection v5** â€” Added API-oriented element facts for declared
   and effective names, ownership, owning membership, and library status. These
   facts are separate from the legacy display-oriented attribute map.
-- **Addressable ownership** — Parent containment now records an explicit
+- **Addressable ownership** â€” Parent containment now records an explicit
   membership form (`OwningMembership` or `FeatureMembership`) and gives both
   the child and relationship the same stable membership identity.
-- **Deterministic relationship identities** — Relationship IDs no longer depend
+- **Deterministic relationship identities** â€” Relationship IDs no longer depend
   on graph enumeration order. Explicit connection facts use their source range
   and endpoint expressions as an identity discriminator.
 
 ## [0.36.0] - 2026-07-16
 
-- **Parser dependency** — Bumped `sysml-v2-parser` to **0.36.0** and aligned
+- **Parser dependency** â€” Bumped `sysml-v2-parser` to **0.36.0** and aligned
   Spec42 with typed relationship targets, `Membership`, import visibility, and
   typed `FeatureValue` AST nodes.
-- **Host projection** — Projects declared feature values and their structural
+- **Host projection** â€” Projects declared feature values and their structural
   expression trees as addressable `HostFeatureValue` and `HostExpression`
   facts, preserving bind/default/initial semantics without parser debug text.
 
@@ -1594,232 +2833,232 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
-- **`sysml-v2-parser` upgraded 0.28.0 → 0.32.0**, unlocking new SysML v2 syntax and fixing several evaluation/diagnostic gaps along the way:
-  - **0.29.0**: state `do`/`exit` actions, `decide`/`join`/`fork` control nodes, negated `assert`, structured `Transition.effect` (enum, not raw string), structured `AssignStmt.lhs`/`ForLoop.range`. `ElementKind::Decide`/`Join`/`Fork` added; `graph_builder::action` materializes them like `merge` already was; `graph_builder::state` now handles `StateDefBodyElement::Do`/`::Exit` (previously only `Entry`); `AssertConstraintMember.is_negated` captured as an `isNegated` attribute. Deliberately not wired up: `Satisfy.is_negated` and `ConnectStmt.extra_ends` (n-ary connect) — both additive fields that default safely, so existing behavior is unaffected.
+- **`sysml-v2-parser` upgraded 0.28.0 â†’ 0.32.0**, unlocking new SysML v2 syntax and fixing several evaluation/diagnostic gaps along the way:
+  - **0.29.0**: state `do`/`exit` actions, `decide`/`join`/`fork` control nodes, negated `assert`, structured `Transition.effect` (enum, not raw string), structured `AssignStmt.lhs`/`ForLoop.range`. `ElementKind::Decide`/`Join`/`Fork` added; `graph_builder::action` materializes them like `merge` already was; `graph_builder::state` now handles `StateDefBodyElement::Do`/`::Exit` (previously only `Entry`); `AssertConstraintMember.is_negated` captured as an `isNegated` attribute. Deliberately not wired up: `Satisfy.is_negated` and `ConnectStmt.extra_ends` (n-ary connect) â€” both additive fields that default safely, so existing behavior is unaffected.
   - **0.31.0**: connection ends redefined via `::>` pointing at a nested feature path (not a type name) no longer false-flag an unresolved-type-reference diagnostic (`ElementKind::InterfaceEnd` with a dotted `type_ref` is now recognized and skipped). Reusable requirement/analysis/verification/use-case templates (`is_parametric_definition`) no longer incorrectly report "incomplete" for unassigned values while still surfacing real `failed_constraint` violations. Boolean-equality expressions (`s.flag == true`) inside `require constraint` bodies now evaluate correctly instead of falling through to the numeric/quantity comparison path.
   - **0.32.0**: `variant` members inside a `variation part def` body (`variant part manual : ManualTransmission;`, and the `attribute`/`item`/`port` equivalents) now materialize with their full declared-type node shape (attributes, typing edge, body recursion) via new `materialize_item_usage`/`materialize_variant_usage`, instead of always collapsing to an untyped stub. Requirement usages now carry an `isAbstract` attribute. Expanded reserved-keyword hover coverage.
-- **VS Code: `sysml.showVisualizer`/`sysml.showVisualizerActive` editor-title commands** — an icon button in the editor tab toolbar (for `.sysml`/`.kerml` files) that reveals the SysML Visualizer panel, addressing low discoverability since the visualizer moved to the secondary sidebar in 0.34.0. The icon dims to signal the panel is already open, tracked via a `webviewView.onDidChangeVisibility` listener (previously the `sysml.visualizerOpen` context key only updated on first-resolve/dispose, so it went stale after switching tabs without closing the panel).
-- **`workspace_session` crate** — actor-model concurrency wrapper (`SessionActor` + lock-free `SnapshotHandle` reads) for embedder-owned session state, enabling non-blocking reads while background work runs.
-- **Incremental Workspace Engine** (`crates/workspace/src/incremental.rs`) — standalone engine supporting full-load and incremental-patch graph operations, with `WorkspaceUpdateMetrics` for perf visibility; `build_view_catalog`/`render_view` render a single view without building a full snapshot; `validate_workspace` computes diagnostics directly without one either.
+- **VS Code: `sysml.showVisualizer`/`sysml.showVisualizerActive` editor-title commands** â€” an icon button in the editor tab toolbar (for `.sysml`/`.kerml` files) that reveals the SysML Visualizer panel, addressing low discoverability since the visualizer moved to the secondary sidebar in 0.34.0. The icon dims to signal the panel is already open, tracked via a `webviewView.onDidChangeVisibility` listener (previously the `sysml.visualizerOpen` context key only updated on first-resolve/dispose, so it went stale after switching tabs without closing the panel).
+- **`workspace_session` crate** â€” actor-model concurrency wrapper (`SessionActor` + lock-free `SnapshotHandle` reads) for embedder-owned session state, enabling non-blocking reads while background work runs.
+- **Incremental Workspace Engine** (`crates/workspace/src/incremental.rs`) â€” standalone engine supporting full-load and incremental-patch graph operations, with `WorkspaceUpdateMetrics` for perf visibility; `build_view_catalog`/`render_view` render a single view without building a full snapshot; `validate_workspace` computes diagnostics directly without one either.
 
 ### Changed
 
-- **LSP responsiveness** — hover/completion requests no longer block on in-flight background relink or startup indexing, via the new `workspace_session` actor and a synchronous `WorkspaceSession` state machine (`SessionLifecycle`/`RelinkToken`) in the `workspace` crate. `SemanticCoordinator` (`lsp_server`) has been removed entirely, its responsibilities folded into `WorkspaceSession` (~657 lines removed).
-- **Parallel semantic graph building** — workspace and library documents are now parsed/linked in parallel via `rayon` (`build_and_link_graph_parallel`); `lsp_server`'s worker dispatch also moved off hand-rolled `std::thread::spawn` onto rayon, which additionally fixes worker-thread panics that were previously silently swallowed.
-- **Semantic graph builder consistency audit** — centralized `part`/`attribute`/`occurrence`/`requirement` usage materialization (previously reimplemented independently per containing context, causing attribute/subtree drift depending on where a usage appeared); specialization edges now wired before body recursion (fixes inherited-member resolution ordering); spec-correct effective-name resolution for unnamed redefining usages (SysML v2 §7.6.5); `package_body.rs`'s dispatcher split into 34 named functions.
-- **`ElementKind` type-safety migration** — string-based element-kind/type checks replaced with the `ElementKind` enum across `sysml_model` and `language_service` (completion, import resolution, diagnostics, hover, references); `ElementKind::is_definition()` added as the canonical, compiler-checked replacement for scattered `.ends_with(" def")`/`.contains("_def")` string-suffix heuristics.
-- **General-view layout** — ELK graph now nests members under real per-package containers (`elk.hierarchyHandling: INCLUDE_CHILDREN`) instead of laying out every node in one flat tree, and spacing constants were tightened; diagrams with real package structure are meaningfully narrower and less tangled. A single package with many same-depth siblings can still lay out as one very wide row (tracked as a known issue, see below).
-- **ELK layout engine version pinned** across the CLI/headless renderer and the VS Code webview build — the webview's `node_modules` had silently drifted to elkjs 0.8.2 while the CLI used the intended 0.11.1; both now resolve the same pinned version with a build-time assertion that fails loudly on drift.
-- **Internal view-pipeline refactor (8 phases)** — general-view/interconnection-view/behavior-view rendering code reorganized (ELK option unification, DTO builder dedup, duplicate Rust "prepared view" preparers deleted for 6 of 7 view kinds, exposed-id filter dedup, dead-code deletion); no intended behavior change, verified via before/after CLI export diffing across all 8 baseline view kinds.
-- **VS Code settings cleanup** — Removed eight display-only / legacy configuration properties (`spec42.standardLibrary.*`, `spec42.domainLibraries.*`) that were not user-configurable; removed `spec42.codeLens.enabled` (code lens disabled for now) and `spec42.startup.workspaceIndexing` (only `background` mode is tested); fixed encoding corruption in `spec42.debug` description. Sync scripts updated accordingly.
+- **LSP responsiveness** â€” hover/completion requests no longer block on in-flight background relink or startup indexing, via the new `workspace_session` actor and a synchronous `WorkspaceSession` state machine (`SessionLifecycle`/`RelinkToken`) in the `workspace` crate. `SemanticCoordinator` (`lsp_server`) has been removed entirely, its responsibilities folded into `WorkspaceSession` (~657 lines removed).
+- **Parallel semantic graph building** â€” workspace and library documents are now parsed/linked in parallel via `rayon` (`build_and_link_graph_parallel`); `lsp_server`'s worker dispatch also moved off hand-rolled `std::thread::spawn` onto rayon, which additionally fixes worker-thread panics that were previously silently swallowed.
+- **Semantic graph builder consistency audit** â€” centralized `part`/`attribute`/`occurrence`/`requirement` usage materialization (previously reimplemented independently per containing context, causing attribute/subtree drift depending on where a usage appeared); specialization edges now wired before body recursion (fixes inherited-member resolution ordering); spec-correct effective-name resolution for unnamed redefining usages (SysML v2 Â§7.6.5); `package_body.rs`'s dispatcher split into 34 named functions.
+- **`ElementKind` type-safety migration** â€” string-based element-kind/type checks replaced with the `ElementKind` enum across `sysml_model` and `language_service` (completion, import resolution, diagnostics, hover, references); `ElementKind::is_definition()` added as the canonical, compiler-checked replacement for scattered `.ends_with(" def")`/`.contains("_def")` string-suffix heuristics.
+- **General-view layout** â€” ELK graph now nests members under real per-package containers (`elk.hierarchyHandling: INCLUDE_CHILDREN`) instead of laying out every node in one flat tree, and spacing constants were tightened; diagrams with real package structure are meaningfully narrower and less tangled. A single package with many same-depth siblings can still lay out as one very wide row (tracked as a known issue, see below).
+- **ELK layout engine version pinned** across the CLI/headless renderer and the VS Code webview build â€” the webview's `node_modules` had silently drifted to elkjs 0.8.2 while the CLI used the intended 0.11.1; both now resolve the same pinned version with a build-time assertion that fails loudly on drift.
+- **Internal view-pipeline refactor (8 phases)** â€” general-view/interconnection-view/behavior-view rendering code reorganized (ELK option unification, DTO builder dedup, duplicate Rust "prepared view" preparers deleted for 6 of 7 view kinds, exposed-id filter dedup, dead-code deletion); no intended behavior change, verified via before/after CLI export diffing across all 8 baseline view kinds.
+- **VS Code settings cleanup** â€” Removed eight display-only / legacy configuration properties (`spec42.standardLibrary.*`, `spec42.domainLibraries.*`) that were not user-configurable; removed `spec42.codeLens.enabled` (code lens disabled for now) and `spec42.startup.workspaceIndexing` (only `background` mode is tested); fixed encoding corruption in `spec42.debug` description. Sync scripts updated accordingly.
 
 ### Fixed
 
 - **Interconnection View: several real connector/rendering bugs found and fixed against a real-world workspace** (`sysml-robot-vacuum-cleaner`):
-  - Bare own-port connector endpoints (e.g. `connect leftMotor.phaseIn to phaseLeftIn;`) were silently dropped — a 2-segment relative member chain was indistinguishable from an already-qualified reference and went unprefixed, so the whole connector failed to match.
-  - A view exposing a definition-nested member (declared directly inside a `part def` body) resolved **zero connectors** whenever the definition and instance paths used independently-named top-level packages — the def→instance path translation only recognized a narrow `Architecture`/`architecture` naming convention.
-  - Sibling subtypes sharing a common ancestor could cross-contaminate def→instance path mappings when a `part def` (not a usage) leaked into the mapping seed, producing orphan nodes and empty parent containers.
-  - A package that only ever contains other packages/definitions (e.g. a top-level `PhysicalArchitecture` wrapping a `part def`) rendered as an empty, disconnected box — two independent container-building mechanisms never linked a root-level definition container to its real owning package container.
-  - Click-to-source did nothing — scene/prepared-view DTOs weren't carrying `uri`/`range` through to the final payload the renderer consumes, despite the upstream data having them.
+  - Bare own-port connector endpoints (e.g. `connect leftMotor.phaseIn to phaseLeftIn;`) were silently dropped â€” a 2-segment relative member chain was indistinguishable from an already-qualified reference and went unprefixed, so the whole connector failed to match.
+  - A view exposing a definition-nested member (declared directly inside a `part def` body) resolved **zero connectors** whenever the definition and instance paths used independently-named top-level packages â€” the defâ†’instance path translation only recognized a narrow `Architecture`/`architecture` naming convention.
+  - Sibling subtypes sharing a common ancestor could cross-contaminate defâ†’instance path mappings when a `part def` (not a usage) leaked into the mapping seed, producing orphan nodes and empty parent containers.
+  - A package that only ever contains other packages/definitions (e.g. a top-level `PhysicalArchitecture` wrapping a `part def`) rendered as an empty, disconnected box â€” two independent container-building mechanisms never linked a root-level definition container to its real owning package container.
+  - Click-to-source did nothing â€” scene/prepared-view DTOs weren't carrying `uri`/`range` through to the final payload the renderer consumes, despite the upstream data having them.
   - Node bodies weren't showing multiplicity, port direction, or `redefines`/`subsets` annotations even though the data existed.
-- **General-view node bodies rendered completely empty** (header-only, no Attributes/Parts/Ports compartments) whenever the view had a kind-narrowing `filter` clause (e.g. `filter @SysML::PartUsage;`) — the filter ran before compartment-folding needed its input nodes.
-- **Duplicate edges during graph linking** — `add_semantic_edge_once` now deduplicates edges that could previously be added more than once via `rebuild_all_document_links`/`rebuild_semantic_graph_staged`.
-- **Stale analysis evaluation context after a full workspace load** — inherited context wasn't being reapplied before expression evaluation on some code paths; fixed via `prepare_analysis_evaluation_context`.
-- **Evaluated attributes not computed on some incremental-update paths** — fixed via new `finalize_and_evaluate`/`patch_graph_for_document`, replacing `finalize_workspace_graph`.
-- **Windows drive-letter normalization** — `workspace::snapshot::discovery::path_to_file_url` now lowercases the drive letter in `file://` URIs (`file:///C:/…` → `file:///c:/…`), matching the normalization applied by `FileSystemDocumentProvider`; previously target URIs and document URIs could differ in case, causing `project_host_semantic_model` to return an empty projection on Windows.
-- **`HostSemanticProjection` excludes diagnostic pseudo-nodes** — `ElementKind::Diagnostic` nodes (internal builder markers for unresolvable connect/allocate endpoints) are now filtered out of `HostSemanticProjection`; they are already emitted as first-class `SemanticDiagnostic` entries via `HostValidationReport`.
-- **Serde defaults for `HostSemanticModelNode.attributes` and `HostSemanticModelRelationship.connect`** — Added `#[serde(default)]` so older persisted projection artifacts without these fields deserialize correctly instead of failing with a missing-field error.
-- **Backward-compatible deserialization for renamed element and relationship kinds** — `ElementKind::parse` now accepts `"requirement usage"` (→ `Requirement`) and `"verification case"` (→ `Verification`); `RelationshipKind::Subject` accepts `"verification"` via `#[serde(alias)]` and `from_persisted_type`; canonical serialization is unchanged.
-- **Document URI normalization at ingestion** — `workspace::snapshot::build::enrich_document_hashes` now normalizes each document's URI (drive-letter case) via `language_service::uri::normalize_uri` before the semantic graph is built, complementing the existing `path_to_file_url` canonicalization. Previously the graph itself could be indexed under a differently-cased URI than the canonicalized `target_urls`, causing `project_host_semantic_model` and `collect_host_validation_report` (parse-error diagnostics) to silently return empty results.
-- **`interface def` no longer collapses into the same kind as `interface` usage** — added `ElementKind::InterfaceDef`; `interface def Foo { ... }` now produces `ElementKind::InterfaceDef` nodes instead of being mislabeled as the bare `interface` usage kind, matching the part/port/action def-vs-usage pattern. Typing/specializes/subject allowlists in `kinds.rs` updated accordingly.
-- **`entry` actions in state bodies no longer become `ElementKind::Unknown`** — `graph_builder::state` now builds entry-action nodes as `ElementKind::Action` (with a `compartment: "entry"` attribute) instead of the unrecognized literal `"entry"`; `state_views::graph_extractor::compartment_action` updated to match on the new attribute.
-- **`ElementKind::ActorDef` removed (was never valid SysML v2 syntax)** — the official grammar only defines a bare `actor Foo;` usage (`ActorUsage : PartUsage`), no `actor def` definition form exists. `graph_builder::package_body`'s `PBE::Actor` handler was mislabeling this usage as `"actor def"`; it now builds `ElementKind::Actor` like the equivalent handling elsewhere (`use_case.rs`, `requirement_body.rs`).
-- **Flaky diagnostics test removed** — `did_change_republishs_peer_diagnostics_after_debounce` deleted; peer-file diagnostic republish timing is non-deterministic under CI load and the behavior is covered by workspace integration tests.
+- **General-view node bodies rendered completely empty** (header-only, no Attributes/Parts/Ports compartments) whenever the view had a kind-narrowing `filter` clause (e.g. `filter @SysML::PartUsage;`) â€” the filter ran before compartment-folding needed its input nodes.
+- **Duplicate edges during graph linking** â€” `add_semantic_edge_once` now deduplicates edges that could previously be added more than once via `rebuild_all_document_links`/`rebuild_semantic_graph_staged`.
+- **Stale analysis evaluation context after a full workspace load** â€” inherited context wasn't being reapplied before expression evaluation on some code paths; fixed via `prepare_analysis_evaluation_context`.
+- **Evaluated attributes not computed on some incremental-update paths** â€” fixed via new `finalize_and_evaluate`/`patch_graph_for_document`, replacing `finalize_workspace_graph`.
+- **Windows drive-letter normalization** â€” `workspace::snapshot::discovery::path_to_file_url` now lowercases the drive letter in `file://` URIs (`file:///C:/â€¦` â†’ `file:///c:/â€¦`), matching the normalization applied by `FileSystemDocumentProvider`; previously target URIs and document URIs could differ in case, causing `project_host_semantic_model` to return an empty projection on Windows.
+- **`HostSemanticProjection` excludes diagnostic pseudo-nodes** â€” `ElementKind::Diagnostic` nodes (internal builder markers for unresolvable connect/allocate endpoints) are now filtered out of `HostSemanticProjection`; they are already emitted as first-class `SemanticDiagnostic` entries via `HostValidationReport`.
+- **Serde defaults for `HostSemanticModelNode.attributes` and `HostSemanticModelRelationship.connect`** â€” Added `#[serde(default)]` so older persisted projection artifacts without these fields deserialize correctly instead of failing with a missing-field error.
+- **Backward-compatible deserialization for renamed element and relationship kinds** â€” `ElementKind::parse` now accepts `"requirement usage"` (â†’ `Requirement`) and `"verification case"` (â†’ `Verification`); `RelationshipKind::Subject` accepts `"verification"` via `#[serde(alias)]` and `from_persisted_type`; canonical serialization is unchanged.
+- **Document URI normalization at ingestion** â€” `workspace::snapshot::build::enrich_document_hashes` now normalizes each document's URI (drive-letter case) via `language_service::uri::normalize_uri` before the semantic graph is built, complementing the existing `path_to_file_url` canonicalization. Previously the graph itself could be indexed under a differently-cased URI than the canonicalized `target_urls`, causing `project_host_semantic_model` and `collect_host_validation_report` (parse-error diagnostics) to silently return empty results.
+- **`interface def` no longer collapses into the same kind as `interface` usage** â€” added `ElementKind::InterfaceDef`; `interface def Foo { ... }` now produces `ElementKind::InterfaceDef` nodes instead of being mislabeled as the bare `interface` usage kind, matching the part/port/action def-vs-usage pattern. Typing/specializes/subject allowlists in `kinds.rs` updated accordingly.
+- **`entry` actions in state bodies no longer become `ElementKind::Unknown`** â€” `graph_builder::state` now builds entry-action nodes as `ElementKind::Action` (with a `compartment: "entry"` attribute) instead of the unrecognized literal `"entry"`; `state_views::graph_extractor::compartment_action` updated to match on the new attribute.
+- **`ElementKind::ActorDef` removed (was never valid SysML v2 syntax)** â€” the official grammar only defines a bare `actor Foo;` usage (`ActorUsage : PartUsage`), no `actor def` definition form exists. `graph_builder::package_body`'s `PBE::Actor` handler was mislabeling this usage as `"actor def"`; it now builds `ElementKind::Actor` like the equivalent handling elsewhere (`use_case.rs`, `requirement_body.rs`).
+- **Flaky diagnostics test removed** â€” `did_change_republishs_peer_diagnostics_after_debounce` deleted; peer-file diagnostic republish timing is non-deterministic under CI load and the behavior is covered by workspace integration tests.
 
 ### Known Issues
 
-- ~~**Interconnection-view and action-flow-view layout is non-deterministic run-to-run**~~ — fixed in `[Unreleased]`, see the O-6 entry above.
-- **Scoped/incremental IBD builds can resolve a different (but still valid) root than a full-workspace build** for some views in workspaces that use SysML variant-selection — a parity gap, not a correctness bug, but scoped and full-workspace exports of the same view can disagree.
+- ~~**Interconnection-view and action-flow-view layout is non-deterministic run-to-run**~~ â€” fixed in `[Unreleased]`, see the O-6 entry above.
+- **Scoped/incremental IBD builds can resolve a different (but still valid) root than a full-workspace build** for some views in workspaces that use SysML variant-selection â€” a parity gap, not a correctness bug, but scoped and full-workspace exports of the same view can disagree.
 
 ## [0.34.0] - 2026-06-30
 
 ### Added
 
-- **SysML v2 Quick Reference panel** — New Help section in the Spec42 sidebar with a "SysML v2 Quick Reference" entry that opens a rich editor tab covering definitions, usages, relationship symbols, annotations, and views — verified against the OMG SysML v2 Language Specification.
-- **Spec42 documentation site** — VitePress site published at `https://elan8.github.io/spec42/` via GitHub Pages, with getting-started guide, example walkthroughs, visualizer reference, library guide, and SysML v2 quick reference. Automated deployment via `.github/workflows/docs.yml`.
-- **Help sidebar panel** — Sidebar section with quick actions: open visualizer, open recommended example, open quick reference, link to Spec42 docs, link to OMG SysML v2 spec.
-- **Drone interconnection performance smoke report** — Nightly CI enforces latency budgets against the in-repo drone example (`drone_interconnection_performance_smoke_report`).
+- **SysML v2 Quick Reference panel** â€” New Help section in the Spec42 sidebar with a "SysML v2 Quick Reference" entry that opens a rich editor tab covering definitions, usages, relationship symbols, annotations, and views â€” verified against the OMG SysML v2 Language Specification.
+- **Spec42 documentation site** â€” VitePress site published at `https://elan8.github.io/spec42/` via GitHub Pages, with getting-started guide, example walkthroughs, visualizer reference, library guide, and SysML v2 quick reference. Automated deployment via `.github/workflows/docs.yml`.
+- **Help sidebar panel** â€” Sidebar section with quick actions: open visualizer, open recommended example, open quick reference, link to Spec42 docs, link to OMG SysML v2 spec.
+- **Drone interconnection performance smoke report** â€” Nightly CI enforces latency budgets against the in-repo drone example (`drone_interconnection_performance_smoke_report`).
 
 ### Changed
 
-- **Visualizer moved to secondary sidebar** — SysML Visualizer is now a persistent sidebar panel (`WebviewViewProvider`) in the secondary sidebar instead of a transient editor panel; removed the editor-title toolbar button.
-- **Semantic token accuracy** — Improved token classification for state definitions, flow definitions, port definitions, action definitions, and part definitions; new golden-token regression suite; better declaration-range resolution in `ast_util.rs`.
-- **LSP document processing** — New `workspace/coordinator.rs`; cleaner semantic lifecycle management with explicit `SemanticLifecycle` states; improved relink scheduling and reduced redundant re-processing.
-- **Library graph handling** — Enhanced caching and concurrency in LSP server library graph loading.
-- **Diagram legend accuracy** — Specialization edge now shows a correct hollow triangle; containment shows a proper diamond; removed the incorrect "Hierarchy" entry.
-- **Nightly CI cleanup** — `large-workspace-performance` job (tiny fixture, no budget signal) replaced by `performance` (drone interconnection, blocking); `interconnection-visualization-performance` job (always skipped without external fixture) removed; stdlib bundle caching added to `sysml-release-validation` job.
-- **Library sidebar** — Simplified styling and layout of the library panel.
-- **Release surface alignment** — Rust workspace, `spec42` server, VS Code extension, Zed extension, and GitHub Action examples aligned at `0.34.0`.
+- **Visualizer moved to secondary sidebar** â€” SysML Visualizer is now a persistent sidebar panel (`WebviewViewProvider`) in the secondary sidebar instead of a transient editor panel; removed the editor-title toolbar button.
+- **Semantic token accuracy** â€” Improved token classification for state definitions, flow definitions, port definitions, action definitions, and part definitions; new golden-token regression suite; better declaration-range resolution in `ast_util.rs`.
+- **LSP document processing** â€” New `workspace/coordinator.rs`; cleaner semantic lifecycle management with explicit `SemanticLifecycle` states; improved relink scheduling and reduced redundant re-processing.
+- **Library graph handling** â€” Enhanced caching and concurrency in LSP server library graph loading.
+- **Diagram legend accuracy** â€” Specialization edge now shows a correct hollow triangle; containment shows a proper diamond; removed the incorrect "Hierarchy" entry.
+- **Nightly CI cleanup** â€” `large-workspace-performance` job (tiny fixture, no budget signal) replaced by `performance` (drone interconnection, blocking); `interconnection-visualization-performance` job (always skipped without external fixture) removed; stdlib bundle caching added to `sysml-release-validation` job.
+- **Library sidebar** â€” Simplified styling and layout of the library panel.
+- **Release surface alignment** â€” Rust workspace, `spec42` server, VS Code extension, Zed extension, and GitHub Action examples aligned at `0.34.0`.
 
 ### Fixed
 
-- **Visualizer open state tracking** — `visualizerOpen` in the extension debug state now correctly reflects whether the visualizer view has been resolved, rather than always returning `true` after activation.
-- **`BaseVisualizationPanelController.dispose()`** — Restore state is now cleared on dispose in all code paths (previously only cleared when going through `VisualizationPanel.dispose()`).
-- **Flaky diagnostics test** — `did_change_republishs_peer_diagnostics_after_debounce` now uses barrier-based polling with a 5-second deadline instead of a fixed `sleep(250ms)`, eliminating race conditions on loaded CI runners.
+- **Visualizer open state tracking** â€” `visualizerOpen` in the extension debug state now correctly reflects whether the visualizer view has been resolved, rather than always returning `true` after activation.
+- **`BaseVisualizationPanelController.dispose()`** â€” Restore state is now cleared on dispose in all code paths (previously only cleared when going through `VisualizationPanel.dispose()`).
+- **Flaky diagnostics test** â€” `did_change_republishs_peer_diagnostics_after_debounce` now uses barrier-based polling with a 5-second deadline instead of a fixed `sleep(250ms)`, eliminating race conditions on loaded CI runners.
 
 ## [0.33.0] - 2026-06-29
 
 ### Added
 
-- **`workspace` crate** — Protocol-neutral embedding for workspace build, snapshot loading, semantic comparison, incremental updates, cancellation, and resource limits (ADR 0003).
-- **Semantic comparison** — `compare_snapshots` returns a versioned `SemanticComparisonReport` for element, relationship, diagnostic, and view catalog diffs with identity-preservation assessment.
-- **Artifact metadata** — `HostArtifactMetadata` records schema versions, engine version, library catalog hash, and per-document source hashes.
-- **TypeScript bindings (`sysml_model`)** — `ts-rs` integration exports shared DTOs (including unified `Position` and `Range`) for the diagram renderer and extension surfaces.
-- **Component view module** — Part and port expansion for semantic graph queries.
-- **Library parse caching** — LSP server caches library graph parses across workspace sessions.
-- **`WorkspaceRenderCache`** — LSP visualization warm-cache integration for `sysml/visualization` requests.
-- **Incremental snapshot updates** — Experimental incremental workspace updates with parity, fallback, and benchmark tests.
-- **Robot vacuum showcase** — Integration tests and performance analysis documentation for the release-gating fixture.
-- **Performance guardrails** — Nightly budget enforcement via `scripts/check-perf-budgets.mjs` on large-workspace and drone-interconnection fixtures.
-- **`edges_for_uri`** — Semantic graph query method for URI-scoped edge lookup with improved serialization.
-- **Parent-child relationship handling** — Semantic graph evaluation now models parent-child relationships explicitly.
+- **`workspace` crate** â€” Protocol-neutral embedding for workspace build, snapshot loading, semantic comparison, incremental updates, cancellation, and resource limits (ADR 0003).
+- **Semantic comparison** â€” `compare_snapshots` returns a versioned `SemanticComparisonReport` for element, relationship, diagnostic, and view catalog diffs with identity-preservation assessment.
+- **Artifact metadata** â€” `HostArtifactMetadata` records schema versions, engine version, library catalog hash, and per-document source hashes.
+- **TypeScript bindings (`sysml_model`)** â€” `ts-rs` integration exports shared DTOs (including unified `Position` and `Range`) for the diagram renderer and extension surfaces.
+- **Component view module** â€” Part and port expansion for semantic graph queries.
+- **Library parse caching** â€” LSP server caches library graph parses across workspace sessions.
+- **`WorkspaceRenderCache`** â€” LSP visualization warm-cache integration for `sysml/visualization` requests.
+- **Incremental snapshot updates** â€” Experimental incremental workspace updates with parity, fallback, and benchmark tests.
+- **Robot vacuum showcase** â€” Integration tests and performance analysis documentation for the release-gating fixture.
+- **Performance guardrails** â€” Nightly budget enforcement via `scripts/check-perf-budgets.mjs` on large-workspace and drone-interconnection fixtures.
+- **`edges_for_uri`** â€” Semantic graph query method for URI-scoped edge lookup with improved serialization.
+- **Parent-child relationship handling** â€” Semantic graph evaluation now models parent-child relationships explicitly.
 
 ### Changed
 
-- **Crate restructuring** — `semantic_core` renamed to `sysml_model`, `kernel` renamed to `lsp_server`, and embedding concerns extracted into the new `workspace` crate.
-- **Parser dependency** — Bumped `sysml-v2-parser` to **0.28.0** on [crates.io](https://crates.io/crates/sysml-v2-parser); graph builders updated for new AST body/member enums.
-- **DTO unification** — Neutral `TextPosition`/`TextRange` span types and unified `Position`/`Range` DTOs across `sysml_model`.
-- **LSP server** — Refactored document handling for improved concurrency; library graph caching; streamlined diagnostics and visualization data paths.
-- **Semantic graph** — `Arc`-based memory management, query performance improvements, and stale-cache invalidation fixes.
-- **IBD payload merging** — Refactored merge path with enhanced workspace instance mapping.
-- **Element kind handling** — Refactored predicates for improved type safety and consistency.
-- **CI workflows** — Updated for crate renaming; diagram renderer performance tracking in CI.
-- **Documentation** — Engineering docs, Sequence View notes, and architecture references updated for current crate names.
-- **Release surface alignment** — Rust workspace, `spec42` server, VS Code extension, Zed extension, and GitHub Action examples aligned at `0.33.0`.
+- **Crate restructuring** â€” `semantic_core` renamed to `sysml_model`, `kernel` renamed to `lsp_server`, and embedding concerns extracted into the new `workspace` crate.
+- **Parser dependency** â€” Bumped `sysml-v2-parser` to **0.28.0** on [crates.io](https://crates.io/crates/sysml-v2-parser); graph builders updated for new AST body/member enums.
+- **DTO unification** â€” Neutral `TextPosition`/`TextRange` span types and unified `Position`/`Range` DTOs across `sysml_model`.
+- **LSP server** â€” Refactored document handling for improved concurrency; library graph caching; streamlined diagnostics and visualization data paths.
+- **Semantic graph** â€” `Arc`-based memory management, query performance improvements, and stale-cache invalidation fixes.
+- **IBD payload merging** â€” Refactored merge path with enhanced workspace instance mapping.
+- **Element kind handling** â€” Refactored predicates for improved type safety and consistency.
+- **CI workflows** â€” Updated for crate renaming; diagram renderer performance tracking in CI.
+- **Documentation** â€” Engineering docs, Sequence View notes, and architecture references updated for current crate names.
+- **Release surface alignment** â€” Rust workspace, `spec42` server, VS Code extension, Zed extension, and GitHub Action examples aligned at `0.33.0`.
 
 ### Fixed
 
-- **Stale semantic graph cache** — Cache invalidation after graph mutations restores correct query results.
-- **LSP integration test** — Diagnostic handling for loose-file workspaces.
-- **MCP tools test** — Additional error-message assertion for tool failure paths.
+- **Stale semantic graph cache** â€” Cache invalidation after graph mutations restores correct query results.
+- **LSP integration test** â€” Diagnostic handling for loose-file workspaces.
+- **MCP tools test** â€” Additional error-message assertion for tool failure paths.
 
 ## [0.32.0] - 2026-06-22
 
 ### Added
 
-- **`language_service` crate** — Shared language-service layer extracted from the kernel; integrated into LSP runtime and core tests.
-- **`preparedView` pipeline** — Rust builds render-ready `preparedView` DTOs for interconnection and standard views; LSP can emit slim interconnection payloads that omit duplicate `ibd`, `graph`, and `interconnectionScene` fields when `preparedView` is present.
-- **Headless SVG export** — Shared `@spec42/diagram-renderer` headless path for CLI/API diagram export and VS Code export smoke tests, aligned with the webview renderer.
-- **Standard views** — Browser, grid, and geometry view preparers in `semantic_core` and the shared diagram renderer.
-- **Projection hints** — View projection hints and rendering resolution for defined SysML views; standard-view defaults and swim-lane handling in activity diagrams.
-- **IBD build scoping** — `ViewExposedPackages` scope for interconnection builds reduces work on large workspaces; scoped-vs-full parity and performance smoke tests.
-- **Legacy ELK SVG (test-only)** — Rust `legacy_elk_svg` module retains `interconnectionScene` ELK parity probes; production export uses headless `preparedView`.
-- **Diagram export quality analysis** — Engineering notes and integration coverage for export/readability invariants.
+- **`language_service` crate** â€” Shared language-service layer extracted from the kernel; integrated into LSP runtime and core tests.
+- **`preparedView` pipeline** â€” Rust builds render-ready `preparedView` DTOs for interconnection and standard views; LSP can emit slim interconnection payloads that omit duplicate `ibd`, `graph`, and `interconnectionScene` fields when `preparedView` is present.
+- **Headless SVG export** â€” Shared `@spec42/diagram-renderer` headless path for CLI/API diagram export and VS Code export smoke tests, aligned with the webview renderer.
+- **Standard views** â€” Browser, grid, and geometry view preparers in `semantic_core` and the shared diagram renderer.
+- **Projection hints** â€” View projection hints and rendering resolution for defined SysML views; standard-view defaults and swim-lane handling in activity diagrams.
+- **IBD build scoping** â€” `ViewExposedPackages` scope for interconnection builds reduces work on large workspaces; scoped-vs-full parity and performance smoke tests.
+- **Legacy ELK SVG (test-only)** â€” Rust `legacy_elk_svg` module retains `interconnectionScene` ELK parity probes; production export uses headless `preparedView`.
+- **Diagram export quality analysis** â€” Engineering notes and integration coverage for export/readability invariants.
 
 ### Changed
 
-- **Interconnection scene schema version 2** — Canonical interconnection scenes and prepared views use schema version 2; integration tests poll `preparedView` instead of legacy `interconnectionScene`/`ibd` counts.
-- **Visualization workspace cache** — Model Explorer and visualizer share workspace render snapshots; slim `preparedView` interconnection responses are cached on warm `sysml/visualization` requests.
-- **Parser dependency** — Bumped `sysml-v2-parser` to **0.25.6** on [crates.io](https://crates.io/crates/sysml-v2-parser).
-- **Library closure resolution** — Further hardening of import-scoped library loading and workspace-wins merge behavior.
-- **CI and agent surfaces** — Core vs agent/API/MCP test split in CI; ignored integration tests documented for MCP/API workflows.
-- **Release surface alignment** — Rust workspace, `spec42` server, VS Code extension, Zed extension, and GitHub Action examples aligned at `0.32.0`.
+- **Interconnection scene schema version 2** â€” Canonical interconnection scenes and prepared views use schema version 2; integration tests poll `preparedView` instead of legacy `interconnectionScene`/`ibd` counts.
+- **Visualization workspace cache** â€” Model Explorer and visualizer share workspace render snapshots; slim `preparedView` interconnection responses are cached on warm `sysml/visualization` requests.
+- **Parser dependency** â€” Bumped `sysml-v2-parser` to **0.25.6** on [crates.io](https://crates.io/crates/sysml-v2-parser).
+- **Library closure resolution** â€” Further hardening of import-scoped library loading and workspace-wins merge behavior.
+- **CI and agent surfaces** â€” Core vs agent/API/MCP test split in CI; ignored integration tests documented for MCP/API workflows.
+- **Release surface alignment** â€” Rust workspace, `spec42` server, VS Code extension, Zed extension, and GitHub Action examples aligned at `0.32.0`.
 
 ### Fixed
 
-- **Slim interconnection cache** — Visualization response cache accepts `preparedView`-only interconnection payloads (restores warm-cache behavior after slim-payload refactor).
-- **IBD unit tests** — Correct `extract_impl` test imports for `merge_ibd_payloads` and related IBD helpers after module layout changes.
-- **Diagram renderer types** — TypeScript `PreparedView` passthrough casts in shared prepare/headless export paths.
+- **Slim interconnection cache** â€” Visualization response cache accepts `preparedView`-only interconnection payloads (restores warm-cache behavior after slim-payload refactor).
+- **IBD unit tests** â€” Correct `extract_impl` test imports for `merge_ibd_payloads` and related IBD helpers after module layout changes.
+- **Diagram renderer types** â€” TypeScript `PreparedView` passthrough casts in shared prepare/headless export paths.
 
 ## [0.31.0] - 2026-06-15
 
 ### Added
 
-- **KPAR crate (`crates/kpar`)** — Read, validate, and materialize KerML Project Archives (`.project.json`, `.meta.json`, SHA-256 checksums, textual `.sysml`/`.kerml` sources). The top-level `spec42 bundle` command creates local archives, while `extract_archive_subset` lives in `legacy.rs` for zip subset helpers used in tests.
-- **Domain libraries via KPAR** — Bundled domain libraries ship as `elan8-domain-libraries-{version}.kpar`. `config/domain-libraries.json` pins `format`, `version`, and release `artifact`. Runtime materializes the embedded KPAR on first use; managed install path no longer uses a `tree/` subdirectory when `contentPath` is empty.
-- **Standard library via OMG KPAR** — Bundled stdlib embeds the OMG `sysml.library.kpar` archives from the pinned SysML v2 Release tag. Multiple KPAR subroots are materialized and mounted for semantic indexing (`stdlib_roots` in environment resolution).
-- **Domain library release automation** — GitHub Action on [elan8/sysml-domain-libraries](https://github.com/elan8/sysml-domain-libraries) (`release-kpar.yml`) builds and publishes the KPAR asset plus `SHA256SUMS.txt` on `v*` tags.
-- **KPAR embed smoke test** — `crates/server/tests/kpar_stdlib_embed_smoke.rs` verifies embedded OMG KPAR stdlib materialization and `ScalarValues::Real` import resolution via `spec42 check`.
+- **KPAR crate (`crates/kpar`)** â€” Read, validate, and materialize KerML Project Archives (`.project.json`, `.meta.json`, SHA-256 checksums, textual `.sysml`/`.kerml` sources). The top-level `spec42 bundle` command creates local archives, while `extract_archive_subset` lives in `legacy.rs` for zip subset helpers used in tests.
+- **Domain libraries via KPAR** â€” Bundled domain libraries ship as `elan8-domain-libraries-{version}.kpar`. `config/domain-libraries.json` pins `format`, `version`, and release `artifact`. Runtime materializes the embedded KPAR on first use; managed install path no longer uses a `tree/` subdirectory when `contentPath` is empty.
+- **Standard library via OMG KPAR** â€” Bundled stdlib embeds the OMG `sysml.library.kpar` archives from the pinned SysML v2 Release tag. Multiple KPAR subroots are materialized and mounted for semantic indexing (`stdlib_roots` in environment resolution).
+- **Domain library release automation** â€” GitHub Action on [elan8/sysml-domain-libraries](https://github.com/elan8/sysml-domain-libraries) (`release-kpar.yml`) builds and publishes the KPAR asset plus `SHA256SUMS.txt` on `v*` tags.
+- **KPAR embed smoke test** â€” `crates/server/tests/kpar_stdlib_embed_smoke.rs` verifies embedded OMG KPAR stdlib materialization and `ScalarValues::Real` import resolution via `spec42 check`.
 
 ### Changed
 
-- **Library distribution format** — Standard and domain libraries use KPAR only. Tree-format zip extraction and repack fallbacks removed from `build.rs`, `stdlib.rs`, `domain_libraries.rs`, and fetch scripts.
-- **Stdlib fetch (KPAR-only)** — `scripts/fetch-stdlib-bundle.sh` sparse-checkouts only `sysml.library.kpar/` from the pinned OMG release tag (not the full release zip and not `master`). All embed KPAR inputs live under repo-root `.cache/` (stdlib subdirectory + domain `.kpar` file).
-- **Domain library fetch** — `scripts/fetch-domain-libraries-bundle.sh` downloads the release `.kpar` asset or packs locally from `SPEC42_DOMAIN_LIBRARIES_SOURCE_DIR` / sibling `../sysml-domain-libraries`.
-- **Build embed pipeline** — `build.rs` embeds `bundled-sysml-kpar/*.kpar` for the OMG standard library and raw `.kpar` bytes for domain libraries. Maintainer override: `SPEC42_STDLIB_KPAR_DIR` (replaces `SPEC42_STDLIB_BUNDLE_ZIP`).
-- **Library path resolution** — `spec42 doctor` and environment resolution expose multiple stdlib roots when using the KPAR distribution; VS Code library settings sync `format: kpar` from `config/*.json`.
-- **CI and release workflows** — `ci.yml`, `release.yml`, and `nightly.yml` cache embed KPAR inputs under `.cache/` (`SPEC42_STDLIB_KPAR_DIR` and `SPEC42_DOMAIN_LIBRARIES_BUNDLE_ZIP`). OMG ratchet jobs in `nightly.yml` still clone the full `SysML-v2-Release` checkout separately.
-- **Local build cache** — `.cache/` at the repository root is gitignored; KPAR build inputs are never committed.
+- **Library distribution format** â€” Standard and domain libraries use KPAR only. Tree-format zip extraction and repack fallbacks removed from `build.rs`, `stdlib.rs`, `domain_libraries.rs`, and fetch scripts.
+- **Stdlib fetch (KPAR-only)** â€” `scripts/fetch-stdlib-bundle.sh` sparse-checkouts only `sysml.library.kpar/` from the pinned OMG release tag (not the full release zip and not `master`). All embed KPAR inputs live under repo-root `.cache/` (stdlib subdirectory + domain `.kpar` file).
+- **Domain library fetch** â€” `scripts/fetch-domain-libraries-bundle.sh` downloads the release `.kpar` asset or packs locally from `SPEC42_DOMAIN_LIBRARIES_SOURCE_DIR` / sibling `../sysml-domain-libraries`.
+- **Build embed pipeline** â€” `build.rs` embeds `bundled-sysml-kpar/*.kpar` for the OMG standard library and raw `.kpar` bytes for domain libraries. Maintainer override: `SPEC42_STDLIB_KPAR_DIR` (replaces `SPEC42_STDLIB_BUNDLE_ZIP`).
+- **Library path resolution** â€” `spec42 doctor` and environment resolution expose multiple stdlib roots when using the KPAR distribution; VS Code library settings sync `format: kpar` from `config/*.json`.
+- **CI and release workflows** â€” `ci.yml`, `release.yml`, and `nightly.yml` cache embed KPAR inputs under `.cache/` (`SPEC42_STDLIB_KPAR_DIR` and `SPEC42_DOMAIN_LIBRARIES_BUNDLE_ZIP`). OMG ratchet jobs in `nightly.yml` still clone the full `SysML-v2-Release` checkout separately.
+- **Local build cache** â€” `.cache/` at the repository root is gitignored; KPAR build inputs are never committed.
 
 ### Removed
 
-- **Tree-format library bundles** — No support for textual `sysml.library/` trees or git-archive zip repack as embed input. Installation from bytes requires KPAR archives.
-- **`SPEC42_STDLIB_BUNDLE_ZIP`** — Replaced by `SPEC42_STDLIB_KPAR_DIR` pointing at a directory of OMG `.kpar` files.
+- **Tree-format library bundles** â€” No support for textual `sysml.library/` trees or git-archive zip repack as embed input. Installation from bytes requires KPAR archives.
+- **`SPEC42_STDLIB_BUNDLE_ZIP`** â€” Replaced by `SPEC42_STDLIB_KPAR_DIR` pointing at a directory of OMG `.kpar` files.
 
 ### Added
 
-- **Library import closure tests** — Kernel `validate_paths` integration test for webshop-like workspaces with duplicate domain-library packages; semantic_core tests for import-scoped closure, conditional unit catalogs, and workspace-wins graph merge.
-- **Semantic resolution contract** — New [resolution-contract.md](crates/semantic_core/docs/resolution-contract.md) documenting name-resolution pipeline stages and resolver entry points; `kinds.rs` canonical element-kind predicates; refactored graph pipeline for materialization, merging, linking, and pending resolution.
-- **Flow usage projection** — Dedicated `flow_usage` module for consistent flow edge emission across body elements.
-- **Metadata OMG 14c compliance** — Shorthand metadata redefine features, `subsetsFeature` projection for redefine shorthand, and nightly OMG 14c metadata compliance check.
-- **Import namespace resolution** — `import_namespace_target_candidates` for accurate all/membership import target generation.
-- **Requirement satisfaction diagnostics** — Checks for requirement satisfaction by parts per SysML specifications.
-- **Robot vacuum showcase test** — Integration test validating diagnostics on the showcase model.
+- **Library import closure tests** â€” Kernel `validate_paths` integration test for webshop-like workspaces with duplicate domain-library packages; semantic_core tests for import-scoped closure, conditional unit catalogs, and workspace-wins graph merge.
+- **Semantic resolution contract** â€” New [resolution-contract.md](crates/semantic_core/docs/resolution-contract.md) documenting name-resolution pipeline stages and resolver entry points; `kinds.rs` canonical element-kind predicates; refactored graph pipeline for materialization, merging, linking, and pending resolution.
+- **Flow usage projection** â€” Dedicated `flow_usage` module for consistent flow edge emission across body elements.
+- **Metadata OMG 14c compliance** â€” Shorthand metadata redefine features, `subsetsFeature` projection for redefine shorthand, and nightly OMG 14c metadata compliance check.
+- **Import namespace resolution** â€” `import_namespace_target_candidates` for accurate all/membership import target generation.
+- **Requirement satisfaction diagnostics** â€” Checks for requirement satisfaction by parts per SysML specifications.
+- **Robot vacuum showcase test** â€” Integration test validating diagnostics on the showcase model.
 
 ### Changed
 
-- **Parser dependency** — Bumped `sysml-v2-parser` to **0.25.4** on [crates.io](https://crates.io/crates/sysml-v2-parser); removed local patch configuration. Flow handling refactored through the new `flow_usage` module.
-- **Verification case diagnostics** — Then-action return semantics aligned with SysML v2 (verification cases with then-actions and no explicit return are valid); removed outdated then-action count checks in requirement case conformance.
-- **Semantic metadata graph building** — Improved parent ID handling for semantic metadata definitions in the graph builder.
-- **Release surface alignment** — Rust workspace, `spec42` server, VS Code extension, Zed extension, and GitHub Action examples aligned at `0.31.0`.
+- **Parser dependency** â€” Bumped `sysml-v2-parser` to **0.25.4** on [crates.io](https://crates.io/crates/sysml-v2-parser); removed local patch configuration. Flow handling refactored through the new `flow_usage` module.
+- **Verification case diagnostics** â€” Then-action return semantics aligned with SysML v2 (verification cases with then-actions and no explicit return are valid); removed outdated then-action count checks in requirement case conformance.
+- **Semantic metadata graph building** â€” Improved parent ID handling for semantic metadata definitions in the graph builder.
+- **Release surface alignment** â€” Rust workspace, `spec42` server, VS Code extension, Zed extension, and GitHub Action examples aligned at `0.31.0`.
 
 ### Fixed
 
-- **Library import closure** — Library files enter the semantic graph only through transitive `import` closure; workspace-declared packages satisfy imports without loading same-named library copies (fixes ambiguous `view_expose_unresolved` and empty views when domain libraries include examples such as webshop). Unit catalogs (`ScalarValues`, `ISQ`, `QUDV`, etc.) load only when the closure needs them. Graph merge prefers workspace declarations when duplicate package names slip through (`spec42 check`, LSP, and filesystem provider).
-- **Import resolution** — Enhanced namespace import target resolution for all and membership imports.
-- **Cyclic state definitions** — Diagnostic checks for cyclic state definition graphs.
-- **Verdict evaluations** — Improved verdict evaluation diagnostics.
-- **Monetary units** — Correct resolution of monetary units from indexed catalogs during evaluation.
+- **Library import closure** â€” Library files enter the semantic graph only through transitive `import` closure; workspace-declared packages satisfy imports without loading same-named library copies (fixes ambiguous `view_expose_unresolved` and empty views when domain libraries include examples such as webshop). Unit catalogs (`ScalarValues`, `ISQ`, `QUDV`, etc.) load only when the closure needs them. Graph merge prefers workspace declarations when duplicate package names slip through (`spec42 check`, LSP, and filesystem provider).
+- **Import resolution** â€” Enhanced namespace import target resolution for all and membership imports.
+- **Cyclic state definitions** â€” Diagnostic checks for cyclic state definition graphs.
+- **Verdict evaluations** â€” Improved verdict evaluation diagnostics.
+- **Monetary units** â€” Correct resolution of monetary units from indexed catalogs during evaluation.
 
 ## [0.30.0] - 2026-06-12
 
 ### Added
 
-- **Canonical interconnection pipeline** — Language server emits `interconnectionScene` (schema version 1) for Interconnection views; shared `@spec42/diagram-renderer` prepares and lays out scenes with ELK; VS Code and export paths consume the same pipeline.
-- **IBD and interconnection scope** — Merged workspace IBD, scoped interconnection filtering, package container groups, and diagram export improvements for internal block diagrams.
-- **Visualization performance** — Lazy single-view projection, workspace visualization artifact cache (shared by Model Explorer and visualizer), per-diagram response cache, and slimmer interconnection LSP payloads. Documented in [docs/engineering/POWER-SYSTEMS-PERFORMANCE-ANALYSIS.md](docs/engineering/POWER-SYSTEMS-PERFORMANCE-ANALYSIS.md) with `powersystems_system_context_performance_report` integration test.
-- **Domain libraries bundled like stdlib** — Removed the `domain-libraries` git submodule. Elan8 domain libraries are embedded in the Spec42 server binary, materialized under the data directory on first use, and shown in the VS Code Library dashboard next to the standard library. Local dev auto-detects a sibling `../sysml-domain-libraries` checkout or uses `SPEC42_DOMAIN_LIBRARIES_SOURCE_DIR`.
-- **Workspace lifecycle feedback** — Clear indexing/ready states for semantic queries; visualizer and Model Explorer respect lifecycle before building diagrams.
-- **Analysis typing and evaluation** — Richer analysis usage typing, inherited analysis results, and conformance-matrix updates for metadata and quantities.
-- **Diagnostics** — Engineering-units validation, SysML kind-compatibility checks, and improved reference resolution messaging.
+- **Canonical interconnection pipeline** â€” Language server emits `interconnectionScene` (schema version 1) for Interconnection views; shared `@spec42/diagram-renderer` prepares and lays out scenes with ELK; VS Code and export paths consume the same pipeline.
+- **IBD and interconnection scope** â€” Merged workspace IBD, scoped interconnection filtering, package container groups, and diagram export improvements for internal block diagrams.
+- **Visualization performance** â€” Lazy single-view projection, workspace visualization artifact cache (shared by Model Explorer and visualizer), per-diagram response cache, and slimmer interconnection LSP payloads. Documented in [docs/engineering/POWER-SYSTEMS-PERFORMANCE-ANALYSIS.md](docs/engineering/POWER-SYSTEMS-PERFORMANCE-ANALYSIS.md) with `powersystems_system_context_performance_report` integration test.
+- **Domain libraries bundled like stdlib** â€” Removed the `domain-libraries` git submodule. Elan8 domain libraries are embedded in the Spec42 server binary, materialized under the data directory on first use, and shown in the VS Code Library dashboard next to the standard library. Local dev auto-detects a sibling `../sysml-domain-libraries` checkout or uses `SPEC42_DOMAIN_LIBRARIES_SOURCE_DIR`.
+- **Workspace lifecycle feedback** â€” Clear indexing/ready states for semantic queries; visualizer and Model Explorer respect lifecycle before building diagrams.
+- **Analysis typing and evaluation** â€” Richer analysis usage typing, inherited analysis results, and conformance-matrix updates for metadata and quantities.
+- **Diagnostics** â€” Engineering-units validation, SysML kind-compatibility checks, and improved reference resolution messaging.
 
 ### Changed
 
-- **Parser dependency** — Bumped `sysml-v2-parser` to **0.25.2** on [crates.io](https://crates.io/crates/sysml-v2-parser): metadata in constraint bodies, structured recovery for state `ref` and part-usage bind/ref bodies, case-body `ref :>>` and verdict spans, expression classification, and related graph/diagnostic follow-through since 0.29.1.
-- **Interconnection visualization** — Legacy interconnection webview paths removed; layout, routing, and drawing consolidated in the shared renderer.
-- **LSP perf logging** — `backend:sysmlVisualizationRequest` includes `cacheHit`, `ibdMs`, `viewEvalMs`, and `sceneMs`.
-- **Release surface alignment** — Rust workspace, `spec42` server, VS Code extension, Zed extension, and GitHub Action examples aligned at `0.30.0`.
+- **Parser dependency** â€” Bumped `sysml-v2-parser` to **0.25.2** on [crates.io](https://crates.io/crates/sysml-v2-parser): metadata in constraint bodies, structured recovery for state `ref` and part-usage bind/ref bodies, case-body `ref :>>` and verdict spans, expression classification, and related graph/diagnostic follow-through since 0.29.1.
+- **Interconnection visualization** â€” Legacy interconnection webview paths removed; layout, routing, and drawing consolidated in the shared renderer.
+- **LSP perf logging** â€” `backend:sysmlVisualizationRequest` includes `cacheHit`, `ibdMs`, `viewEvalMs`, and `sceneMs`.
+- **Release surface alignment** â€” Rust workspace, `spec42` server, VS Code extension, Zed extension, and GitHub Action examples aligned at `0.30.0`.
 
 ### Fixed
 
-- **Visualization response cache** — Do not cache or serve incomplete `interconnection-view` responses (avoids stale empty scenes in integration tests and after fast view switches).
-- **Extension build** — Resolve `elkjs` when bundling `diagram-renderer` into the VS Code extension host.
-- **Interconnection integration tests** — Poll until `interconnectionScene` is ready before asserting drone/grid diagram invariants.
+- **Visualization response cache** â€” Do not cache or serve incomplete `interconnection-view` responses (avoids stale empty scenes in integration tests and after fast view switches).
+- **Extension build** â€” Resolve `elkjs` when bundling `diagram-renderer` into the VS Code extension host.
+- **Interconnection integration tests** â€” Poll until `interconnectionScene` is ready before asserting drone/grid diagram invariants.
 
 ## [0.29.1] - 2026-06-09
 
 ### Added
 
-- **Graph depth P4b–P8 (semantic depth)** — RenderingDef and OccurrenceUsage body walks; shared case-body wiring (`SubjectRef`, `FirstSuccession`, `ThenUseCaseUsage`, `RefRedefinition`); `MetadataAnnotation` in action/requirement bodies; typed graph facts (`valueIsBoolean`, `rhsIsBoolean`); state/interface/payload semantic tokens; hover signatures for view rendering, ref redefinition, filters, and verdicts.
-- **Graph depth P1** — Action/interface/requirement body projection: `ActionDefBody` and `ActionUsageBody` walked (`then action`, nested actions, assign/ref/state/for); interface ends expose `portType` with end-typing `Connection` wiring; requirement `verify` and `subject` members emit graph nodes and `Subject` edges. Integration tests: `action_body_semantics`, `interface_body_semantics`, `requirement_body_semantics`.
-- **Graph depth P2** — Action-flow graph enrichment for activity diagrams; semantic token recursion for action/requirement bodies; `item def`/`individual def` `AttributeBody` projection; `require constraint` child graph nodes. Integration tests: `activity_graph_semantics`, `item_def_body_semantics`, `action_definitions`.
-- **Graph depth P3** — `definition_body`/`occurrence_body` walkers for occurrence and flow definitions; `PartDefBody` completion (`enum`/`item` usages, opaque members, occurrence brace bodies); semantic token expansion for part/item/metadata inner identifiers and requirement body gaps; hover and symbol kinds for P3 node kinds. Integration tests: `definition_body_semantics`, `part_def_body_semantics`, `part_def_tokens`.
-- **Graph depth P4a** — Flow/allocation `DefinitionBody` semantics and semantic tokens; General View filters `require constraint` child nodes while preserving inline constraint text. Integration tests: `definition_body_semantics`, `flow_def_tokens`, `model_projection`.
+- **Graph depth P4bâ€“P8 (semantic depth)** â€” RenderingDef and OccurrenceUsage body walks; shared case-body wiring (`SubjectRef`, `FirstSuccession`, `ThenUseCaseUsage`, `RefRedefinition`); `MetadataAnnotation` in action/requirement bodies; typed graph facts (`valueIsBoolean`, `rhsIsBoolean`); state/interface/payload semantic tokens; hover signatures for view rendering, ref redefinition, filters, and verdicts.
+- **Graph depth P1** â€” Action/interface/requirement body projection: `ActionDefBody` and `ActionUsageBody` walked (`then action`, nested actions, assign/ref/state/for); interface ends expose `portType` with end-typing `Connection` wiring; requirement `verify` and `subject` members emit graph nodes and `Subject` edges. Integration tests: `action_body_semantics`, `interface_body_semantics`, `requirement_body_semantics`.
+- **Graph depth P2** â€” Action-flow graph enrichment for activity diagrams; semantic token recursion for action/requirement bodies; `item def`/`individual def` `AttributeBody` projection; `require constraint` child graph nodes. Integration tests: `activity_graph_semantics`, `item_def_body_semantics`, `action_definitions`.
+- **Graph depth P3** â€” `definition_body`/`occurrence_body` walkers for occurrence and flow definitions; `PartDefBody` completion (`enum`/`item` usages, opaque members, occurrence brace bodies); semantic token expansion for part/item/metadata inner identifiers and requirement body gaps; hover and symbol kinds for P3 node kinds. Integration tests: `definition_body_semantics`, `part_def_body_semantics`, `part_def_tokens`.
+- **Graph depth P4a** â€” Flow/allocation `DefinitionBody` semantics and semantic tokens; General View filters `require constraint` child nodes while preserving inline constraint text. Integration tests: `definition_body_semantics`, `flow_def_tokens`, `model_projection`.
 
 ### Changed
 
-- **Parser dependency** — Bumped `sysml-v2-parser` to **0.20.1** on [crates.io](https://crates.io/crates/sysml-v2-parser/0.20.1) (flow/allocation definition bodies, `MetadataAnnotation` in action bodies, `AttributeDef.value_span`, literal-with-unit spans).
-- **Release surface alignment** — Rust workspace, `spec42` server, VS Code extension, Zed extension, and GitHub Action examples aligned at `0.29.1`.
+- **Parser dependency** â€” Bumped `sysml-v2-parser` to **0.20.1** on [crates.io](https://crates.io/crates/sysml-v2-parser/0.20.1) (flow/allocation definition bodies, `MetadataAnnotation` in action bodies, `AttributeDef.value_span`, literal-with-unit spans).
+- **Release surface alignment** â€” Rust workspace, `spec42` server, VS Code extension, Zed extension, and GitHub Action examples aligned at `0.29.1`.
 
 ## [0.29.0] - 2026-06-08
 
@@ -1907,7 +3146,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ### Fixed
 
 - **GitHub Action version resolution** - Install step now uses `github.action_ref` when `inputs.version` is omitted. Composite actions do not expose `GITHUB_ACTION_REF` to `run` scripts, which caused `No Spec42 version was provided and GITHUB_ACTION_REF is empty` in downstream workflows such as [sysml-examples](https://github.com/elan8/sysml-examples).
-- **GitHub Action release ref validation** - Reject branch-style refs (for example `main` → `vmain`) with a clear error; only semver tags like `v0.26.3` download release archives.
+- **GitHub Action release ref validation** - Reject branch-style refs (for example `main` â†’ `vmain`) with a clear error; only semver tags like `v0.26.3` download release archives.
 - **GitHub Action SARIF upload on forks** - SARIF upload runs with `continue-on-error` so fork PRs still fail only on validation results, not Code Scanning upload restrictions.
 
 ### Added

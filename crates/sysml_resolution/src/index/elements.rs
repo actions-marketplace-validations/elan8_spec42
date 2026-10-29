@@ -33,6 +33,7 @@ use crate::OccurrenceRole;
 use crate::QueryAnswer;
 use crate::QueryOutcome;
 use crate::SourceLocation;
+use crate::StateSubactionKind;
 use crate::SymbolId;
 use crate::TextPosition;
 use source_identity::SourceRole;
@@ -88,6 +89,9 @@ pub(crate) struct ElementFactIndex {
     /// alternative was a linear search of the evaluation table per inspected element, which made
     /// inspecting one element cost the size of the model.
     pub(crate) evaluation: Box<[Option<u32>]>,
+    /// The Expression that gives each declaration its value
+    /// ([`SemanticModelStorage::value_expressions`]), indexed by declaration.
+    pub(crate) value_expressions: Box<[Option<DeclarationId>]>,
 }
 
 /// Builds the contiguous per-declaration ranges of an ordered view of a record table.
@@ -134,9 +138,26 @@ impl ElementFactIndex {
         // declaration -- it does today, but that would be an invariant of the producer rather than
         // of this index, and slicing the raw table on ranges computed for a sorted order would be
         // silently wrong the moment it stopped holding.
-        let mut documentation_order: Vec<u32> = (0..storage.documentation.len() as u32).collect();
-        documentation_order
-            .sort_by_key(|index| storage.documentation[*index as usize].declaration.index());
+        // `Element::documentation` / owned comments: each record under the namespace that owns its
+        // annotating element. Every lowered annotating element has an owner.
+        let documentation_owner = |index: u32| -> Result<DeclarationId, ResolutionError> {
+            storage
+                .declaration(storage.documentation[index as usize].element)
+                .and_then(|element| element.owner)
+                .ok_or(ResolutionError::InvalidStorage)
+        };
+        let mut documentation_order = (0..storage.documentation.len() as u32)
+            .map(|index| documentation_owner(index).map(|owner| (owner, index)))
+            .collect::<Result<Vec<_>, _>>()?;
+        documentation_order.sort_by_key(|(owner, index)| (owner.index(), *index));
+        let documentation_owners = documentation_order
+            .iter()
+            .map(|(owner, _)| *owner)
+            .collect::<Vec<_>>();
+        let documentation_order = documentation_order
+            .into_iter()
+            .map(|(_, index)| index)
+            .collect::<Vec<_>>();
         let mut feature_value_order: Vec<u32> = (0..storage.feature_values.len() as u32).collect();
         feature_value_order
             .sort_by_key(|index| storage.feature_values[*index as usize].declaration.index());
@@ -215,12 +236,8 @@ impl ElementFactIndex {
         }
 
         Ok(Self {
-            documentation: ranges_by_declaration(
-                declarations,
-                documentation_order
-                    .iter()
-                    .map(|index| storage.documentation[*index as usize].declaration),
-            ),
+            value_expressions: storage.value_expressions(),
+            documentation: ranges_by_declaration(declarations, documentation_owners.into_iter()),
             documentation_order: documentation_order.into_boxed_slice(),
             feature_values: ranges_by_declaration(
                 declarations,
@@ -318,7 +335,7 @@ impl<D> SemanticModel<D> {
         // this used to re-read. A named declaration whose identifier the barrier could not settle
         // has no location, exactly as the failed search had none; only an unnamed one falls back to
         // its whole span.
-        let range = match declaration.name {
+        let range = match declaration.name.resolved() {
             Some(_) => self.documents.declaration_identifier(id)?,
             None => document_range(&self.storage, declaration.document, &declaration.span).ok()?,
         };
@@ -435,6 +452,12 @@ impl<D> SemanticModel<D> {
         })
     }
 
+    /// The authored multiplicity of the single declaration of `symbol`, or `Absent`.
+    pub(crate) fn symbol_multiplicity(&self, symbol: SymbolId) -> MultiplicityFacts {
+        self.declaration_of(symbol)
+            .map_or(MultiplicityFacts::Absent, |id| self.multiplicity(id))
+    }
+
     pub(crate) fn multiplicity(&self, id: DeclarationId) -> MultiplicityFacts {
         let Some(facts) = self.storage.declaration_facts(id) else {
             return MultiplicityFacts::Absent;
@@ -446,6 +469,9 @@ impl<D> SemanticModel<D> {
             crate::lower::facts::MultiplicityBound::Unbounded => MultiplicityBound::Unbounded,
             crate::lower::facts::MultiplicityBound::Literal(value) => {
                 MultiplicityBound::Literal(value)
+            }
+            crate::lower::facts::MultiplicityBound::NonIntegerLiteral => {
+                MultiplicityBound::NonIntegerLiteral
             }
             crate::lower::facts::MultiplicityBound::Expression => MultiplicityBound::Expression,
         };
@@ -617,17 +643,10 @@ impl<D> SemanticModel<D> {
             .copied()
             .flatten()
             .or_else(|| {
-                slice_range(
-                    &self.facts.feature_value_order,
-                    &self.facts.feature_values,
-                    id,
-                )
-                .first()
-                .and_then(|index| self.storage.feature_values.get(*index as usize))
-                .and_then(|value| {
+                self.value_expression(id).and_then(|expression| {
                     self.facts
                         .evaluation
-                        .get(value.value.index())
+                        .get(expression.index())
                         .copied()
                         .flatten()
                 })
@@ -642,15 +661,18 @@ impl<D> SemanticModel<D> {
         &self,
         id: DeclarationId,
     ) -> &[crate::index::expressions::SettledUnit] {
-        let expression = slice_range(
-            &self.facts.feature_value_order,
-            &self.facts.feature_values,
-            id,
-        )
-        .first()
-        .and_then(|index| self.storage.feature_values.get(*index as usize))
-        .map_or(id, |value| value.value);
-        self.expressions.units(expression)
+        self.expressions
+            .units(self.value_expression(id).unwrap_or(id))
+    }
+
+    /// The Expression that gives `id` its value: its FeatureValue's value Expression or its
+    /// result expression ([`SemanticModelStorage::value_expressions`]).
+    pub(crate) fn value_expression(&self, id: DeclarationId) -> Option<DeclarationId> {
+        self.facts
+            .value_expressions
+            .get(id.index())
+            .copied()
+            .flatten()
     }
 
     /// The authored and implied references this declaration is the source of, in canonical order.
@@ -703,10 +725,12 @@ impl<D> SemanticModel<D> {
             role: self.effective_membership_role(id),
             name: declaration
                 .name
+                .resolved()
                 .and_then(|name| self.storage.symbol(name))
                 .map(Into::into),
             short_name: facts
                 .short_name
+                .resolved()
                 .and_then(|name| self.storage.symbol(name))
                 .map(Into::into),
             location: self.source_location(id)?,
@@ -721,6 +745,19 @@ impl<D> SemanticModel<D> {
             documentation: self.documentation(id),
             multiplicity: self.multiplicity(id),
             modifiers: self.modifiers(id),
+            implied_modifiers: [
+                (
+                    facts.modifiers.implied_abstract(declaration.kind),
+                    ElementModifier::Abstract,
+                ),
+                (
+                    facts.modifiers.implied_variation(declaration.kind),
+                    ElementModifier::Variation,
+                ),
+            ]
+            .into_iter()
+            .filter_map(|(implied, modifier)| implied.then_some(modifier))
+            .collect(),
             portion_kind: facts.portion_kind.map(|kind| match kind {
                 crate::lower::facts::PortionKind::Snapshot => PortionKind::Snapshot,
                 crate::lower::facts::PortionKind::Timeslice => PortionKind::Timeslice,
@@ -734,6 +771,99 @@ impl<D> SemanticModel<D> {
             evaluation: self.evaluation_for(id),
             relationships: self.relationships(id),
         })
+    }
+
+    /// A port's authored direction and typing conjugation, keyed by [`SymbolId`] for a consumer
+    /// (the diagram projection) that only carries occurrence identities, not [`DeclarationId`]s.
+    ///
+    /// `direction` mirrors [`Self::inspection`]'s own field; `conjugated` is
+    /// [`Self::port_is_conjugated`], settled the same way the "ports mirror direction" diagnostic
+    /// reads it -- from the conjugation flag on the port's authored `FeatureTyping`, never from
+    /// the spelling of a name. `None` when the symbol is not a known declaration.
+    pub(crate) fn port_direction_and_conjugation(
+        &self,
+        symbol: SymbolId,
+    ) -> Option<(Option<FeatureDirection>, bool)> {
+        let id = self.declaration_of(symbol)?;
+        let facts = self.storage.declaration_facts(id)?;
+        let direction = facts.direction.map(|direction| match direction {
+            ParameterDirection::In => FeatureDirection::In,
+            ParameterDirection::Out => FeatureDirection::Out,
+            ParameterDirection::InOut => FeatureDirection::InOut,
+        });
+        Some((direction, self.port_is_conjugated(id)))
+    }
+
+    /// The direction a port's directed features give it, keyed by [`SymbolId`]. Derived, and
+    /// kept apart from the authored direction of [`Self::port_direction_and_conjugation`].
+    /// See [`Self::port_feature_direction`].
+    pub(crate) fn port_feature_direction_of(&self, symbol: SymbolId) -> Option<FeatureDirection> {
+        let id = self.declaration_of(symbol)?;
+        Some(match self.port_feature_direction(id)? {
+            ParameterDirection::In => FeatureDirection::In,
+            ParameterDirection::Out => FeatureDirection::Out,
+            ParameterDirection::InOut => FeatureDirection::InOut,
+        })
+    }
+
+    /// Whether an element is the entry, do or exit action of the state that owns it, keyed by
+    /// [`SymbolId`] like [`Self::port_direction_and_conjugation`]. The three are action usages;
+    /// only their membership tells them apart. `None` for every other element.
+    pub(crate) fn state_subaction_kind(&self, symbol: SymbolId) -> Option<StateSubactionKind> {
+        match self.effective_membership_role(self.declaration_of(symbol)?)? {
+            MembershipRole::StateSubaction(kind) => Some(kind),
+            _ => None,
+        }
+    }
+
+    /// When a conditional succession is taken: its guard as written, or `else`. `None` for
+    /// every other element. Settled where the succession is lowered.
+    pub(crate) fn succession_guard(
+        &self,
+        symbol: SymbolId,
+    ) -> Option<crate::diagram_query::DiagramSuccessionGuard> {
+        use crate::diagram_query::DiagramSuccessionGuard;
+        use crate::lower::facts::SuccessionGuard;
+        let id = self.declaration_of(symbol)?;
+        Some(
+            match self
+                .storage
+                .declaration_facts(id)?
+                .succession_guard
+                .as_ref()?
+            {
+                SuccessionGuard::Condition(text) => DiagramSuccessionGuard::Condition(text.clone()),
+                SuccessionGuard::Else => DiagramSuccessionGuard::Else,
+            },
+        )
+    }
+
+    /// Where the succession of a `then` shorthand starts, keyed by the [`SymbolId`] of what the
+    /// `then` declared: its continuation to a named feature, or the node written after it.
+    ///
+    /// The source is settled when the body is lowered (SysML 7.17.4, see
+    /// [`crate::lower::facts::ThenSource`]); a consumer must not work it out from the order of
+    /// the members it happens to see. `None` for an element no `then` declared, and when the
+    /// node a `first <node>;` names does not resolve.
+    pub(crate) fn then_source(&self, symbol: SymbolId) -> Option<SymbolId> {
+        use crate::lower::facts::ThenSource;
+        let id = self.declaration_of(symbol)?;
+        match self.storage.declaration_facts(id)?.then_source? {
+            ThenSource::Declaration(source) => self.symbol_id(source),
+            ThenSource::InitialNode(marker) => self
+                .outgoing_reference_ids(marker)
+                .iter()
+                .filter(|reference| {
+                    self.storage
+                        .references
+                        .get(reference.index())
+                        .is_some_and(|record| record.kind == ReferenceKind::Succession)
+                })
+                .find_map(|reference| match self.resolution.outcome(*reference) {
+                    Some(ResolutionStatus::Resolved(target)) => self.symbol_id(target),
+                    _ => None,
+                }),
+        }
     }
 
     pub(crate) fn inspect(&self, symbol: SymbolId) -> QueryOutcome<ElementInspection> {
@@ -810,6 +940,7 @@ impl<D> SemanticModel<D> {
                     kind: element_kind::element_kind(declaration.kind),
                     name: declaration
                         .name
+                        .resolved()
                         .and_then(|name| self.storage.symbol(name))
                         .map(Into::into),
                     owner: declaration.owner.and_then(|owner| self.symbol_id(owner)),
@@ -850,6 +981,7 @@ impl<D> SemanticModel<D> {
                     kind: search.kind,
                     name: declaration
                         .name
+                        .resolved()
                         .and_then(|name| self.storage.symbol(name))
                         .map(Into::into),
                     owner: declaration.owner.and_then(|owner| self.symbol_id(owner)),
@@ -875,6 +1007,7 @@ impl<D> SemanticModel<D> {
             element_kind::element_kind(declaration.kind) == kind
                 && declaration
                     .name
+                    .resolved()
                     .and_then(|symbol| self.storage.symbol(symbol))
                     == Some(name)
         });
@@ -917,16 +1050,21 @@ impl<D> SemanticModel<D> {
             Err(outcome) => return outcome,
         };
         let mut queue = std::collections::VecDeque::from([declaration]);
-        // A usage's effective feature set starts with the definitions it is typed by. Keeping the
-        // usage itself first also preserves any direct nested features it authors.
-        let mut direct_types = self
-            .types
-            .direct_types(declaration)
-            .iter()
-            .map(|(target, _)| *target)
-            .collect::<Vec<_>>();
-        direct_types.sort_by_key(|target| self.symbol_id(*target));
-        queue.extend(direct_types);
+        // Membership exclusion is owned by the canonical Type derivation. In particular,
+        // differently named and anonymous redefinitions replace their targets by identity.
+        let eligible = self
+            .owned_feature_members(declaration)
+            .into_iter()
+            .chain(self.inherited_feature_members(declaration))
+            .collect::<std::collections::BTreeSet<_>>();
+        // A usage's effective feature set starts with the types it has: those it is typed by and
+        // those it inherits through the features it subsets (KerML 8.3.3.3.3). An untyped nested
+        // `action a { ... }` subsets `Actions::Action::subactions` and so is an `Action`, with
+        // its own `start` and `done`. Keeping the usage itself first also preserves any direct
+        // nested features it authors.
+        let mut feature_types = self.types.feature_types(declaration);
+        feature_types.sort_by_key(|target| self.symbol_id(*target));
+        queue.extend(feature_types);
 
         let mut visited = std::collections::BTreeSet::new();
         let mut names = std::collections::BTreeSet::<ShadowKey>::new();
@@ -953,6 +1091,9 @@ impl<D> SemanticModel<D> {
                 }
             });
             for child in children {
+                if !eligible.contains(&child) {
+                    continue;
+                }
                 let Some(entry) = self.symbol_entry(child) else {
                     continue;
                 };
@@ -983,6 +1124,39 @@ impl<D> SemanticModel<D> {
         self.resolved_outcome(result.into_boxed_slice())
     }
 
+    pub(crate) fn effective_identification(
+        &self,
+        symbol: SymbolId,
+    ) -> QueryOutcome<crate::EffectiveIdentification<'_>> {
+        let declaration = match self.single_declaration(symbol) {
+            Ok(declaration) => declaration,
+            Err(outcome) => return outcome,
+        };
+        let Some(facts) = self.resolution.effective_names.get(declaration.index()) else {
+            return self.query_outcome(QueryAnswer::Incomplete);
+        };
+        let component = |value| {
+            use crate::resolve::results::EffectiveNameOutcome;
+            Some(match value {
+                EffectiveNameOutcome::Resolved(name) => {
+                    crate::EffectiveName::Resolved(self.storage.symbol(name)?)
+                }
+                EffectiveNameOutcome::Absent => crate::EffectiveName::Absent,
+                EffectiveNameOutcome::Unresolved => crate::EffectiveName::Unresolved,
+                EffectiveNameOutcome::NonConverged => crate::EffectiveName::NonConverged,
+            })
+        };
+        let (Some(name), Some(short_name)) = (component(facts.name), component(facts.short_name))
+        else {
+            return self.query_outcome(QueryAnswer::Incomplete);
+        };
+        self.resolved_outcome(crate::EffectiveIdentification {
+            name,
+            short_name,
+            provenance: facts.provenance,
+        })
+    }
+
     pub(crate) fn symbol_entry(&self, id: DeclarationId) -> Option<SymbolEntry> {
         let declaration = self.storage.declaration(id)?;
         let location = self.source_location(id)?;
@@ -991,6 +1165,7 @@ impl<D> SemanticModel<D> {
             kind: element_kind::element_kind(declaration.kind),
             name: declaration
                 .name
+                .resolved()
                 .and_then(|name| self.storage.symbol(name))
                 .map(Into::into),
             owner: declaration.owner.and_then(|owner| self.symbol_id(owner)),

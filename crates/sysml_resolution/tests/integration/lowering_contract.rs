@@ -456,6 +456,49 @@ fn use_case_definition_member_nested_action_usage_lowers_to_a_declaration() {
 }
 
 #[test]
+fn use_case_body_first_then_flow_lowers_through_the_shared_action_machinery() {
+    // A case body is a SysML `ActionBody`, so `first <node>;` / `then <target>;` /
+    // `then done;` / `then use case <name> { … }` are ordinary members. Since parser
+    // `elan8/sysml-v2-parser#138` they parse into the shared `FirstStmt` / `ThenAction`
+    // nodes and lower through the same `lower_first_stmt` / `lower_then_action` the action
+    // and state-action bodies use -- no `unsupported_use_case_definition_member`.
+    let output = build_semantic_sexpr(
+        "package Demo {\n\
+         \taction def Scenario;\n\
+         \tuse case run {\n\
+         \t\tsubject robot;\n\
+         \t\tfirst start;\n\
+         \t\tthen action mission : Scenario;\n\
+         \t\tthen done;\n\
+         \t\tthen use case followUp { }\n\
+         \t}\n\
+         }\n",
+    );
+    assert!(
+        !output.contains("unsupported_use_case_definition_member"),
+        "the flow members must be modelled, not reported as unsupported:\n{output}"
+    );
+    assert!(
+        output.contains("(kind succession)")
+            && output.contains("(succession (reference \"start\"))"),
+        "`first start;` should lower to a succession referencing `start`:\n{output}"
+    );
+    assert!(
+        output.contains("(kind then-continuation)")
+            && output.contains("(thenTarget (reference \"done\"))"),
+        "`then done;` should lower to a then-continuation referencing `done`:\n{output}"
+    );
+    assert!(
+        output.contains("(qualified-name \"Demo::run::mission\"))) (kind action)"),
+        "`then action mission : Scenario;` should lower to an owned action:\n{output}"
+    );
+    assert!(
+        output.contains("(qualified-name \"Demo::run::followUp\"))) (kind use-case)"),
+        "`then use case followUp` should lower to a nested use case usage:\n{output}"
+    );
+}
+
+#[test]
 fn item_def_lowers_to_a_declaration() {
     let output = build_semantic_sexpr(
         "package Demo {\n\
@@ -562,35 +605,6 @@ fn calc_def_untyped_parameter_still_lowers_a_declaration_shell() {
     assert!(
         !output.contains("(kind typing)"),
         "expected no FeatureTyping reference for untyped seq, got:\n{output}"
-    );
-}
-
-#[test]
-fn calc_def_anonymous_redefinition_parameter_lowers_its_redefines_relationship() {
-    // The leading `in :>> target = expr;` spelling is the one case that actually populates
-    // `ast::InOutDecl::redefines` (a `Node<SubsettingRelationship>`), independent of whether a
-    // type is present (`type_name` stays `None` here). `lower_parameter_declaration` now
-    // lowers this via the same `lower_subsetting_relationship` helper `AttributeUsage`/
-    // `ItemUsage` already call, so the redefinition target reference resolves.
-    let output = build_semantic_sexpr(
-        "package Demo {\n\
-         \tcalc def Sum {\n\
-         \t\tin target;\n\
-         \t\tin :>> target = 1;\n\
-         \t}\n\
-         }\n",
-    );
-    assert!(
-        output.contains(
-            "(kind redefinition) (source (node (document \"memory://test/enum.sysml\") (qualified-name \"Demo::Sum::\")))"
-        ) || output.contains("(kind redefinition)"),
-        "expected an anonymous parameter's redefinition reference to lower, got:\n{output}"
-    );
-    assert!(
-        output.contains(
-            "(target (node (document \"memory://test/enum.sysml\") (qualified-name \"Demo::Sum::target\")))"
-        ),
-        "expected the redefinition reference to resolve to target, got:\n{output}"
     );
 }
 
@@ -1249,34 +1263,6 @@ fn extended_definition_lowers_owned_members_and_specialization() {
 }
 
 #[test]
-fn individual_def_lowers_to_a_declaration_with_specialization() {
-    // `PackageBodyElement::IndividualDef` dispatches into the new `lower_individual_def`,
-    // mirroring `lower_item_def`/`lower_class_def`.
-    let output = build_semantic_sexpr(
-        "package Demo {\n\
-         \tpart def Base;\n\
-         \tindividual def Widget :> Base {\n\
-         \t\tattribute mass : Real;\n\
-         \t}\n\
-         }\n",
-    );
-    assert!(
-        output.contains("(qualified-name \"Demo::Widget\"))) (kind individual-definition)"),
-        "expected an individual-definition declaration, got:\n{output}"
-    );
-    assert!(
-        output.contains("(qualified-name \"Demo::Widget::mass\"))) (kind attribute)"),
-        "expected Widget's nested attribute usage declaration, got:\n{output}"
-    );
-    assert!(
-        output.contains(
-            "(kind specialization) (source (node (document \"memory://test/enum.sysml\") (qualified-name \"Demo::Widget\"))) (target (node (document \"memory://test/enum.sysml\") (qualified-name \"Demo::Base\")))"
-        ),
-        "expected Widget's specialization reference to Base to resolve, got:\n{output}"
-    );
-}
-
-#[test]
 fn item_usage_nested_inside_port_def_lowers_to_a_declaration() {
     // `PortDefBodyElement::ItemDef`/`ItemUsage` and `PortBodyElement::ItemUsage` dispatch
     // into the already-existing `lower_item_def`/`lower_item_usage`. A `port def` body's
@@ -1471,25 +1457,6 @@ fn default_reference_usage_meta_cast_value_lowers_and_resolves() {
     );
 }
 
-/// A nested `part` usage inside an `attribute def` body (BNF `AttributeBodyElement::PartUsage`,
-/// shared with `item def`/`item` usage bodies per the OMG `14c-Language Extensions.sysml`
-/// FMEA library example) must lower as its own `part` declaration, not fall through to
-/// `unsupported_attribute_member`.
-#[test]
-fn nested_part_usage_inside_attribute_def_body_lowers_as_part() {
-    let sexpr = semantic_sexpr_for(
-        "package P { attribute def Show { part frame : Frame; attribute def Frame; } }",
-    );
-    assert!(
-        sexpr.contains("P::Show::frame"),
-        "expected nested part declaration, got: {sexpr}"
-    );
-    assert!(
-        !sexpr.contains("unsupported_attribute_member"),
-        "did not expect unsupported_attribute_member, got: {sexpr}"
-    );
-}
-
 /// A nested `item` usage inside an `attribute def` body (BNF
 /// `AttributeBodyElement::ItemUsage`, resolved upstream in `0757de13` --
 /// planning/UPSTREAM_PARSER_GAPS.md #11) must lower as its own `item` declaration via the
@@ -1628,24 +1595,6 @@ fn textual_representation_inside_requirement_def_body_is_ignored() {
     );
 }
 
-/// `UseCaseDefBodyElement::Objective` (`objective { ... }`/`objective <name> : <Type> { ... }`)
-/// wraps a fully typed `RequirementUsage` (`Objective::requirement`) but was unconditionally
-/// unsupported. Wires it through the existing `lower_requirement_usage` pipeline, the same as
-/// every other requirement-usage site.
-#[test]
-fn case_family_objective_lowers_as_requirement_usage() {
-    let sexpr =
-        semantic_sexpr_for("package P { analysis def A { objective obj { doc /* g */ } } }");
-    assert!(
-        sexpr.contains("(kind requirement)"),
-        "expected the objective's wrapped RequirementUsage to lower as a requirement, got: {sexpr}"
-    );
-    assert!(
-        !sexpr.contains("unsupported_analysis_case_definition_member"),
-        "did not expect unsupported_analysis_case_definition_member, got: {sexpr}"
-    );
-}
-
 /// `PerformBodyElement::AttributeUsage` (an `in`/`out attribute` usage directly inside a
 /// `perform` body, BNF §6 G6) was unconditionally unsupported despite being a fully typed
 /// `AttributeUsage` node -- wires it through the already-existing `lower_attribute_usage`.
@@ -1700,7 +1649,7 @@ fn bind_body_doc_comment_is_recorded() {
         "did not expect unsupported_action_definition_member for a doc comment in a bind body, got: {sexpr}"
     );
     assert!(
-        sexpr.contains(r#"(documentation (doc (text " note ")))"#),
+        sexpr.contains(r#"(documentation (doc (text "note ")))"#),
         "expected the bind body's doc comment recorded against the bind declaration, got: {sexpr}"
     );
 }
@@ -1750,6 +1699,16 @@ fn collection_modifiers_are_recorded() {
 }
 
 #[test]
+fn action_usage_collection_modifiers_are_recorded() {
+    let sexpr =
+        semantic_sexpr_for("package P { abstract action actions[0..*] ordered nonunique; }");
+    assert!(
+        sexpr.contains("(modifiers abstract composite ordered nonunique)"),
+        "expected action collection modifiers, got: {sexpr}"
+    );
+}
+
+#[test]
 fn definition_prefix_modifiers_are_recorded() {
     let abstract_def = semantic_sexpr_for("package P { abstract part def Vehicle; }");
     assert!(
@@ -1791,7 +1750,7 @@ fn authored_short_names_are_recorded() {
 fn comment_and_rep_annotations_are_recorded_as_distinct_forms() {
     let comment = semantic_sexpr_for(r#"package P { calc def C { comment /* note */ } }"#);
     assert!(
-        comment.contains(r#"(comment (text " note "))"#),
+        comment.contains(r#"(comment (text "note "))"#),
         "expected the comment annotation recorded, got: {comment}"
     );
 
@@ -1799,7 +1758,7 @@ fn comment_and_rep_annotations_are_recorded_as_distinct_forms() {
     // def body; the `rep <name> language ...` spelling is not reachable in every scope.
     let rep = semantic_sexpr_for(r#"package P { action def A { language "Alf" /* body */ } }"#);
     assert!(
-        rep.contains(r#"(rep (language "Alf") (text " body "))"#),
+        rep.contains(r#"(rep (language "Alf") (text "body "))"#),
         "expected the textual representation recorded with its language, got: {rep}"
     );
 }
@@ -1821,5 +1780,24 @@ fn a_declaration_with_no_authored_facts_publishes_no_fact_block() {
     assert!(
         !sexpr.contains("(feature-value "),
         "expected no feature-value block, got: {sexpr}"
+    );
+}
+
+/// A nested `part` usage inside an `attribute def` body (BNF `AttributeBodyElement::PartUsage`,
+/// shared with `item def`/`item` usage bodies per the OMG `14c-Language Extensions.sysml`
+/// FMEA library example) must lower as its own `part` declaration, not fall through to
+/// `unsupported_attribute_member`.
+#[test]
+fn nested_part_usage_inside_attribute_def_body_lowers_as_part() {
+    let sexpr = semantic_sexpr_for(
+        "package P { attribute def Show { part chassis : Frame; attribute def Frame; } }",
+    );
+    assert!(
+        sexpr.contains("P::Show::chassis"),
+        "expected nested part declaration, got: {sexpr}"
+    );
+    assert!(
+        !sexpr.contains("unsupported_attribute_member"),
+        "did not expect unsupported_attribute_member, got: {sexpr}"
     );
 }

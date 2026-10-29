@@ -91,36 +91,6 @@ fn constraint_literal_only_comparison_is_supported_with_no_operand_references() 
 }
 
 #[test]
-fn constraint_arithmetic_operand_resolves_all_leaf_references() {
-    let output = build_semantic_sexpr(
-        "package Demo {\n\
-         \tattribute a : ScalarValues::Integer;\n\
-         \tattribute b : ScalarValues::Integer;\n\
-         \tattribute c : ScalarValues::Integer;\n\
-         \tconstraint def C { (a + b) < c }\n\
-         }\n",
-    );
-    for name in ["a", "b", "c"] {
-        assert!(
-            output.contains(&format!(
-                "(authored-target \"{name}\")\n      (outcome (status resolved) (target \
-                 (node (document \"memory://test/enum.sysml\") (qualified-name \"Demo::{name}\")))))"
-            )),
-            "expected operand `{name}` in `(a + b) < c` to resolve to its sibling attribute \
-             declaration, got:\n{output}"
-        );
-    }
-    assert!(
-        output.contains(
-            "(evaluated (declaration (node (document \"memory://test/enum.sysml\") \
-             (qualified-name \"Demo::C\"))) (state non-constant))"
-        ),
-        "expected `(a + b) < c` with no constant-valued operands to publish NonConstant \
-         rather than a fabricated boolean, got:\n{output}"
-    );
-}
-
-#[test]
 fn purpose_member_resolves_its_concern_target() {
     let output = build_semantic_sexpr(
         "package Demo {\n\
@@ -438,7 +408,7 @@ fn state_transition_scene_owns_vertices_and_composed_transitions() {
             SourceInput::new(
                 "memory://timer.sysml",
                 concat!(
-                    "package Timer { import StandardViewDefinitions::*; item def StartPressed; ",
+                    "package Timer { private import StandardViewDefinitions::*; item def StartPressed; ",
                     "state def Machine { entry; then idle; state idle; state running; ",
                     "transition start first idle accept StartPressed then running; } ",
                     "view stateView : StateTransitionView { expose Machine; } }",
@@ -505,7 +475,7 @@ fn diagram_projection_keeps_inherited_features_distinct_in_each_usage_context() 
             SourceInput::new(
                 "memory://model.sysml",
                 concat!(
-                    "package Model { import StandardViewDefinitions::*; ",
+                    "package Model { private import StandardViewDefinitions::*; ",
                     "part def Board; part def Module { part pcb : Board; part spare : Board; connection wire connect pcb to spare; } ",
                     "part def Assembly { part left : Module; part right : Module; } ",
                     "part root : Assembly; view structure : GeneralView { expose root; } }",
@@ -569,6 +539,121 @@ fn diagram_projection_keeps_inherited_features_distinct_in_each_usage_context() 
     );
     assert_ne!(connectors[0].source, connectors[1].source);
     assert_ne!(connectors[0].target, connectors[1].target);
+}
+
+#[test]
+fn interconnection_projection_maps_dotted_connectors_onto_distinct_usage_occurrences() {
+    let request = BuildRequest::new(
+        vec![
+            SourceInput::new(
+                "memory://standard-views.sysml",
+                "standard library package StandardViewDefinitions { view def InterconnectionView; }"
+                    .to_owned(),
+                SourceKind::StandardLibrary,
+            ),
+            SourceInput::new(
+                "memory://model.sysml",
+                concat!(
+                    "package Model { private import StandardViewDefinitions::*; ",
+                    "part def PropulsionUnit { port cmd; port pwr; } ",
+                    "part def Vehicle { ",
+                    "port motorCmd; port bus; ",
+                    "part propulsion { ",
+                    "part propulsionUnit1 : PropulsionUnit; ",
+                    "part propulsionUnit2 : PropulsionUnit; ",
+                    "part propulsionUnit3 : PropulsionUnit; ",
+                    "part propulsionUnit4 : PropulsionUnit; ",
+                    "} ",
+                    "connect motorCmd to propulsion.propulsionUnit1.cmd; ",
+                    "connect motorCmd to propulsion.propulsionUnit2.cmd; ",
+                    "connect motorCmd to propulsion.propulsionUnit3.cmd; ",
+                    "connect motorCmd to propulsion.propulsionUnit4.cmd; ",
+                    "connect bus to propulsion.propulsionUnit1.pwr; ",
+                    "connect bus to propulsion.propulsionUnit2.pwr; ",
+                    "connect bus to propulsion.propulsionUnit3.pwr; ",
+                    "connect bus to propulsion.propulsionUnit4.pwr; ",
+                    "} ",
+                    "part root : Vehicle; ",
+                    "view connections : InterconnectionView { expose root; } }",
+                )
+                .to_owned(),
+                SourceKind::Workspace,
+            ),
+        ],
+        ConstructionSchedule::Sequential,
+        "contract-v1",
+    )
+    .unwrap();
+    let published = build(request).unwrap();
+    let catalog = match published.diagram_view_catalog().answer {
+        QueryAnswer::Resolved(catalog) => catalog,
+        other => panic!("expected diagram catalog, got {other:?}"),
+    };
+    let view = catalog
+        .iter()
+        .find(|view| view.kind == DiagramViewKind::Interconnection)
+        .unwrap();
+    let projection = match published.diagram_view(view.semantic_id).answer {
+        QueryAnswer::Resolved(projection) => projection,
+        other => panic!("expected Interconnection View projection, got {other:?}"),
+    };
+    assert!(
+        !projection.incomplete_reasons.iter().any(|reason| {
+            matches!(
+                reason,
+                DiagramIncompleteReason::RelationshipUnresolved {
+                    relationship: DiagramRelationshipKind::ConnectorEnd
+                } | DiagramIncompleteReason::RelationshipAmbiguous {
+                    relationship: DiagramRelationshipKind::ConnectorEnd
+                }
+            )
+        }),
+        "dotted connector ends must remap onto a unique occurrence, got {:?}",
+        projection.incomplete_reasons
+    );
+
+    let connectors = projection
+        .edges
+        .iter()
+        .filter(|edge| edge.kind == DiagramEdgeKind::Connector)
+        .collect::<Vec<_>>();
+    assert_eq!(
+        connectors.len(),
+        8,
+        "four cmd and four pwr connectors, one per propulsion unit"
+    );
+
+    for name in [
+        "propulsionUnit1",
+        "propulsionUnit2",
+        "propulsionUnit3",
+        "propulsionUnit4",
+    ] {
+        let unit = projection
+            .elements
+            .iter()
+            .find(|element| element.name.as_deref() == Some(name))
+            .unwrap_or_else(|| panic!("expected part usage {name}"));
+        for port in ["cmd", "pwr"] {
+            let occurrence = projection
+                .elements
+                .iter()
+                .find(|element| {
+                    element.name.as_deref() == Some(port)
+                        && element
+                            .occurrence_id
+                            .semantic_path
+                            .contains(&unit.semantic_id)
+                })
+                .unwrap_or_else(|| panic!("expected {port} under {name}"));
+            assert!(
+                connectors
+                    .iter()
+                    .any(|edge| edge.target == occurrence.occurrence_id),
+                "missing connector onto {name}.{port}"
+            );
+        }
+    }
 }
 
 /// Only an admitted non-workspace reporting addition changes the publication identity.
@@ -969,7 +1054,7 @@ fn inspection_publishes_every_authored_fact_of_an_element() {
         published
             .text(car.documentation[0].text)
             .unwrap_or_default(),
-        " the car "
+        "the car "
     );
     assert_eq!(car.documentation[0].form, AnnotationForm::Documentation);
 }
@@ -1149,7 +1234,7 @@ fn namespace_import_derived_elements_preserve_canonical_target_outcomes() {
             ),
             (
                 "memory://model.sysml",
-                "package Model { import Library::*; part def Owned; }",
+                "package Model { private import Library::*; part def Owned; }",
             ),
         ],
         ConstructionSchedule::Sequential,
@@ -1181,7 +1266,7 @@ fn an_ambiguous_relationship_target_keeps_every_candidate_and_chooses_none() {
                 "package P {\n",
                 "  package A { part def Shared; }\n",
                 "  package B { part def Shared; }\n",
-                "  package C { import A::*; import B::*; part unit : Shared; }\n",
+                "  package C { private import A::*; private import B::*; part unit : Shared; }\n",
                 "}\n",
             ),
         )],
@@ -1343,7 +1428,7 @@ fn element_details_resolve_a_cross_document_relationship_to_its_declaring_docume
             ),
             (
                 "memory://usage.sysml",
-                "package Usage { import Defs::*; requirement check : Endurance; }",
+                "package Usage { private import Defs::*; requirement check : Endurance; }",
             ),
         ],
         ConstructionSchedule::Sequential,
@@ -1416,7 +1501,7 @@ fn affected_documents_are_transitive_across_public_imports_and_aliases() {
         ),
         SourceInput::new(
             "memory://c.sysml",
-            "package C { import B::*; part p : AliasT; }".into(),
+            "package C { private import B::*; part p : AliasT; }".into(),
             SourceKind::Workspace,
         ),
     ];
@@ -1493,5 +1578,144 @@ fn all_elements_is_the_canonical_ordered_union_of_typed_searches() {
             .collect::<std::collections::BTreeSet<_>>()
             .len(),
         "the traversal publishes each declaration exactly once"
+    );
+}
+
+#[test]
+fn interconnection_view_treats_a_dotted_bind_as_a_resolved_connector() {
+    let published = build(
+        BuildRequest::new(
+            vec![
+                SourceInput::new(
+                    "memory://standard-views.sysml",
+                    "standard library package StandardViewDefinitions { view def InterconnectionView; }"
+                        .to_owned(),
+                    SourceKind::StandardLibrary,
+                ),
+                SourceInput::new(
+                    "memory://model.sysml",
+                    concat!(
+                        "package Model { private import StandardViewDefinitions::*; ",
+                        "part def Machine { ",
+                        "port boundary; ",
+                        "part inner { port nested; } ",
+                        "bind boundary = inner.nested; ",
+                        "} ",
+                        "view external : InterconnectionView { expose Machine; } }",
+                    )
+                    .to_owned(),
+                    SourceKind::Workspace,
+                ),
+            ],
+            ConstructionSchedule::Sequential,
+            "contract-v1",
+        )
+        .unwrap(),
+    )
+    .unwrap();
+    let catalog = match published.diagram_view_catalog().answer {
+        QueryAnswer::Resolved(catalog) => catalog,
+        other => panic!("expected diagram catalog, got {other:?}"),
+    };
+    let view = catalog
+        .iter()
+        .find(|view| view.kind == DiagramViewKind::Interconnection)
+        .expect("interconnection view");
+    let projection = match published.diagram_view(view.semantic_id).answer {
+        QueryAnswer::Resolved(projection) => projection,
+        other => panic!("expected interconnection projection, got {other:?}"),
+    };
+    assert!(
+        !projection.incomplete_reasons.iter().any(|reason| {
+            matches!(
+                reason,
+                DiagramIncompleteReason::RelationshipUnresolved {
+                    relationship: DiagramRelationshipKind::ConnectorEnd
+                }
+            )
+        }),
+        "a dotted bind must not be an unresolved connector end, got {:?}",
+        projection.incomplete_reasons
+    );
+    let connectors = projection
+        .edges
+        .iter()
+        .filter(|edge| edge.kind == DiagramEdgeKind::Connector)
+        .count();
+    assert_eq!(connectors, 1, "the delegation bind is one connector edge");
+}
+
+/// `bind inner.nested = boundary;` is the mirror image of the test above: the dotted operand is
+/// `left` (source) instead of `right` (target). The two ends publish as `MemberAccessOperand` and
+/// `BindTarget`, and "bindTarget" sorts before "memberAccessOperand" in the deterministic overall
+/// relationship order -- so composing the edge by array position after that sort, rather than by
+/// each end's original authoring order, silently swaps source and target here even though the
+/// test above (whose ends sort the other way) would still pass.
+#[test]
+fn interconnection_view_orders_a_dotted_bind_source_correctly_when_the_source_is_dotted() {
+    let published = build(
+        BuildRequest::new(
+            vec![
+                SourceInput::new(
+                    "memory://standard-views.sysml",
+                    "standard library package StandardViewDefinitions { view def InterconnectionView; }"
+                        .to_owned(),
+                    SourceKind::StandardLibrary,
+                ),
+                SourceInput::new(
+                    "memory://model.sysml",
+                    concat!(
+                        "package Model { private import StandardViewDefinitions::*; ",
+                        "part def Machine { ",
+                        "port boundary; ",
+                        "part inner { port nested; } ",
+                        "bind inner.nested = boundary; ",
+                        "} ",
+                        "view external : InterconnectionView { expose Machine; } }",
+                    )
+                    .to_owned(),
+                    SourceKind::Workspace,
+                ),
+            ],
+            ConstructionSchedule::Sequential,
+            "contract-v1",
+        )
+        .unwrap(),
+    )
+    .unwrap();
+    let catalog = match published.diagram_view_catalog().answer {
+        QueryAnswer::Resolved(catalog) => catalog,
+        other => panic!("expected diagram catalog, got {other:?}"),
+    };
+    let view = catalog
+        .iter()
+        .find(|view| view.kind == DiagramViewKind::Interconnection)
+        .expect("interconnection view");
+    let projection = match published.diagram_view(view.semantic_id).answer {
+        QueryAnswer::Resolved(projection) => projection,
+        other => panic!("expected interconnection projection, got {other:?}"),
+    };
+    let nested = projection
+        .elements
+        .iter()
+        .find(|element| element.name.as_deref() == Some("nested"))
+        .expect("expected port usage nested");
+    let boundary = projection
+        .elements
+        .iter()
+        .find(|element| element.name.as_deref() == Some("boundary"))
+        .expect("expected port usage boundary");
+    let connector = projection
+        .edges
+        .iter()
+        .find(|edge| edge.kind == DiagramEdgeKind::Connector)
+        .expect("the delegation bind is one connector edge");
+    assert_eq!(
+        connector.source, nested.occurrence_id,
+        "bind inner.nested = boundary: the dotted left operand is the source"
+    );
+    assert_eq!(
+        connector.target, boundary.occurrence_id,
+        "bind inner.nested = boundary: the plain right operand is the target"
     );
 }

@@ -3,7 +3,7 @@
 description=An authored view with no exposure produces a valid empty projection
 type=generate
 libraries=standard
-plugin=repository:diagram
+plugin=native:diagram
 viewKind=browser-view
 viewDocument=diagram_empty_valid.md
 viewQualifiedName=EmptyExample::selected
@@ -28,7 +28,7 @@ package EmptyExample {
 # SMG
 ~~~sexpr
 (semantic-model
-  (publication (phase resolved) (completeness complete) (has-evaluation true) (source-digest "blake3:40ad01970860672f8d247c2587669562e3e2f2031840e2693978148f41168a99") (admitted (standard-library 94)))
+  (publication (phase resolved) (completeness complete) (has-evaluation true) (source-digest "blake3:ee7704873c71deae1efdf6e9f54ebc4f0427336ecd579352778c9fd3dd9ef723") (admitted (standard-library 94)))
   (declarations
     (declaration (id (node (document "memory://snapshot/diagram_empty_valid.md") (qualified-name "EmptyExample"))) (kind package) (membership (kind owning) (visibility default)))
     (declaration (id (node (document "memory://snapshot/diagram_empty_valid.md") (path (named (kind package) (name "EmptyExample")) (anonymous (kind import) (ordinal 0))))) (kind import) (membership (kind import) (visibility private)) (authored (membership (kind import) (visibility private)) (relationships (namespaceImport (reference "StandardViewDefinitions") (import (shape namespace) (recursive false))))))
@@ -116,8 +116,8 @@ package EmptyExample {
 ## diagram.json
 ~~~json
 {
-  "schemaVersion": 5,
-  "modelDigest": "blake3:1eede18160b0b446f6e9509e90124eba61a1daef90fc28406c4123e6ae2581d3",
+  "schemaVersion": 10,
+  "modelDigest": "blake3:30faf255f93547dad882520f4bc028e7b4c67171cc9c210e4407992e35402535",
   "documents": [
     {
       "uri": "memory://snapshot/diagram_empty_valid.md",
@@ -157,7 +157,8 @@ package EmptyExample {
     "exposedRoots": [],
     "kind": "browser-view",
     "metadata": {
-      "roots": []
+      "roots": [],
+      "rows": []
     },
     "nodes": [],
     "relationships": [],

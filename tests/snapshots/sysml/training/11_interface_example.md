@@ -85,7 +85,7 @@ package 'Interface Example' {
 # SMG
 ~~~sexpr
 (semantic-model
-  (publication (phase resolved) (completeness complete) (has-evaluation false) (source-digest "blake3:e10b2e8059df16eab752aec5114ca304700425b79ee933845ff073fb3eb5aac1"))
+  (publication (phase resolved) (completeness complete) (has-evaluation false) (source-digest "blake3:abaa27d515e0d7a2fba8095e910a12c7ab590124f181c1cd980a55d53ddbcce3"))
   (declarations
     (declaration (id (node (document "memory://snapshot/11_interface_example.md") (qualified-name "Interface Example"))) (kind package) (membership (kind owning) (visibility default)))
     (declaration (id (node (document "memory://snapshot/11_interface_example.md") (path (named (kind package) (name "Interface Example")) (anonymous (kind import) (ordinal 0))))) (kind import) (membership (kind import) (visibility private)) (authored (membership (kind import) (visibility private)) (relationships (namespaceImport (reference "Port Example") (import (shape namespace) (recursive false))))))
@@ -174,6 +174,13 @@ package 'Interface Example' {
     (declaration (id (node (document "memory://snapshot/11_interface_example.md") (qualified-name "Interface Example::vehicle::tankAssy")))
       (featured-by (node (document "memory://snapshot/11_interface_example.md") (qualified-name "Interface Example::vehicle")))
     )
+)
+~~~
+# CONNECTIONS
+~~~sexpr
+(connections
+  (connector (id (node (document "memory://snapshot/11_interface_example.md") (qualified-name "Interface Example::FuelInterface"))) (kind interface) (end (name (node (document "memory://snapshot/11_interface_example.md") (qualified-name "Interface Example::FuelInterface::supplierPort"))) unconnected) (end (name (node (document "memory://snapshot/11_interface_example.md") (qualified-name "Interface Example::FuelInterface::consumerPort"))) unconnected))
+  (connector (id (node (document "memory://snapshot/11_interface_example.md") (path (named (kind package) (name "Interface Example")) (named (kind part) (name "vehicle")) (anonymous (kind interface) (ordinal 0))))) (kind interface) (type (resolved (node (document "memory://snapshot/11_interface_example.md") (qualified-name "Interface Example::FuelInterface")))) (end bare (feature-chain (root (node (document "memory://snapshot/11_interface_example.md") (qualified-name "Interface Example::vehicle::tankAssy"))) (terminal unresolved) (path (node (document "memory://snapshot/11_interface_example.md") (qualified-name "Interface Example::vehicle::tankAssy")) unresolved) "tankAssy::fuelTankPort")) (end bare (feature-chain (root (node (document "memory://snapshot/11_interface_example.md") (qualified-name "Interface Example::vehicle::eng"))) (terminal unresolved) (path (node (document "memory://snapshot/11_interface_example.md") (qualified-name "Interface Example::vehicle::eng")) unresolved) "eng::engineFuelPort")))
 )
 ~~~
 # NAVIGATION

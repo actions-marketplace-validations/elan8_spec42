@@ -3,7 +3,7 @@
 description=Browser view keeps unresolved exposure explicit
 type=generate
 libraries=standard
-plugin=repository:diagram
+plugin=native:diagram
 viewKind=browser-view
 viewDocument=diagram_browser_unresolved.md
 viewQualifiedName=BrowserNegative::selected
@@ -34,7 +34,7 @@ package BrowserNegative {
 # SMG
 ~~~sexpr
 (semantic-model
-  (publication (phase resolved) (completeness complete) (has-evaluation true) (source-digest "blake3:5efbf8a8e583816d4a27e602c74face2f1d5fbff01a1c05b701e5c6ecfc42860") (admitted (standard-library 94)))
+  (publication (phase resolved) (completeness complete) (has-evaluation true) (source-digest "blake3:6a8cbe1dbc4cdf4523d018a222b48e2c8884cb61ad8ec49a9634fa887b291cf4") (admitted (standard-library 94)))
   (declarations
     (declaration (id (node (document "memory://snapshot/diagram_browser_unresolved.md") (qualified-name "BrowserNegative"))) (kind package) (membership (kind owning) (visibility default)))
     (declaration (id (node (document "memory://snapshot/diagram_browser_unresolved.md") (path (named (kind package) (name "BrowserNegative")) (anonymous (kind import) (ordinal 0))))) (kind import) (membership (kind import) (visibility private)) (authored (membership (kind import) (visibility private)) (relationships (namespaceImport (reference "StandardViewDefinitions") (import (shape namespace) (recursive false))))))
@@ -135,8 +135,8 @@ package BrowserNegative {
 ## diagram.json
 ~~~json
 {
-  "schemaVersion": 5,
-  "modelDigest": "blake3:2af6b8eea622797b360ab2909558f102fcd09e6024aff8dcb8affa373d27fb91",
+  "schemaVersion": 10,
+  "modelDigest": "blake3:36dbf23592e49c601018399ed8738037157a98adb8c3eb224d9292a55a38e374",
   "documents": [
     {
       "uri": "memory://snapshot/diagram_browser_unresolved.md",
@@ -197,7 +197,8 @@ package BrowserNegative {
     "exposedRoots": [],
     "kind": "browser-view",
     "metadata": {
-      "roots": []
+      "roots": [],
+      "rows": []
     },
     "nodes": [],
     "relationships": [],

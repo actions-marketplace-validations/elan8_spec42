@@ -1,5 +1,3 @@
-#![recursion_limit = "256"]
-
 //! The batch host: engine, directory snapshots, validation, comparison and schema versions over
 //! the `sysml_query` services. Library provisioning is `library_catalog`'s; closure, parsing and
 //! publication are the authorities'.
@@ -36,7 +34,7 @@ pub use sysml_query::source::{
     ContentDigest, InMemoryProvider, RootDigest, SourceDocument, SourceKind, SourceProvider,
 };
 pub use validation::{
-    built_workspace_input_from_snapshot, report_from_built_workspace, validate_paths,
-    BuiltWorkspaceInput, PipelineHook, ValidationPipelineHook, ValidationRequest,
+    built_workspace_input_from_snapshot, report_from_built_workspace, validate_and_publish_paths,
+    validate_paths, BuiltWorkspaceInput, PipelineHook, ValidationPipelineHook, ValidationRequest,
 };
 pub use version::{HostArtifactMetadata, HostSchemaVersions};

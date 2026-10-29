@@ -2,7 +2,7 @@
 
 use super::{SyntaxRange, SyntaxRole};
 
-use sysml_v2_parser::ast::Identification;
+use sysml_v2_parser::ast::{Identification, NamespaceName, QualifiedIdentification};
 use sysml_v2_parser::Span;
 
 /// Accept both legacy textual type names and parser 0.35 typed relationships.
@@ -61,13 +61,6 @@ pub fn declaration_name_text(
         .map(|name| name.into_owned())
 }
 
-/// The authored source text under a span.
-pub fn span_text<'a>(source: &'a str, span: &Span) -> &'a str {
-    source
-        .get(span.offset..span.offset.saturating_add(span.len))
-        .unwrap_or("")
-}
-
 /// Locate a whole-word occurrence of `word` inside `span` on a single source line.
 pub fn word_range_within_span(source: &str, span: &SyntaxRange, word: &str) -> Option<SyntaxRange> {
     if word.is_empty() || span.start_line != span.end_line {
@@ -109,16 +102,45 @@ fn is_ident_byte(b: Option<u8>) -> bool {
     b.is_some_and(|b| b.is_ascii_alphanumeric() || b == b'_')
 }
 
-/// Push a definition shell span (refined to the declared name during merge) plus optional specializes type.
-pub fn push_ident_definition_spans(
-    span: &Span,
+/// Push both parser-owned declared name spans. Anonymous declarations contribute no name token.
+pub fn push_identification_definition_spans(
+    identification: &Identification,
     specializes_span: Option<&Span>,
     role: SyntaxRole,
     out: &mut Vec<(SyntaxRange, SyntaxRole)>,
 ) {
-    out.push((span_to_source_range(span), role));
+    for name in [identification.name, identification.short_name]
+        .into_iter()
+        .flatten()
+    {
+        out.push((span_to_source_range(name.span()), role));
+    }
     if let Some(s) = specializes_span {
         out.push((span_to_source_range(s), SyntaxRole::Type));
+    }
+}
+
+/// Push a namespace declaration name from the parser's qualified identification.
+pub fn push_qualified_identification_definition_spans(
+    document: &sysml_v2_parser::ParsedDocument,
+    identification: &QualifiedIdentification,
+    role: SyntaxRole,
+    out: &mut Vec<(SyntaxRange, SyntaxRole)>,
+) {
+    match identification.name.as_ref() {
+        Some(NamespaceName::Simple(name)) => {
+            out.push((span_to_source_range(name.span()), role));
+        }
+        Some(NamespaceName::Qualified(name)) => {
+            if let Some(view) = document.qualified_declaration_name(*name) {
+                out.push((span_to_source_range(&view.metadata.span), role));
+            }
+        }
+        None => {
+            if let Some(short) = identification.short_name {
+                out.push((span_to_source_range(short.span()), role));
+            }
+        }
     }
 }
 
@@ -143,40 +165,6 @@ pub fn push_usage_name_type_spans<T: TypeNameRef + ?Sized>(
             out.push((r, SyntaxRole::Type));
         }
     }
-}
-
-/// Best-effort declared name from a KerML modeled declaration (`FeatureDecl` /
-/// `ClassifierDecl` / similar), mirroring graph-builder name extraction.
-pub fn modeled_decl_name(keyword: &str, text: &str) -> Option<String> {
-    let t = text.trim().trim_end_matches(';').trim();
-    let tokens: Vec<&str> = t.split_whitespace().collect();
-    let kw = keyword.trim();
-    if let Some(pos) = tokens.iter().position(|tok| tok.eq_ignore_ascii_case(kw)) {
-        let mut i = pos + 1;
-        while i < tokens.len() {
-            let tok = tokens[i].trim_end_matches([';', ',', ')', '{']);
-            if tok.eq_ignore_ascii_case("def")
-                || tok.eq_ignore_ascii_case("id")
-                || tok.eq_ignore_ascii_case("case")
-                || tok.starts_with('\'')
-            {
-                i += 1;
-                continue;
-            }
-            if tok.eq_ignore_ascii_case("specializes") {
-                break;
-            }
-            let name: String = tok
-                .chars()
-                .filter(|c| c.is_alphanumeric() || *c == '_')
-                .collect();
-            if !name.is_empty() {
-                return Some(name);
-            }
-            break;
-        }
-    }
-    None
 }
 
 /// Push a whole-word occurrence of `name` inside `span` when present in `source`.

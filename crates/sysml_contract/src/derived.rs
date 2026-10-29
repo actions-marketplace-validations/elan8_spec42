@@ -24,20 +24,21 @@ pub enum TypeDerivedRelationshipCollection {
     UnioningType,
     IntersectingType,
     DifferencingType,
+    OwnedSubclassification,
 }
 
 /// One exact element-valued derivation defined on KerML `Type`.
 ///
-/// This intentionally exposes final member elements only. `FeatureMembership` remains compact
-/// declaration-aligned storage, rather than a fabricated public relationship identity.
+/// This intentionally exposes final member elements only; the `FeatureMembership` relationships
+/// that own them are published by the Type derived-fact collections.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
 pub enum TypeDerivedElementCollection {
     OwnedFeature,
     OwnedEndFeature,
 }
 
-/// One exact Type derivation whose normative result shape is known, but whose fact owner is not
-/// yet published by the canonical model.
+/// One exact Type derivation over canonical membership, specialization-closure, multiplicity and
+/// conjugation facts.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
 pub enum TypeDerivedFactCollection {
     OwnedFeatureMembership,
@@ -56,10 +57,7 @@ pub enum TypeDerivedFactCollection {
 /// The first canonical fact owner an exact Type derivation needs before it can publish values.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum TypeDerivedFactPrerequisite {
-    FeatureMembershipIdentity,
-    FeatureMembershipIdentityAndInheritedClosure,
     InheritedMembershipClosure,
-    MultiplicityIdentity,
     ConjugationRelationshipIdentity,
     RuleNotPublished,
 }
@@ -76,6 +74,14 @@ pub enum FeatureDerivedRelationshipCollection {
     OwnedSubsetting,
     OwnedTyping,
     OwnedTypeFeaturing,
+    /// Targets of owned feature chainings (`chainingFeature = ownedFeatureChaining.chainingFeature`).
+    ChainingFeature,
+    /// Owned `FeatureInverting` relationships whose `featureInverted` is this feature.
+    OwnedFeatureInverting,
+    /// The first owned `ReferenceSubsetting` (`ownedSubsetting->selectByKind(ReferenceSubsetting)->first()`).
+    OwnedReferenceSubsetting,
+    /// The first owned `CrossSubsetting` (`ownedSubsetting->selectByKind(CrossSubsetting)->first()`).
+    OwnedCrossSubsetting,
 }
 
 /// One element-valued Namespace derivation admitted by the pinned manifest.
@@ -119,12 +125,89 @@ pub enum ActionDerivedFactCollection {
     IfThenAction,
     IfElseAction,
     IfArgument,
+    StateDefinitionEntryAction,
+    StateDefinitionDoAction,
+    StateDefinitionExitAction,
+    StateUsageEntryAction,
+    StateUsageDoAction,
+    StateUsageExitAction,
+    StateDefinitionState,
+    CalculationDefinitionCalculation,
+    AllocationDefinitionAllocation,
+    RenderingDefinitionRendering,
+    ViewDefinitionView,
+    ViewDefinitionViewRendering,
+    ViewUsageViewRendering,
+    ViewDefinitionSatisfiedViewpoint,
+    ViewUsageSatisfiedViewpoint,
+    PortDefinitionConjugatedPortDefinition,
+    FeatureCrossFeature,
+    FeatureFeatureTarget,
+    FunctionResult,
+    ExpressionResult,
+    BehaviorStep,
+    MultiplicityRangeLowerBound,
+    MultiplicityRangeUpperBound,
+    MultiplicityRangeBound,
+    ItemUsageItemDefinition,
+    PartUsagePartDefinition,
+    OccurrenceUsageIndividualDefinition,
+    ConjugatedPortTypingPortDefinition,
+    TransitionUsageSuccession,
+    TransitionUsageTarget,
+    TransitionUsageTriggerAction,
+    AssertConstraintUsageAssertedConstraint,
+    EventOccurrenceUsageEventOccurrence,
+    VerificationCaseDefinitionVerifiedRequirement,
+    VerificationCaseUsageVerifiedRequirement,
+    UseCaseDefinitionIncludedUseCase,
+    UseCaseUsageIncludedUseCase,
+    ViewDefinitionViewCondition,
+    ViewUsageViewCondition,
+    ElementIsLibraryElement,
+    ElementName,
+    ElementShortName,
+    ElementQualifiedName,
+    ElementOwnedElement,
+    ElementOwnedAnnotation,
+    ElementOwningNamespace,
+    RelationshipRelatedElement,
+    AnnotatingElementAnnotatedElement,
+    AnnotatingElementAnnotation,
+    AnnotatingElementOwnedAnnotatingRelationship,
+    AnnotationOwnedAnnotatingElement,
+    MembershipImportImportedElement,
+    NamespaceImportedMembership,
+    NamespaceMember,
+    NamespaceOwnedMembership,
+    OwningMembershipOwnedMemberName,
+    OwningMembershipOwnedMemberShortName,
+    PackageFilterCondition,
+    FeatureFeaturingType,
+    AssociationRelatedType,
+    AssociationSourceType,
+    AssociationTargetType,
+    ConnectorRelatedFeature,
+    ConnectorSourceFeature,
+    ConnectorTargetFeature,
+    ConnectorDefaultFeaturingType,
+    StepBehavior,
+    LiteralExpressionIsModelLevelEvaluable,
+    MetadataAccessExpressionReferencedElement,
+    FeatureChainExpressionTargetFeature,
+    FeatureReferenceExpressionReferent,
+    InstantiationExpressionInstantiatedType,
+    FlowFlowEnd,
+    FlowSourceOutputFeature,
+    FlowTargetInputFeature,
 }
 
 /// The first canonical fact owner an exact `Systems::Actions` derivation needs.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum ActionDerivedFactPrerequisite {
     RuleNotPublished,
+    /// A dotted connector end subsets a feature chain, which is not lowered as its own Feature.
+    UnloweredFeatureChain,
 }
 
 /// One closed exact `Systems::Requirements` derived property.
@@ -142,6 +225,12 @@ pub enum RequirementDerivedFactCollection {
     UsageRequiredConstraint,
     UsageAssumedConstraint,
     UsageFramedConcern,
+    CaseDefinitionActorParameter,
+    CaseDefinitionSubjectParameter,
+    CaseUsageActorParameter,
+    CaseUsageSubjectParameter,
+    CaseDefinitionObjectiveRequirement,
+    CaseUsageObjectiveRequirement,
 }
 
 impl RequirementDerivedFactCollection {

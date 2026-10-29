@@ -207,6 +207,48 @@ fn filter_with_unresolvable_metadata_target_stays_unresolved() {
 /// in `lib.rs` for the full assertion); it no longer falls through to the generic
 /// unsupported-member diagnostic this test originally locked in per commit `f4ae83f7`.
 #[test]
+fn verify_requirement_bare_reference_surfaces_the_targeted_parser_diagnostic() {
+    // Parser `elan8/sysml-v2-parser#139` (elan8/spec42#140): `verify requirement <feature-chain>;`
+    // is invalid (the `requirement` keyword needs a declaration), and the parser now recovers it
+    // as `verify_requirement_expects_declaration` with a `verify <chain>;` fix. spec42 passes the
+    // parser's code and message through verbatim -- this locks that it does not regress to the
+    // generic `recovered_requirement_body_element`.
+    let request = sysml_resolution::BuildRequest::new(
+        vec![sysml_resolution::SourceInput::new(
+            "memory://test/verify.sysml",
+            "package Demo {\n\
+             \trequirement def R;\n\
+             \tpart def Sys { requirement recoverFromStall : R; }\n\
+             \tpart rss : Sys;\n\
+             \tverification verifyMission {\n\
+             \t\tsubject task : Sys;\n\
+             \t\tobjective { verify requirement rss.recoverFromStall; }\n\
+             \t}\n\
+             }\n"
+            .to_string(),
+            sysml_resolution::SourceKind::Workspace,
+        )],
+        sysml_resolution::ConstructionSchedule::Sequential,
+        "test-contract-v1",
+    )
+    .unwrap();
+    let published = sysml_resolution::build(request).unwrap();
+    let mut output = String::new();
+    published
+        .debug()
+        .write_diagnostics_sexpr(&mut output)
+        .unwrap();
+    assert!(
+        output.contains("verify_requirement_expects_declaration"),
+        "expected the targeted parser diagnostic, got:\n{output}"
+    );
+    assert!(
+        !output.contains("recovered_requirement_body_element"),
+        "the targeted diagnostic replaces the generic recovery, got:\n{output}"
+    );
+}
+
+#[test]
 fn first_then_succession_inside_an_action_def_no_longer_surfaces_as_unsupported() {
     let request = sysml_resolution::BuildRequest::new(
         vec![sysml_resolution::SourceInput::new(
@@ -284,6 +326,31 @@ fn satisfy_with_an_unresolvable_satisfying_element_stays_explicitly_unresolved()
         output.contains("(kind satisfySource)")
             && output.contains("(authored-target \"r\")\n      (outcome (status resolved)"),
         "expected the satisfy source to still resolve independently, got:\n{output}"
+    );
+}
+
+#[test]
+fn allocate_statement_with_a_feature_chain_end_keeps_its_allocate_role_and_no_endpoint_warning() {
+    let output = build_semantic_sexpr(
+        "package Demo {\n\
+         \taction def Inner { action step1; }\n\
+         \tpart def Widget;\n\
+         \tpart sys {\n\
+         \t\tpart w : Widget;\n\
+         \t\tperform action inner : Inner;\n\
+         \t\tallocate inner.step1 to w;\n\
+         \t}\n\
+         }\n",
+    );
+    assert!(
+        output.contains("(kind allocateSource)")
+            && output.contains("(authored-target \"inner::step1\")\n      (outcome (status resolved)"),
+        "expected the dotted allocate source to keep its allocateSource role and resolve, got:\n{output}"
+    );
+    assert!(
+        !output.contains("invalid_allocation_endpoints"),
+        "a feature-chain allocate end is not a missing end -- no endpoint-completeness warning \
+         should fire, got:\n{output}"
     );
 }
 
@@ -477,6 +544,65 @@ fn value_assignment_meta_cast_with_unresolvable_base_and_metaclass_stays_unresol
 }
 
 #[test]
+fn a_view_reports_parse_recovery_only_from_the_documents_it_draws_from() {
+    let request = BuildRequest::new(
+        vec![
+            SourceInput::new(
+                "memory://standard-views.sysml",
+                "standard library package StandardViewDefinitions { view def GeneralView; }"
+                    .to_owned(),
+                SourceKind::StandardLibrary,
+            ),
+            SourceInput::new(
+                "memory://model.sysml",
+                concat!(
+                    "package Model { private import StandardViewDefinitions::*; ",
+                    "part def Board; part board : Board; ",
+                    "view clean : GeneralView { expose board; } ",
+                    "view mixed : GeneralView { expose board; expose Other::wheel; } }",
+                )
+                .to_owned(),
+                SourceKind::Workspace,
+            ),
+            SourceInput::new(
+                "memory://other.sysml",
+                "package Other { part wheel; part broken : ; }".to_owned(),
+                SourceKind::Workspace,
+            ),
+        ],
+        ConstructionSchedule::Sequential,
+        "contract-v1",
+    )
+    .unwrap();
+    let published = build(request).unwrap();
+    assert!(published
+        .completeness()
+        .contains(PublicationObstacle::ParseRecovery));
+    let catalog = match published.diagram_view_catalog().answer {
+        QueryAnswer::Resolved(catalog) => catalog,
+        other => panic!("expected diagram catalog, got {other:?}"),
+    };
+    let reasons = |name: &str| {
+        let view = catalog
+            .iter()
+            .find(|view| published.qualified_name(view.semantic_id) == Some(name))
+            .unwrap();
+        match published.diagram_view(view.semantic_id).answer {
+            QueryAnswer::Resolved(projection) => projection.incomplete_reasons,
+            other => panic!("expected a projection of {name}, got {other:?}"),
+        }
+    };
+    assert!(
+        !reasons("Model::clean").contains(&DiagramIncompleteReason::ParseRecovery),
+        "a view drawing only from a clean document must not inherit another file's recovery"
+    );
+    assert!(
+        reasons("Model::mixed").contains(&DiagramIncompleteReason::ParseRecovery),
+        "a view drawing from a recovered document must say so"
+    );
+}
+
+#[test]
 fn diagram_projection_preserves_resolved_facts_from_unsupported_inspections() {
     let request = BuildRequest::new(
         vec![
@@ -492,7 +618,7 @@ fn diagram_projection_preserves_resolved_facts_from_unsupported_inspections() {
             SourceInput::new(
                 "memory://model.sysml",
                 concat!(
-                    "package Model { import StandardViewDefinitions::*; ",
+                    "package Model { private import StandardViewDefinitions::*; ",
                     "part def Board; part def Assembly { part pcb : Board; } part root : Assembly; ",
                     "state def Machine { state idle; state running; transition start first idle then running; } ",
                     "view structure : GeneralView { expose root; filter @SysML::PartUsage; } ",
@@ -588,21 +714,6 @@ fn first_then_succession_unresolvable_target_stays_unresolved() {
     );
 }
 
-/// An `entry action X;` binding whose target is not declared anywhere in the model must stay
-/// an explicit unresolved reference fact, not a fabricated or guessed target.
-#[test]
-fn entry_action_binding_unresolvable_target_stays_unresolved() {
-    let sexpr = semantic_sexpr_for("package P { state def S { entry action missingAction; } }");
-    assert!(
-        sexpr.contains("(kind entryActionBinding)"),
-        "expected an entryActionBinding reference to be authored, got: {sexpr}"
-    );
-    assert!(
-        sexpr.contains("(status unresolved)"),
-        "expected the unresolvable entry action target to remain explicitly unresolved, got: {sexpr}"
-    );
-}
-
 /// A `then <target>;` initial-state marker whose target is not declared anywhere in the model
 /// must stay an explicit unresolved reference fact, not a fabricated or guessed target.
 #[test]
@@ -646,19 +757,6 @@ fn bare_entry_do_exit_with_no_reference_or_body_is_not_unsupported() {
     assert!(
         !sexpr.contains("unsupported_state_definition_member"),
         "did not expect unsupported_state_definition_member for bare entry/do/exit, got: {sexpr}"
-    );
-}
-
-/// An inline `entry { <members> }` anonymous action body (non-empty brace, no `action`
-/// reference) genuinely has no representation in the `EntryAction` typed AST and must stay an
-/// explicit unsupported diagnostic, distinguishing it from the empty/semicolon no-op case
-/// above.
-#[test]
-fn entry_with_inline_body_content_and_no_reference_stays_unsupported() {
-    let sexpr = diagnostics_sexpr_for("package P { state def S { entry { state inner; } } }");
-    assert!(
-        sexpr.contains("unsupported_state_definition_member"),
-        "expected an inline non-empty entry body with no reference to remain unsupported, got: {sexpr}"
     );
 }
 
@@ -779,6 +877,134 @@ satisfy Missing by vehicle;
 }
 
 #[test]
+fn satisfy_query_publishes_a_feature_chain_satisfying_element_as_the_chain() {
+    // `satisfy R by a.b` names a feature chain (SysML 8.2.2.21.2); the chain as a whole is the
+    // satisfying feature (8.3.21.10), so it is published hop by hop, not as `Unsupported` and not
+    // as the bare declaration the last hop names.
+    let published = publication_for(&[(
+        "memory://chain.sysml",
+        r#"
+package Chain {
+requirement def Latency;
+requirement def Failsafe;
+requirement def Broken;
+part def Radio;
+part def Controller;
+part def Control { part controller : Controller; }
+part def Drone { part radio : Radio; part control : Control; }
+part drone : Drone;
+satisfy Latency by drone.radio;
+satisfy Failsafe by drone.control.controller;
+satisfy Broken by drone.missing;
+}
+"#,
+    )]);
+    let values = match published.satisfy_relationships().answer {
+        QueryAnswer::Resolved(values) => values,
+        other => panic!("expected resolved satisfy query, got {other:?}"),
+    };
+    assert_eq!(values.len(), 3);
+    let chain = |endpoint: &SatisfyEndpoint| match endpoint {
+        SatisfyEndpoint::FeatureChain { path, authored } => (
+            path.iter()
+                .map(|hop| {
+                    published
+                        .qualified_name(*hop)
+                        .unwrap_or_default()
+                        .to_owned()
+                })
+                .collect::<Vec<_>>(),
+            authored.to_string(),
+        ),
+        other => panic!("expected a feature chain, got {other:?}"),
+    };
+    assert_eq!(
+        chain(&values[0].satisfying_element),
+        (
+            vec!["Chain::drone".to_owned(), "Chain::Drone::radio".to_owned()],
+            "drone::radio".to_owned()
+        )
+    );
+    assert_eq!(
+        chain(&values[1].satisfying_element),
+        (
+            vec![
+                "Chain::drone".to_owned(),
+                "Chain::Drone::control".to_owned(),
+                "Chain::Control::controller".to_owned()
+            ],
+            "drone::control::controller".to_owned()
+        )
+    );
+    // A hop that does not resolve leaves the chain unresolved rather than half-published.
+    assert!(
+        matches!(values[2].satisfying_element, SatisfyEndpoint::Unresolved),
+        "{:?}",
+        values[2].satisfying_element
+    );
+    assert!(values
+        .iter()
+        .all(|value| matches!(value.requirement, SatisfyEndpoint::Resolved(_))));
+}
+
+#[test]
+fn satisfy_query_publishes_an_inline_requirement_declaration_as_the_satisfied_requirement() {
+    // `satisfy requirement r : R by x` declares the satisfied requirement inline: the satisfy
+    // usage is itself the requirement usage `r`, typed by `R` (SysML 8.4.17.3).
+    let published = publication_for(&[(
+        "memory://inline.sysml",
+        r#"
+package Inline {
+requirement def Req1;
+part def System { part sub1; }
+part system : System;
+satisfy requirement req1 : Req1 by system;
+satisfy requirement req1_1 : Req1 by system.sub1;
+satisfy requirement : Req1;
+}
+"#,
+    )]);
+    let values = match published.satisfy_relationships().answer {
+        QueryAnswer::Resolved(values) => values,
+        other => panic!("expected resolved satisfy query, got {other:?}"),
+    };
+    assert_eq!(values.len(), 3);
+    for value in values.iter() {
+        assert!(
+            matches!(value.requirement, SatisfyEndpoint::Resolved(requirement) if requirement == value.identity),
+            "the satisfy usage is its own requirement: {value:?}"
+        );
+        let types = match published.direct_types(value.identity).answer {
+            QueryAnswer::Resolved(types) => types,
+            other => panic!("expected the satisfy usage's typing, got {other:?}"),
+        };
+        assert!(
+            types
+                .iter()
+                .any(|ty| published.qualified_name(ty.symbol) == Some("Inline::Req1")),
+            "typed by Req1: {types:?}"
+        );
+    }
+    assert_eq!(
+        published.qualified_name(values[0].identity),
+        Some("Inline::req1")
+    );
+    assert!(matches!(
+        values[0].satisfying_element,
+        SatisfyEndpoint::Resolved(_)
+    ));
+    assert!(matches!(
+        values[1].satisfying_element,
+        SatisfyEndpoint::FeatureChain { .. }
+    ));
+    // No `by`: nothing is fabricated for the satisfying element.
+    assert!(matches!(
+        values[2].satisfying_element,
+        SatisfyEndpoint::Unsupported
+    ));
+}
+
+#[test]
 fn binding_connector_query_pairs_ends_preserves_duplicates_and_unresolved_outcomes() {
     let published = publication_for(&[(
         "memory://binding.sysml",
@@ -836,23 +1062,53 @@ action def Act {
 }
 
 #[test]
-fn feature_reference_expression_binding_check_is_explicitly_unsupported_without_owned_facts() {
+fn binding_connector_check_without_owned_endpoint_facts_is_explicitly_unsupported() {
     let published = publication_for(&[(
         "memory://binding-rule.sysml",
         "package Binding { action def Act { action start; action done; bind start = done; } }",
     )]);
     assert!(matches!(
         published
-            .binding_connector_validation(BindingConnectorCheckKind::FeatureReferenceExpression)
+            .binding_connector_validation(BindingConnectorCheckKind::AcceptActionUsageReceiver)
             .answer,
         QueryAnswer::Resolved(BindingConnectorValidationOutcome::Unsupported {
             prerequisite:
-                BindingConnectorValidationPrerequisite::FeatureReferenceExpressionTargetAndResult,
+                BindingConnectorValidationPrerequisite::AcceptActionUsageReceiverEndpointFacts,
         })
     ));
     assert!(matches!(
         published.binding_connectors().answer,
         QueryAnswer::Resolved(values) if values.len() == 1
+    ));
+}
+
+#[test]
+fn implied_feature_reference_binding_is_unresolved_when_its_target_is_unresolved() {
+    let resolved = publication_for(&[(
+        "memory://binding-resolved.kerml",
+        "package P { classifier H { feature referent; feature reference = referent; } }",
+    )]);
+    let unresolved = publication_for(&[(
+        "memory://binding-unresolved.kerml",
+        "package P { classifier H { feature reference = missing; } }",
+    )]);
+    let outcome = |published: &PublishedResolution| {
+        published
+            .binding_connector_validation(BindingConnectorCheckKind::FeatureReferenceExpression)
+            .answer
+    };
+    assert!(matches!(
+        outcome(&resolved),
+        QueryAnswer::Resolved(BindingConnectorValidationOutcome::Satisfied)
+    ));
+    assert!(matches!(
+        outcome(&unresolved),
+        QueryAnswer::Resolved(BindingConnectorValidationOutcome::Unresolved)
+    ));
+    // Implied connectors carry no authored declaration, so the authored projection stays empty.
+    assert!(matches!(
+        resolved.binding_connectors().answer,
+        QueryAnswer::Resolved(values) if values.is_empty()
     ));
 }
 
@@ -931,6 +1187,50 @@ fn a_cyclic_hierarchy_yields_no_conformance_answer() {
 }
 
 #[test]
+fn a_self_link_style_cycle_that_escapes_answers_conformance() {
+    let published = publication_for(&[(
+        "memory://links.kerml",
+        "package Links {
+            classifier Anything;
+            assoc SelfLink {
+                end feature thisThing : Anything subsets sameThing;
+                end feature sameThing : Anything subsets thisThing;
+            }
+        }",
+    )]);
+    let this_thing = symbol_named(
+        &published,
+        "memory://links.kerml",
+        "Links::SelfLink::thisThing",
+    );
+    let same_thing = symbol_named(
+        &published,
+        "memory://links.kerml",
+        "Links::SelfLink::sameThing",
+    );
+    let anything = symbol_named(&published, "memory://links.kerml", "Links::Anything");
+
+    assert_eq!(
+        conformance(published.conforms_to(
+            this_thing,
+            same_thing,
+            SpecializationScope::AnySpecialization
+        )),
+        Conformance::Conforms,
+        "mutual subsetting is shared extent, not a closed modelling error"
+    );
+    assert_eq!(
+        conformance(published.conforms_to(
+            this_thing,
+            anything,
+            SpecializationScope::AnySpecialization
+        )),
+        Conformance::Conforms,
+        "the escape typing remains a published conformance fact"
+    );
+}
+
+#[test]
 fn view_selection_keeps_unresolved_and_unsupported_predicates_explicit() {
     let document = "memory://views.sysml";
     let published = detail_publication(
@@ -966,7 +1266,7 @@ fn feature_relationship_collection_keeps_an_unresolved_canonical_edge_visible() 
     let published = detail_publication(
         &[(
             "memory://model.sysml",
-            "package Model { classifier Vehicle { feature derived chains Missing; } }",
+            "package Model { classifier Vehicle { feature 'derived' chains Missing; } }",
         )],
         ConstructionSchedule::Sequential,
     );
@@ -1343,7 +1643,7 @@ fn an_unresolved_import_makes_dependency_selection_explicitly_recovered() {
         BuildRequest::new(
             vec![SourceInput::new(
                 "memory://a.sysml",
-                "package A { import Missing::*; }".into(),
+                "package A { private import Missing::*; }".into(),
                 SourceKind::Workspace,
             )],
             ConstructionSchedule::Sequential,

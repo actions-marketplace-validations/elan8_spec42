@@ -5,6 +5,7 @@ use crate::lower::facts::direction_node_fact;
 use crate::lower::facts::multiplicity_facts;
 use crate::lower::facts::occurrence_prefix_direction;
 use crate::lower::facts::occurrence_prefix_modifiers;
+use crate::lower::facts::portion_kind_node_fact;
 use crate::lower::facts::DeclarationFacts;
 use crate::lower::facts::DeclarationModifiers;
 use crate::lower::facts::PendingReference;
@@ -70,6 +71,12 @@ impl SemanticModelBuilder {
         if let PortDefBody::Brace { elements, .. } = &node.value.body {
             for element in elements {
                 match &element.value {
+                    PortDefBodyElement::ExtendedDefinition(node) => {
+                        self.lower_extended_definition(document, Some(declaration), node)?;
+                    }
+                    PortDefBodyElement::ExtendedUsage(node) => {
+                        self.lower_extended_usage(document, Some(declaration), node)?;
+                    }
                     PortDefBodyElement::Error(error) => {
                         self.push_recovery(document, error.span);
                     }
@@ -209,6 +216,12 @@ impl SemanticModelBuilder {
         if let PortBody::Brace { elements, .. } = &node.value.body {
             for element in elements {
                 match &element.value {
+                    PortBodyElement::ExtendedDefinition(node) => {
+                        self.lower_extended_definition(document, Some(declaration), node)?;
+                    }
+                    PortBodyElement::ExtendedUsage(node) => {
+                        self.lower_extended_usage(document, Some(declaration), node)?;
+                    }
                     PortBodyElement::Error(error) => {
                         self.push_recovery(document, error.span);
                     }
@@ -308,18 +321,20 @@ impl SemanticModelBuilder {
             )?,
             node.value.membership.span,
         )?;
+        // `DefinitionExtensionKeyword*` (`#derivation`, `#multicausation`): metadata applications
+        // whose `SemanticMetadata` `baseType` specializes the definition (KerML 7.4.13).
+        self.lower_usage_extension_keywords(document, declaration, &node.value.extension_keywords)?;
         if let Some(relationship) = &node.value.specializes {
             self.lower_typing_relationship(document, declaration, relationship)?;
         }
         self.lower_connection_body(document, declaration, &node.value.body)
     }
 
-    /// Lowers a package/definition/usage-level `connection` feature member (BNF ConnectionUsage),
-    /// mirroring `lower_metadata_usage`: ownership, membership, an optional `:` typing reference
-    /// (a bare `QualifiedReferenceId`, not a structured `TypingRelationship`),
-    /// `subsets`/`redefines` subsetting relationships, an optional inline `connect from to to`
-    /// clause (connector-end references), and owned attribute/item/port/nested-connection
-    /// members via the same shared `lower_connection_body` as `connection def`.
+    /// Lowers a `def`-less `connection` usage (BNF `ConnectionUsage`, 8.2.2.13) the way every
+    /// `OccurrenceUsagePrefix` family lowers: the prefix modifiers and its `#` extension keywords
+    /// (metadata applications, so `#derivation connection d { … }` subsets `derivations` through
+    /// its `SemanticMetadata` `baseType`), the typing and specialization clauses, a value, an
+    /// inline `connect` clause, and the body through the same walker as `connection def`.
     pub(crate) fn lower_connection_usage(
         &mut self,
         document: DocumentIdx,
@@ -327,6 +342,7 @@ impl SemanticModelBuilder {
         node: &Node<ParserConnectionUsage>,
     ) -> Result<(), ConstructionError> {
         let name = self.intern_declaration_name(document, node.value.name)?;
+        let short_name = self.intern_short_name(document, node.value.short_name)?;
         let declaration = self.push_typed_declaration(
             document,
             owner,
@@ -334,7 +350,17 @@ impl SemanticModelBuilder {
             name,
             node.span,
             DeclarationFacts {
+                short_name,
+                modifiers: DeclarationModifiers {
+                    ordered: node.value.multiplicity_modifiers.is_ordered(),
+                    nonunique: !node.value.multiplicity_modifiers.is_unique(),
+                    ..occurrence_prefix_modifiers(&node.value.prefix)
+                },
+                direction: occurrence_prefix_direction(&node.value.prefix),
                 multiplicity: multiplicity_facts(node.value.multiplicity.as_ref()),
+                // `connect` ends are owned end features even when the usage has no brace body.
+                // The body walker preserves a count that is already open.
+                owned_end_feature_count: Some(0),
                 ..DeclarationFacts::none()
             },
         )?;
@@ -347,27 +373,25 @@ impl SemanticModelBuilder {
             )?,
             node.value.membership.span,
         )?;
-        if let Some(type_reference) = node.value.type_reference {
-            let span = self.documents[document.index()]
-                .parsed
-                .qualified_reference(type_reference)
-                .ok_or(ConstructionError::InvalidParserReference)?
-                .metadata
-                .span;
-            self.push_reference(PendingReference {
-                source: declaration,
-                kind: ReferenceKind::FeatureTyping,
-                document,
-                local: type_reference,
-                flags: RelationshipFlags::default(),
-                span,
-                import: None,
-            })?;
+        self.lower_occurrence_prefix_members(document, declaration, &node.value.prefix)?;
+        if let Some(feature_value) = &node.value.value {
+            self.record_feature_value(document, declaration, feature_value)?;
         }
-        if let Some(relationship) = &node.value.subsets {
+        if let Some(relationship) = &node.value.typing {
+            self.lower_typing_relationship(document, declaration, relationship)?;
+        }
+        if let Some((relationship, _)) = &node.value.subsets {
             self.lower_subsetting_relationship(document, declaration, relationship)?;
         }
-        if let Some(relationship) = &node.value.redefines {
+        for relationship in [
+            node.value.redefines.as_ref(),
+            node.value.references.as_ref(),
+            node.value.crosses.as_ref(),
+            node.value.intersects.as_ref(),
+        ]
+        .into_iter()
+        .flatten()
+        {
             self.lower_subsetting_relationship(document, declaration, relationship)?;
         }
         if let Some(end) = &node.value.connect_from {
@@ -394,13 +418,30 @@ impl SemanticModelBuilder {
         declaration: DeclarationId,
         body: &ConnectionDefBody,
     ) -> Result<(), ConstructionError> {
-        self.declaration_facts
+        let facts = self
+            .declaration_facts
             .get_mut(declaration.index())
-            .ok_or(ConstructionError::InvalidMembership)?
-            .owned_end_feature_count = Some(0);
+            .ok_or(ConstructionError::InvalidMembership)?;
+        // A `connect` clause already opened the count. Resetting it would drop those ends.
+        if facts.owned_end_feature_count.is_none() {
+            facts.owned_end_feature_count = Some(0);
+        }
         if let ConnectionDefBody::Brace { elements, .. } = body {
             for element in elements {
                 match &element.value {
+                    ConnectionDefBodyElement::ExtendedDefinition(node) => {
+                        self.lower_extended_definition(document, Some(declaration), node)?;
+                    }
+                    ConnectionDefBodyElement::ExtendedUsage(node) => {
+                        self.lower_extended_end_usage(document, declaration, node)?;
+                    }
+                    ConnectionDefBodyElement::DefaultReferenceUsage(node) => self
+                        .lower_default_reference_usage(
+                            document,
+                            Some(declaration),
+                            UnsupportedFamily::ConnectionDefinitionMember,
+                            node,
+                        )?,
                     ConnectionDefBodyElement::Error(error) => {
                         self.push_recovery(document, error.span);
                         self.declaration_facts
@@ -451,13 +492,9 @@ impl SemanticModelBuilder {
                     ConnectionDefBodyElement::OccurrenceUsage(occurrence_usage) => {
                         self.lower_occurrence_usage(document, Some(declaration), occurrence_usage)?;
                     }
-                    ConnectionDefBodyElement::AssertConstraint(node) => self
-                        .lower_assert_constraint_member(
-                            document,
-                            declaration,
-                            UnsupportedFamily::ConnectionDefinitionMember,
-                            node,
-                        )?,
+                    ConnectionDefBodyElement::AssertConstraint(node) => {
+                        self.lower_assert_constraint_member(document, declaration, node)?
+                    }
                     ConnectionDefBodyElement::RefDecl(node) => {
                         self.lower_ref_decl(document, Some(declaration), node)?;
                     }
@@ -475,13 +512,11 @@ impl SemanticModelBuilder {
     }
 
     /// Lowers an `end` declaration inside a connection/interface def body (BNF `EndDecl`) as its
-    /// own nested declaration: a normal declared label (or an anonymous `#original`/`#derive`
-    /// derivation role), an optional `:` typing relationship, and an optional `::>`/`references`
-    /// reference-subsetting relationship as an authored `ConnectorEnd` reference (resolved
-    /// through the same shared lexical lookup as `AliasBinding`, see `DeclarationDomain::Any` in
-    /// resolver.rs). `redefines`/`crosses`/`nested_usage` -- connector-end referential
-    /// constraints, not the plain reference shape this slice covers -- are explicitly out of
-    /// scope and left unlowered.
+    /// own nested declaration: a normal declared label, a `#original`/`#derive` derivation role,
+    /// or the simple name of a leading `:>>` redefinition when the end has no label of its own.
+    /// An optional `:` typing relationship, a `:>>` redefinition, and an optional `::>`/
+    /// `references` reference-subsetting relationship are authored references. `crosses` and
+    /// nested usage bodies stay unlowered.
     pub(crate) fn lower_end_decl(
         &mut self,
         document: DocumentIdx,
@@ -492,7 +527,9 @@ impl SemanticModelBuilder {
             EndIdentity::Declaration(label) => {
                 self.intern_declaration_name(document, Some(*label))?
             }
-            EndIdentity::Derivation(_) | EndIdentity::Anonymous => None,
+            EndIdentity::Anonymous => self
+                .redefinition_simple_name(document, node.value.redefines.as_ref())?
+                .into(),
         };
         let positional_end = self.next_positional_end_ordinal(owner)?;
         let short_name = self.intern_short_name(document, node.value.short_name)?;
@@ -531,6 +568,10 @@ impl SemanticModelBuilder {
             Visibility::Default,
             node.span,
         )?;
+        // `ExtendedUsage`'s `UsageExtensionKeyword+` (`end #original r1 : Req1;`, `end #cause c :
+        // C;`): metadata applications on the end, whose `SemanticMetadata` `baseType` makes it
+        // subset the library feature (`originalRequirements`, `causes`, ...).
+        self.lower_usage_extension_keywords(document, declaration, &node.value.extension_keywords)?;
         if let Some(relationship) = &node.value.typing {
             self.lower_typing_relationship(document, declaration, relationship)?;
         }
@@ -553,7 +594,41 @@ impl SemanticModelBuilder {
                 })?;
             }
         }
+        if let Some(relationship) = &node.value.redefines {
+            self.lower_subsetting_relationship(document, declaration, relationship)?;
+        }
         Ok(())
+    }
+
+    /// The simple name of a `:>>` target, used when an end has no declaration label of its own
+    /// (`end :>> originalRequirement ::> need`).
+    fn redefinition_simple_name(
+        &mut self,
+        document: DocumentIdx,
+        relationship: Option<&Node<sysml_v2_parser::ast::SubsettingRelationship>>,
+    ) -> Result<Option<crate::model::NameId>, ConstructionError> {
+        let Some(relationship) = relationship else {
+            return Ok(None);
+        };
+        let Some(target) = relationship.value.target.first().copied() else {
+            return Ok(None);
+        };
+        let decoded = {
+            let parsed = &self.documents[document.index()].parsed;
+            let reference = parsed
+                .qualified_reference(target)
+                .ok_or(ConstructionError::InvalidParserReference)?;
+            let last = reference
+                .segments
+                .len()
+                .checked_sub(1)
+                .ok_or(ConstructionError::InvalidParserReference)?;
+            reference
+                .segment_decoded_text(last)
+                .ok_or(ConstructionError::InvalidParserReference)?
+                .into_owned()
+        };
+        self.intern_declared_name(&decoded)
     }
 
     /// Lowers an inline `connect from to to (, extra)*` statement (BNF `ConnectStmt`) as
@@ -584,6 +659,27 @@ impl SemanticModelBuilder {
                 UnsupportedFamily::ConnectionDefinitionMember,
                 element.span,
             );
+        }
+        Ok(())
+    }
+
+    /// Counts one owned end feature on a connector whose end is not a nested declaration.
+    ///
+    /// Named `end` members and labeled `connect` ends already increment the count when they are
+    /// lowered as declarations. A bare `connect a to b` end and an interface end publish only a
+    /// connector-end reference, which is still an owned end feature for the binary-connection
+    /// predicates.
+    fn note_owned_end_feature(&mut self, owner: DeclarationId) -> Result<(), ConstructionError> {
+        let facts = self
+            .declaration_facts
+            .get_mut(owner.index())
+            .ok_or(ConstructionError::InvalidMembership)?;
+        match facts.owned_end_feature_count {
+            Some(count) => {
+                facts.owned_end_feature_count =
+                    Some(count.checked_add(1).ok_or(ConstructionError::Capacity)?);
+            }
+            None => facts.owned_end_feature_count = Some(1),
         }
         Ok(())
     }
@@ -619,7 +715,7 @@ impl SemanticModelBuilder {
                     name,
                     node.span,
                     DeclarationFacts {
-                        multiplicity: multiplicity_facts(node.value.multiplicity.as_ref()),
+                        cross_multiplicity: multiplicity_facts(node.value.multiplicity.as_ref()),
                         positional_end: Some(positional_end),
                         ..DeclarationFacts::none()
                     },
@@ -627,7 +723,10 @@ impl SemanticModelBuilder {
                 self.push_membership(end, MembershipKind::Feature, Visibility::Default, node.span)?;
                 end
             }
-            None => owner,
+            None => {
+                self.note_owned_end_feature(owner)?;
+                owner
+            }
         };
         match &node.value.expression.value {
             Expression::FeatureRef(target) => {
@@ -697,6 +796,7 @@ impl SemanticModelBuilder {
                 modifiers: DeclarationModifiers {
                     is_abstract,
                     variation,
+                    individual: node.value.is_individual,
                     ..DeclarationModifiers::default()
                 },
                 ..DeclarationFacts::none()
@@ -720,7 +820,7 @@ impl SemanticModelBuilder {
     /// Body walker for `interface def` bodies (`InterfaceDefBody`/`InterfaceDefBodyElement`),
     /// mirroring `lower_connection_body`. `end` declarations and `connect` statements carry the
     /// connector-end structure through the same `lower_end_decl`/`lower_connect_stmt` helpers
-    /// `connection def` uses; everything else beyond attribute/item/port members falls through to
+    /// `connection def` uses; everything else beyond attribute/item/port/part members falls through to
     /// `unsupported_interface_definition_member`.
     pub(crate) fn lower_interface_body(
         &mut self,
@@ -728,9 +828,22 @@ impl SemanticModelBuilder {
         declaration: DeclarationId,
         body: &InterfaceDefBody,
     ) -> Result<(), ConstructionError> {
+        let facts = self
+            .declaration_facts
+            .get_mut(declaration.index())
+            .ok_or(ConstructionError::InvalidMembership)?;
+        if facts.owned_end_feature_count.is_none() {
+            facts.owned_end_feature_count = Some(0);
+        }
         if let InterfaceDefBody::Brace { elements, .. } = body {
             for element in elements {
                 match &element.value {
+                    InterfaceDefBodyElement::ExtendedDefinition(node) => {
+                        self.lower_extended_definition(document, Some(declaration), node)?;
+                    }
+                    InterfaceDefBodyElement::InterfaceUsage(node) => {
+                        self.lower_interface_usage(document, Some(declaration), node)?
+                    }
                     InterfaceDefBodyElement::Error(error) => {
                         self.push_recovery(document, error.span);
                     }
@@ -779,6 +892,11 @@ impl SemanticModelBuilder {
                     InterfaceDefBodyElement::PortUsage(port_usage) => {
                         self.lower_port_usage(document, Some(declaration), port_usage)?;
                     }
+                    // `StructureUsageElement` admits `PartUsage`, including `end part`, exactly
+                    // as in an interface usage body.
+                    InterfaceDefBodyElement::PartUsage(node) => {
+                        self.lower_part_usage(document, Some(declaration), node)?;
+                    }
                     InterfaceDefBodyElement::RefDecl(node) => {
                         self.lower_ref_decl(document, Some(declaration), node)?;
                     }
@@ -803,64 +921,83 @@ impl SemanticModelBuilder {
         owner: Option<DeclarationId>,
         node: &Node<ParserInterfaceUsage>,
     ) -> Result<(), ConstructionError> {
-        let (name, interface_type, subsets, redefines, ends, body) = match &node.value {
+        let no_multiplicity_modifiers = sysml_v2_parser::ast::MultiplicityModifiers::default();
+        let (prefix, name, short_name, interface_type, multiplicity, multiplicity_modifiers) =
+            match &node.value {
+                ParserInterfaceUsage::TypedConnect {
+                    prefix,
+                    name,
+                    short_name,
+                    interface_type,
+                    multiplicity,
+                    multiplicity_modifiers,
+                    ..
+                }
+                | ParserInterfaceUsage::Declaration {
+                    prefix,
+                    name,
+                    short_name,
+                    interface_type,
+                    multiplicity,
+                    multiplicity_modifiers,
+                    ..
+                } => (
+                    prefix,
+                    *name,
+                    *short_name,
+                    interface_type.as_ref(),
+                    multiplicity.as_deref(),
+                    multiplicity_modifiers,
+                ),
+                // The `connect`-only shape (`interface a to b;`) declares no name, typing or
+                // multiplicity.
+                ParserInterfaceUsage::Connection { prefix, .. } => {
+                    (prefix, None, None, None, None, &no_multiplicity_modifiers)
+                }
+            };
+        let (subsets, redefines, ends, body) = match &node.value {
             ParserInterfaceUsage::TypedConnect {
-                name,
-                interface_type,
                 subsets,
                 redefines,
                 part,
                 body,
                 ..
-            } => (
-                *name,
-                interface_type.as_ref(),
-                subsets.as_ref(),
-                redefines.as_ref(),
-                Some(part),
-                body,
-            ),
-            ParserInterfaceUsage::Connection {
+            }
+            | ParserInterfaceUsage::Connection {
                 subsets,
                 redefines,
                 part,
                 body,
                 ..
-            } => (
-                None,
-                None,
-                subsets.as_ref(),
-                redefines.as_ref(),
-                Some(part),
-                body,
-            ),
+            } => (subsets.as_ref(), redefines.as_ref(), Some(part), body),
             ParserInterfaceUsage::Declaration {
-                name,
-                interface_type,
                 subsets,
                 redefines,
                 body,
                 ..
-            } => (
-                *name,
-                interface_type.as_ref(),
-                subsets.as_ref(),
-                redefines.as_ref(),
-                None,
-                body,
-            ),
+            } => (subsets.as_ref(), redefines.as_ref(), None, body),
         };
         let name = self.intern_declaration_name(document, name)?;
+        let short_name = self.intern_short_name(document, short_name)?;
         let declaration = self.push_typed_declaration(
             document,
             owner,
             DeclarationKind::InterfaceUsage,
             name,
             node.span,
-            // `ast::InterfaceUsage` is an enum of connect/declaration shapes carrying only name,
-            // type, subsets/redefines, and ends -- no modifier, multiplicity, direction, or short
-            // name on either variant.
-            DeclarationFacts::none(),
+            DeclarationFacts {
+                short_name,
+                modifiers: DeclarationModifiers {
+                    ordered: multiplicity_modifiers.is_ordered(),
+                    nonunique: !multiplicity_modifiers.is_unique(),
+                    ..occurrence_prefix_modifiers(prefix)
+                },
+                direction: occurrence_prefix_direction(prefix),
+                portion_kind: portion_kind_node_fact(prefix.portion()),
+                multiplicity: multiplicity_facts(multiplicity),
+                owned_end_feature_count: Some(0),
+                ..DeclarationFacts::none()
+            },
         )?;
         self.push_membership(
             declaration,
@@ -868,6 +1005,7 @@ impl SemanticModelBuilder {
             Visibility::Default,
             node.span,
         )?;
+        self.lower_occurrence_prefix_members(document, declaration, prefix)?;
         if let Some(type_reference) = interface_type {
             let span = self.documents[document.index()]
                 .parsed
@@ -896,6 +1034,24 @@ impl SemanticModelBuilder {
         }
         for element in body.members() {
             match &element.value {
+                InterfaceUsageBodyElement::ExtendedDefinition(node) => {
+                    self.lower_extended_definition(document, Some(declaration), node)?;
+                }
+                InterfaceUsageBodyElement::PartUsage(node) => {
+                    self.lower_part_usage(document, Some(declaration), node)?;
+                }
+                InterfaceUsageBodyElement::InterfaceUsage(node) => {
+                    self.lower_interface_usage(document, Some(declaration), node)?
+                }
+                InterfaceUsageBodyElement::AttributeUsage(node) => {
+                    self.lower_attribute_usage(document, Some(declaration), node)?
+                }
+                InterfaceUsageBodyElement::SuccessionUsage(node) => self.lower_succession_usage(
+                    document,
+                    declaration,
+                    UnsupportedFamily::InterfaceDefinitionMember,
+                    node,
+                )?,
                 InterfaceUsageBodyElement::Annotating(member) => {
                     self.lower_annotating_member(
                         document,
@@ -965,6 +1121,7 @@ impl SemanticModelBuilder {
             InterfaceEndTarget::Direct(target) => *target,
             InterfaceEndTarget::Named { target, .. } => *target,
         };
+        self.note_owned_end_feature(owner)?;
         let span = self.documents[document.index()]
             .parsed
             .qualified_reference(target)
@@ -1110,14 +1267,21 @@ impl SemanticModelBuilder {
         family: UnsupportedFamily,
         node: &Node<Bind>,
     ) -> Result<(), ConstructionError> {
+        // `'binding' UsageDeclaration`: the optional `binding <s> name` prefix is the binding
+        // connector's own `Identification`. The bare `bind a = b;` form has neither part.
+        let name = self.intern_declaration_name(document, node.value.binding_name)?;
+        let short_name = self.intern_short_name(document, node.value.binding_short_name)?;
         let declaration = self.push_typed_declaration(
             document,
             Some(owner),
             DeclarationKind::Bind,
-            None,
+            name,
             node.span,
-            // `ast::Bind` carries only its two bound operands, lowered as references.
-            DeclarationFacts::none(),
+            // The two bound operands are lowered as references below.
+            DeclarationFacts {
+                short_name,
+                ..DeclarationFacts::none()
+            },
         )?;
         self.push_membership(
             declaration,
@@ -1160,6 +1324,7 @@ impl SemanticModelBuilder {
         family: UnsupportedFamily,
         node: &Node<BindingConnectorUsage>,
     ) -> Result<(), ConstructionError> {
+        let short_name = self.intern_short_name(document, node.value.short_name)?;
         let declaration = self.push_typed_declaration(
             document,
             Some(owner),
@@ -1167,6 +1332,7 @@ impl SemanticModelBuilder {
             None,
             node.span,
             DeclarationFacts {
+                short_name,
                 multiplicity: multiplicity_facts(node.value.multiplicity.as_ref()),
                 ..DeclarationFacts::none()
             },
@@ -1253,6 +1419,7 @@ impl SemanticModelBuilder {
                 modifiers: DeclarationModifiers {
                     is_abstract,
                     variation,
+                    individual: node.value.is_individual,
                     ..DeclarationModifiers::default()
                 },
                 ..DeclarationFacts::none()
@@ -1299,13 +1466,17 @@ impl SemanticModelBuilder {
         node: &Node<ParserAllocationUsage>,
     ) -> Result<(), ConstructionError> {
         let name = self.intern_declaration_name(document, node.value.name)?;
+        let short_name = self.intern_short_name(document, node.value.short_name)?;
         let declaration = self.push_typed_declaration(
             document,
             owner,
             DeclarationKind::Allocate,
             name,
             node.span,
-            DeclarationFacts::none(),
+            DeclarationFacts {
+                short_name,
+                ..DeclarationFacts::none()
+            },
         )?;
         self.push_membership(
             declaration,
@@ -1316,25 +1487,8 @@ impl SemanticModelBuilder {
             )?,
             node.value.membership.span,
         )?;
-        if let Some(target) = node.value.type_name {
-            let span = self.documents[document.index()]
-                .parsed
-                .qualified_reference(target)
-                .ok_or(ConstructionError::InvalidParserReference)?
-                .metadata
-                .span;
-            self.push_reference(PendingReference {
-                source: declaration,
-                kind: ReferenceKind::FeatureTyping,
-                document,
-                local: target,
-                flags: RelationshipFlags {
-                    conjugated: node.value.type_is_conjugated,
-                    ..RelationshipFlags::default()
-                },
-                span,
-                import: None,
-            })?;
+        if let Some(relationship) = &node.value.typing {
+            self.lower_typing_relationship(document, declaration, relationship)?;
         }
         if let Some(relationship) = &node.value.subsets {
             self.lower_subsetting_relationship(document, declaration, relationship)?;
@@ -1356,6 +1510,20 @@ impl SemanticModelBuilder {
                 declaration,
                 ReferenceKind::AllocateTarget,
                 target,
+            )?;
+        }
+        // The n-ary `allocate ( e1, e2, ... )` form: as for any Connector, the first end is the
+        // source feature and the rest are target features (KerML 8.3.4.5.3).
+        for (position, end) in node.value.nary_ends.iter().enumerate() {
+            self.lower_kerml_connector_end(
+                document,
+                declaration,
+                if position == 0 {
+                    ReferenceKind::AllocateSource
+                } else {
+                    ReferenceKind::AllocateTarget
+                },
+                end,
             )?;
         }
         let DefinitionBody::Brace { elements, .. } = &node.value.body else {
@@ -1398,8 +1566,13 @@ impl SemanticModelBuilder {
             DeclarationKind::BareConnect,
             None,
             node.span,
-            // A synthesized scope giving the bare `connect a to b;` ends a lexical owner.
-            DeclarationFacts::none(),
+            // A synthesized scope giving the bare `connect a to b;` ends a lexical owner. Its end
+            // count starts at zero, as a connection usage's does, so a named (`references`) end,
+            // which is its own end declaration, is counted alongside a bare one.
+            DeclarationFacts {
+                owned_end_feature_count: Some(0),
+                ..DeclarationFacts::none()
+            },
         )?;
         self.push_membership(
             declaration,

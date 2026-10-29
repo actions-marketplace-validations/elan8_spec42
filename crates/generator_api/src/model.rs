@@ -4,16 +4,16 @@ use std::sync::{Arc, Mutex};
 use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
 use spec42_generator_protocol::{
-    DiagramCompartment, DiagramCompartmentKind, DiagramCompartmentProvenance, DiagramEdge,
-    DiagramEdgeKind, DiagramElement, DiagramEndpointOccurrence, DiagramIncompleteReason,
-    DiagramNotationRole, DiagramOccurrenceIdentity, DiagramRelationship,
-    DiagramRelationshipEndpoint, DiagramRelationshipTarget, DiagramScene, DiagramSemanticReference,
-    DiagramSourceDomain, DiagramViewKind, DiagramViewMetadata, DiagramViewProjection,
-    DiagramViewSummary, ElementIdentity, ProjectionCompleteness, ProjectionFeature,
-    SequenceEndpoint, SequenceMessage, SequenceOrder, SequenceScene, SourceReference,
-    StateMachineIdentity, StateMachineSummary, StateTransitionEdge, StateTransitionNode,
-    StateTransitionNodeKind, StateTransitionScene, StateTransitionViewProjection,
-    StateTransitionViewSummary, TransitionTrigger,
+    DiagramBrowserMembers, DiagramBrowserRow, DiagramCompartment, DiagramCompartmentKind,
+    DiagramCompartmentProvenance, DiagramEdge, DiagramEdgeKind, DiagramElement, DiagramElementType,
+    DiagramEndpointOccurrence, DiagramIncompleteReason, DiagramMembership, DiagramNotationRole,
+    DiagramOccurrenceIdentity, DiagramPortFamily, DiagramRelationship, DiagramRelationshipEndpoint,
+    DiagramRelationshipTarget, DiagramScene, DiagramSemanticReference, DiagramSourceDomain,
+    DiagramViewKind, DiagramViewMetadata, DiagramViewProjection, DiagramViewSummary,
+    ElementIdentity, ProjectionCompleteness, ProjectionFeature, SequenceEndpoint, SequenceMessage,
+    SequenceOrder, SequenceScene, SourceReference, StateMachineIdentity, StateMachineSummary,
+    StateTransitionEdge, StateTransitionNode, StateTransitionNodeKind, StateTransitionScene,
+    StateTransitionViewProjection, StateTransitionViewSummary, TransitionTrigger,
 };
 use spec42_generator_protocol::{Metaclass, RelationshipKind as ApiRelationshipKind};
 use sysml_query::resolved_slice::{
@@ -38,7 +38,7 @@ impl Default for QueryLimits {
     }
 }
 
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Serialize, Deserialize)]
 pub struct SourceRange {
     pub start_line: u32,
     pub start_character: u32,
@@ -96,8 +96,19 @@ pub struct ElementDetail {
 pub struct RelationshipSummary {
     pub kind: ApiRelationshipKind,
     pub source: ElementSummary,
-    pub target: ElementSummary,
+    pub target: RelationshipTargetSummary,
     pub implied: bool,
+    pub authored_at: Option<SourceRange>,
+}
+
+/// What resolution settled on for one relationship's target; see
+/// `spec42_generator_protocol::RelationshipTarget`.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub enum RelationshipTargetSummary {
+    Resolved(ElementSummary),
+    Ambiguous(Vec<ElementSummary>),
+    Unresolved { authored: Option<String> },
+    Unsupported { authored: Option<String> },
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -129,9 +140,40 @@ pub enum RequirementUsageTypingSummary {
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum SatisfyEndpointSummary {
     Resolved(ElementSummary),
+    /// A feature chain (`satisfy R by a.b.c`), every hop resolved; see
+    /// `sysml_query::resolved_slice::SatisfyEndpoint::FeatureChain`.
+    FeatureChain {
+        path: Vec<ElementSummary>,
+        authored: String,
+    },
     Ambiguous(Vec<ElementSummary>),
     Unresolved,
     Unsupported,
+}
+
+/// The target of one requirement derivation end; see
+/// `sysml_query::resolved_slice::DerivationEndpoint`.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum DerivationEndpointSummary {
+    Resolved(ElementSummary),
+    FeatureChain {
+        path: Vec<ElementSummary>,
+        authored: String,
+    },
+    Ambiguous(Vec<ElementSummary>),
+    Unresolved,
+    Unsupported,
+}
+
+/// One requirement derivation connection with its classified ends.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct DerivationRelationshipSummary {
+    pub semantic_id: String,
+    pub original: Vec<DerivationEndpointSummary>,
+    pub derived: Vec<DerivationEndpointSummary>,
+    pub unclassified: Vec<DerivationEndpointSummary>,
+    pub provenance: TypingProvenanceSummary,
+    pub recovered: bool,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -210,6 +252,9 @@ pub struct GeneratorModelView {
     completeness: sysml_query::resolved_slice::PublicationCompleteness,
     by_identity: HashMap<SymbolId, RegisteredElement>,
     handles: Mutex<HashMap<String, SymbolId>>,
+    /// The catalogued kind of each diagram catalog handle. A view typed by several standard view
+    /// definitions has one catalog entry, and one handle, per kind.
+    diagram_handle_kinds: Mutex<HashMap<String, sysml_query::resolved_slice::DiagramViewKind>>,
 }
 
 impl std::fmt::Debug for GeneratorModelView {
@@ -251,6 +296,7 @@ impl GeneratorModelView {
             completeness,
             by_identity,
             handles: Mutex::new(HashMap::new()),
+            diagram_handle_kinds: Mutex::new(HashMap::new()),
         })
     }
 
@@ -370,8 +416,15 @@ impl GeneratorModelView {
             }),
             derived: has(ElementModifier::Derived),
             constant: has(ElementModifier::Constant),
-            abstract_: has(ElementModifier::Abstract),
-            variation: has(ElementModifier::Variation),
+            // Effective abstractness: authored, or implied by `variation`.
+            abstract_: has(ElementModifier::Abstract)
+                || inspection
+                    .implied_modifiers
+                    .contains(&ElementModifier::Abstract),
+            variation: has(ElementModifier::Variation)
+                || inspection
+                    .implied_modifiers
+                    .contains(&ElementModifier::Variation),
             individual: has(ElementModifier::Individual),
             conjugated: false,
             composite: has(ElementModifier::Composite).then_some(true),
@@ -472,43 +525,126 @@ impl GeneratorModelView {
         let source = self.summary(identity)?;
         let mut values = Vec::new();
         for relationship in &inspection.relationships {
+            // Each relationship carries its own outcome: one unsettled reference must not hide
+            // the element's settled ones.
+            let authored = || relationship.authored.as_deref().map(str::to_owned);
             let target = match &relationship.target {
-                RelationshipTarget::Resolved(target) => self.summary(target)?,
-                RelationshipTarget::Ambiguous(_) => {
-                    return Err(ModelQueryError::Ambiguous(format!(
-                        "relationship `{}` from `{}`",
-                        relationship.kind,
-                        self.token(identity)
-                    )))
+                RelationshipTarget::Resolved(target) => {
+                    RelationshipTargetSummary::Resolved(self.summary(target)?)
                 }
-                RelationshipTarget::Unresolved => {
-                    return Err(ModelQueryError::Unresolved(format!(
-                        "relationship `{}` from `{}`",
-                        relationship.kind,
-                        self.token(identity)
-                    )))
+                RelationshipTarget::Ambiguous(candidates) => {
+                    let mut candidates = candidates
+                        .iter()
+                        .map(|candidate| self.summary(candidate))
+                        .collect::<Result<Vec<_>, _>>()?;
+                    candidates.sort_by(summary_order);
+                    RelationshipTargetSummary::Ambiguous(candidates)
                 }
-                RelationshipTarget::Unsupported => {
-                    return Err(ModelQueryError::Unsupported(format!(
-                        "relationship `{}` from `{}`",
-                        relationship.kind,
-                        self.token(identity)
-                    )))
-                }
+                RelationshipTarget::Unresolved => RelationshipTargetSummary::Unresolved {
+                    authored: authored(),
+                },
+                RelationshipTarget::Unsupported => RelationshipTargetSummary::Unsupported {
+                    authored: authored(),
+                },
             };
             values.push(RelationshipSummary {
                 kind: ApiRelationshipKind::parse(generator_relationship_kind(relationship.kind)),
                 source: source.clone(),
                 target,
                 implied: relationship.provenance == RelationshipProvenance::Implied,
+                authored_at: relationship
+                    .location
+                    .as_ref()
+                    .map(|location| source_range(location.range)),
             });
         }
         values.sort_by(|a, b| {
             a.kind
                 .as_str()
                 .cmp(b.kind.as_str())
-                .then_with(|| summary_order(&a.target, &b.target))
+                .then_with(|| a.authored_at.cmp(&b.authored_at))
+                .then_with(|| target_order(&a.target, &b.target))
         });
+        self.enforce_limit(values.len())?;
+        Ok(values)
+    }
+
+    /// Workspace requirement derivations (`RequirementDerivation` library) with their ends
+    /// classified as original, derived or unclassified.
+    pub fn derivation_relationships(
+        &self,
+    ) -> Result<Vec<DerivationRelationshipSummary>, ModelQueryError> {
+        use sysml_query::resolved_slice::{DerivationEndpoint as OwnedEndpoint, QueryAnswer};
+        let query = self.model.inspection().derivation_relationships();
+        let recovered = !query.completeness.is_complete();
+        let relationships = match query.answer {
+            QueryAnswer::Resolved(values) => values,
+            QueryAnswer::Unsupported => {
+                return Err(ModelQueryError::Unsupported(
+                    "derivation relationships".into(),
+                ))
+            }
+            QueryAnswer::Unresolved => {
+                return Err(ModelQueryError::Unresolved(
+                    "derivation relationships".into(),
+                ))
+            }
+            QueryAnswer::Ambiguous(_) => {
+                return Err(ModelQueryError::Ambiguous(
+                    "derivation relationships".into(),
+                ))
+            }
+            QueryAnswer::Recovery => {
+                return Err(ModelQueryError::Unresolved(
+                    "derivation relationships are in parser recovery".into(),
+                ))
+            }
+            QueryAnswer::Incomplete => return Err(ModelQueryError::Incomplete),
+        };
+        let endpoint =
+            |value: &OwnedEndpoint| -> Result<DerivationEndpointSummary, ModelQueryError> {
+                Ok(match value {
+                    OwnedEndpoint::Resolved(identity) => {
+                        DerivationEndpointSummary::Resolved(self.summary(identity)?)
+                    }
+                    OwnedEndpoint::FeatureChain { path, authored } => {
+                        DerivationEndpointSummary::FeatureChain {
+                            path: path
+                                .iter()
+                                .map(|hop| self.summary(hop))
+                                .collect::<Result<Vec<_>, _>>()?,
+                            authored: authored.to_string(),
+                        }
+                    }
+                    OwnedEndpoint::Ambiguous(values) => DerivationEndpointSummary::Ambiguous(
+                        values
+                            .iter()
+                            .map(|value| self.summary(value))
+                            .collect::<Result<Vec<_>, _>>()?,
+                    ),
+                    OwnedEndpoint::Unresolved => DerivationEndpointSummary::Unresolved,
+                    OwnedEndpoint::Unsupported => DerivationEndpointSummary::Unsupported,
+                })
+            };
+        let ends = |values: &[OwnedEndpoint]| -> Result<Vec<_>, ModelQueryError> {
+            values.iter().map(endpoint).collect()
+        };
+        let values = relationships
+            .iter()
+            .map(|relationship| {
+                Ok(DerivationRelationshipSummary {
+                    semantic_id: self.token(relationship.identity),
+                    original: ends(&relationship.original)?,
+                    derived: ends(&relationship.derived)?,
+                    unclassified: ends(&relationship.unclassified)?,
+                    provenance: match relationship.provenance {
+                        RelationshipProvenance::Authored => TypingProvenanceSummary::Authored,
+                        RelationshipProvenance::Implied => TypingProvenanceSummary::Implied,
+                    },
+                    recovered,
+                })
+            })
+            .collect::<Result<Vec<_>, ModelQueryError>>()?;
         self.enforce_limit(values.len())?;
         Ok(values)
     }
@@ -547,6 +683,15 @@ impl GeneratorModelView {
             Ok(match value {
                 OwnedEndpoint::Resolved(identity) => {
                     SatisfyEndpointSummary::Resolved(self.summary(identity)?)
+                }
+                OwnedEndpoint::FeatureChain { path, authored } => {
+                    SatisfyEndpointSummary::FeatureChain {
+                        path: path
+                            .iter()
+                            .map(|hop| self.summary(hop))
+                            .collect::<Result<Vec<_>, _>>()?,
+                        authored: authored.to_string(),
+                    }
                 }
                 OwnedEndpoint::Ambiguous(values) => SatisfyEndpointSummary::Ambiguous(
                     values
@@ -670,11 +815,17 @@ impl GeneratorModelView {
         let mut values = catalog
             .iter()
             .map(|entry| {
-                let handle = handle_from_semantic_id(&self.token(entry.semantic_id));
+                // One handle per (view, kind). It also resolves to the view element, as an element
+                // handle does.
+                let handle = diagram_handle(&self.token(entry.semantic_id), entry.kind);
                 self.handles
                     .lock()
                     .expect("generator handle index poisoned")
                     .insert(handle.clone(), entry.semantic_id);
+                self.diagram_handle_kinds
+                    .lock()
+                    .expect("generator handle index poisoned")
+                    .insert(handle.clone(), entry.kind);
                 Ok(DiagramViewSummary {
                     handle,
                     kind: diagram_kind(entry.kind),
@@ -704,8 +855,33 @@ impl GeneratorModelView {
     }
 
     pub fn diagram_view(&self, handle: &str) -> Result<DiagramViewProjection, ModelQueryError> {
+        self.diagram_view_expanding(handle, &[])
+    }
+
+    /// The projection of the catalog view `handle`, with the browser branches whose row keys are
+    /// in `expanded` loaded (keys as an earlier projection of the view published them). A browser
+    /// otherwise loads its exposed roots and their members only. Other view kinds ignore it.
+    pub fn diagram_view_expanding(
+        &self,
+        handle: &str,
+        expanded: &[String],
+    ) -> Result<DiagramViewProjection, ModelQueryError> {
         let identity = self.resolve_handle(handle)?;
-        let projection = outcome(self.model.diagrams().view(identity), "diagram view")?;
+        let kind = self
+            .diagram_handle_kinds
+            .lock()
+            .expect("generator handle index poisoned")
+            .get(handle)
+            .copied();
+        let is_expanded = |key: &str| expanded.iter().any(|expanded| expanded == key);
+        // A catalog handle projects its catalogued kind; any other view handle (a state-transition
+        // view's, an element's) projects the view's first kind.
+        let projection = outcome(
+            self.model
+                .diagrams()
+                .view_expanding(identity, kind, &is_expanded),
+            "diagram view",
+        )?;
         let view = DiagramViewSummary {
             handle: handle.to_owned(),
             reference: self.diagram_reference(projection.view.semantic_id)?,
@@ -756,6 +932,7 @@ impl GeneratorModelView {
                     .map(|owner| self.diagram_occurrence(owner))
                     .transpose()?,
                 source: source_reference(&element.source, self.model.document_identity(element.source.document).unwrap_or_default()),
+                multiplicity: diagram_multiplicity(element.multiplicity),
                 compartments: element.compartments.iter().map(|compartment| {
                     Ok(DiagramCompartment {
                         kind: match compartment.kind {
@@ -779,6 +956,26 @@ impl GeneratorModelView {
                         members: compartment.members.iter().map(|member| self.diagram_occurrence(member)).collect::<Result<Vec<_>, _>>()?,
                     })
                 }).collect::<Result<Vec<_>, ModelQueryError>>()?,
+                direction: element.direction.map(|direction| match direction {
+                    sysml_query::resolved_slice::FeatureDirection::In => "in",
+                    sysml_query::resolved_slice::FeatureDirection::Out => "out",
+                    sysml_query::resolved_slice::FeatureDirection::InOut => "inout",
+                }.to_owned()),
+                conjugated: element.conjugated,
+                state_subaction: element.state_subaction.map(|kind| match kind {
+                    sysml_query::resolved_slice::StateSubactionKind::Entry => "entry",
+                    sysml_query::resolved_slice::StateSubactionKind::Do => "do",
+                    sysml_query::resolved_slice::StateSubactionKind::Exit => "exit",
+                }.to_owned()),
+                succession_guard: element.succession_guard.as_ref().map(|guard| match guard {
+                    sysml_query::resolved_slice::DiagramSuccessionGuard::Condition(text) => text.to_string(),
+                    sysml_query::resolved_slice::DiagramSuccessionGuard::Else => "else".to_owned(),
+                }),
+                feature_direction: element.feature_direction.map(|direction| match direction {
+                    sysml_query::resolved_slice::FeatureDirection::In => "in",
+                    sysml_query::resolved_slice::FeatureDirection::Out => "out",
+                    sysml_query::resolved_slice::FeatureDirection::InOut => "inout",
+                }.to_owned()),
             }))
             .collect::<Result<Vec<_>, ModelQueryError>>()?;
         let relationships = projection
@@ -1010,6 +1207,7 @@ impl GeneratorModelView {
                                     sysml_query::resolved_slice::DiagramSequenceOrder::Cyclic => {
                                         SequenceOrder::Cyclic
                                     }
+                                    sysml_query::resolved_slice::DiagramSequenceOrder::BlockedByCycle => SequenceOrder::BlockedByCycle,
                                 },
                                 provenance: relationship_provenance(message.provenance),
                                 source_reference: source_reference(
@@ -1141,7 +1339,80 @@ impl GeneratorModelView {
                 })
             }
         };
-        let metadata = diagram_metadata(view.kind, &roots, &elements, &relationships, &scene);
+        let browser_rows = projection
+            .elements
+            .iter()
+            .filter_map(|element| element.browser_row.map(|row| (element, row)))
+            .map(|(element, row)| {
+                Ok(DiagramBrowserRow {
+                    occurrence: self.diagram_occurrence(&element.occurrence_id)?,
+                    key: element.occurrence_id.stable_key().to_owned(),
+                    membership: match row.membership {
+                        sysml_query::resolved_slice::DiagramMembership::Owned => {
+                            DiagramMembership::Owned
+                        }
+                        sysml_query::resolved_slice::DiagramMembership::Inherited => {
+                            DiagramMembership::Inherited
+                        }
+                    },
+                    members: match row.members {
+                        sysml_query::resolved_slice::DiagramBrowserMembers::None => {
+                            DiagramBrowserMembers::None
+                        }
+                        sysml_query::resolved_slice::DiagramBrowserMembers::Loaded => {
+                            DiagramBrowserMembers::Loaded
+                        }
+                        sysml_query::resolved_slice::DiagramBrowserMembers::Unloaded => {
+                            DiagramBrowserMembers::Unloaded
+                        }
+                    },
+                })
+            })
+            .collect::<Result<Vec<_>, ModelQueryError>>()?;
+        let element_type = |target: &SymbolId| -> Result<DiagramElementType, ModelQueryError> {
+            let target_entry = self.by_identity.get(target).ok_or_else(|| {
+                ModelQueryError::Unresolved(
+                    "diagram port family type is absent from the publication".into(),
+                )
+            })?;
+            Ok(DiagramElementType {
+                reference: self.diagram_reference(*target)?,
+                label: display_label(&self.model, &target_entry.entry),
+            })
+        };
+        let port_families = projection
+            .port_families
+            .iter()
+            .map(|family| {
+                Ok(DiagramPortFamily {
+                    general: family
+                        .general
+                        .iter()
+                        .map(element_type)
+                        .collect::<Result<_, _>>()?,
+                    types: family
+                        .types
+                        .iter()
+                        .map(element_type)
+                        .collect::<Result<_, _>>()?,
+                    connectors: family
+                        .connectors
+                        .iter()
+                        .map(|occurrence| self.diagram_occurrence(occurrence))
+                        .collect::<Result<_, _>>()?,
+                })
+            })
+            .collect::<Result<Vec<_>, ModelQueryError>>()?;
+        let metadata = diagram_metadata(
+            view.kind,
+            &roots,
+            &elements,
+            &relationships,
+            &edges,
+            &scene,
+            browser_rows,
+            port_families,
+        );
         Ok(DiagramViewProjection {
             schema_version: 1,
             model_digest: self.model_digest.clone(),
@@ -1255,23 +1526,23 @@ impl GeneratorModelView {
         for child in &children {
             let inspection = self.inspection(child.entry.identity, "state-machine member")?;
             match child.entry.kind {
-                ElementKind::StateUsage | ElementKind::FinalState => {
-                    nodes.push(StateTransitionNode {
-                        semantic_id: self.token(child.entry.identity),
-                        label: display_label(&self.model, &child.entry),
-                        kind: if child.entry.kind == ElementKind::FinalState {
-                            StateTransitionNodeKind::Final
-                        } else {
-                            StateTransitionNodeKind::State
-                        },
-                        source: inspection_source(
-                            &inspection,
-                            self.model
-                                .document_identity(inspection.location.document)
-                                .unwrap_or_default(),
-                        ),
-                    })
-                }
+                ElementKind::StateUsage
+                | ElementKind::ExhibitStateUsage
+                | ElementKind::FinalState => nodes.push(StateTransitionNode {
+                    semantic_id: self.token(child.entry.identity),
+                    label: display_label(&self.model, &child.entry),
+                    kind: if child.entry.kind == ElementKind::FinalState {
+                        StateTransitionNodeKind::Final
+                    } else {
+                        StateTransitionNodeKind::State
+                    },
+                    source: inspection_source(
+                        &inspection,
+                        self.model
+                            .document_identity(inspection.location.document)
+                            .unwrap_or_default(),
+                    ),
+                }),
                 ElementKind::SuccessionAsUsage => {
                     if let Some(target) = resolved_relationship(&inspection, "initialState")? {
                         let initial_id = format!("{}#initial", self.token(child.entry.identity));
@@ -1635,7 +1906,37 @@ impl GeneratorModelView {
             Owned::SequenceMessageEndpointOutsideLifeline => {
                 DiagramIncompleteReason::SequenceMessageEndpointOutsideLifeline
             }
-            Owned::SequenceOrderingCycle => DiagramIncompleteReason::SequenceOrderingCycle,
+            Owned::SequenceOrderingCycle { witness } => {
+                DiagramIncompleteReason::SequenceOrderingCycle {
+                    witness: witness
+                        .iter()
+                        .map(|step| {
+                            Ok(spec42_generator_protocol::SequenceCycleStep {
+                                source: self.diagram_occurrence(&step.source)?,
+                                target: self.diagram_occurrence(&step.target)?,
+                                events: step
+                                    .events
+                                    .iter()
+                                    .map(|event| self.diagram_occurrence(event))
+                                    .collect::<Result<Vec<_>, _>>()?,
+                                provenance: if step.authored {
+                                    spec42_generator_protocol::RelationshipProvenance::Authored
+                                } else {
+                                    spec42_generator_protocol::RelationshipProvenance::Implied
+                                },
+                            })
+                        })
+                        .collect::<Result<Vec<_>, ModelQueryError>>()?,
+                }
+            }
+            Owned::SequenceContentOmitted { elements } => {
+                DiagramIncompleteReason::SequenceContentOmitted {
+                    elements: elements
+                        .iter()
+                        .map(|element| self.diagram_occurrence(element))
+                        .collect::<Result<Vec<_>, _>>()?,
+                }
+            }
         })
     }
 
@@ -1814,12 +2115,16 @@ fn relationship_provenance(
     }
 }
 
+#[allow(clippy::too_many_arguments)]
 fn diagram_metadata(
     kind: DiagramViewKind,
     roots: &[DiagramOccurrenceIdentity],
     elements: &[DiagramElement],
     relationships: &[DiagramRelationship],
+    edges: &[DiagramEdge],
     scene: &DiagramScene,
+    browser_rows: Vec<DiagramBrowserRow>,
+    port_families: Vec<DiagramPortFamily>,
 ) -> DiagramViewMetadata {
     let ids = |classes: &[Metaclass]| {
         elements
@@ -1844,16 +2149,36 @@ fn diagram_metadata(
                 Metaclass::ConnectionUsage,
                 Metaclass::BindingConnectorUsage,
             ]),
+            port_families,
         },
-        DiagramViewKind::ActionFlowView => DiagramViewMetadata::ActionFlow {
-            actions: ids(&[Metaclass::ActionDefinition, Metaclass::ActionUsage]),
-            control_nodes: ids(&[
-                Metaclass::DecisionNodeUsage,
-                Metaclass::MergeNodeUsage,
-                Metaclass::ForkNodeUsage,
-                Metaclass::JoinNodeUsage,
-            ]),
-        },
+        DiagramViewKind::ActionFlowView => {
+            // The semantic vocabulary names these kinds as SysML does (`ForkNode`,
+            // `AcceptActionUsage`); the generator vocabulary has no variant for some of them
+            // and carries their names as they are. Both spellings are members here.
+            let named = |names: &[&str]| {
+                elements
+                    .iter()
+                    .filter(|element| names.contains(&element.metaclass.as_str()))
+                    .map(|element| element.occurrence.clone())
+                    .collect::<Vec<_>>()
+            };
+            DiagramViewMetadata::ActionFlow {
+                actions: named(&[
+                    "ActionDefinition",
+                    "ActionUsage",
+                    "PerformActionUsage",
+                    "PerformUsage",
+                    "AcceptActionUsage",
+                    "SendActionUsage",
+                    "AssignmentActionUsage",
+                    "IfActionUsage",
+                    "WhileLoopActionUsage",
+                    "ForLoopActionUsage",
+                    "TerminateActionUsage",
+                ]),
+                control_nodes: named(&["DecisionNode", "MergeNode", "ForkNode", "JoinNode"]),
+            }
+        }
         DiagramViewKind::StateTransitionView => DiagramViewMetadata::StateTransition {
             states: ids(&[Metaclass::StateDefinition, Metaclass::StateUsage]),
             initial_nodes: relationships
@@ -1879,22 +2204,17 @@ fn diagram_metadata(
                 _ => Vec::new(),
             },
         },
+        // The roots in element order, which a browser projection gives in declaration order.
         DiagramViewKind::BrowserView => DiagramViewMetadata::Browser {
-            roots: roots.to_vec(),
-        },
-        DiagramViewKind::GridView => DiagramViewMetadata::Grid {
-            rows: elements
+            roots: elements
                 .iter()
-                .map(|element| element.occurrence.clone())
+                .map(|element| &element.occurrence)
+                .filter(|occurrence| roots.contains(occurrence))
+                .cloned()
                 .collect(),
-            columns: relationships
-                .iter()
-                .map(|relationship| relationship.kind.clone())
-                .collect::<std::collections::BTreeSet<_>>()
-                .into_iter()
-                .collect(),
-            cells: Vec::new(),
+            rows: browser_rows,
         },
+        DiagramViewKind::GridView => grid_metadata(roots, elements, edges),
         DiagramViewKind::GeometryView => DiagramViewMetadata::Geometry {
             elements: elements
                 .iter()
@@ -1902,6 +2222,80 @@ fn diagram_metadata(
                 .collect(),
             primitives: Vec::new(),
         },
+    }
+}
+
+/// A Grid View as a relationship matrix (SysML v2 9.2.20.2.5): the exposed elements at the
+/// source ends of the relationships between exposed elements are its rows, those at the target
+/// ends its columns, and each relationship a cell. An exposed element without such a
+/// relationship is in neither. Where no relationship joins two exposed elements, the grid is a
+/// table with one row for each exposed element. Rows and columns are in declaration order.
+fn grid_metadata(
+    roots: &[DiagramOccurrenceIdentity],
+    elements: &[DiagramElement],
+    edges: &[DiagramEdge],
+) -> DiagramViewMetadata {
+    use spec42_generator_protocol::{DiagramGridCell, DiagramGridLayout};
+    let declared = |occurrence: &DiagramOccurrenceIdentity| {
+        elements
+            .iter()
+            .find(|element| &element.occurrence == occurrence)
+            .map(|element| {
+                let range = &element.source.range;
+                (
+                    element.source.uri.clone(),
+                    range.start_line,
+                    range.start_character,
+                )
+            })
+    };
+    let mut roots = roots.to_vec();
+    roots.sort_by_cached_key(|root| declared(root));
+    let roots = roots.as_slice();
+    let relationships = edges
+        .iter()
+        .filter(|edge| matches!(edge.kind, DiagramEdgeKind::Relationship(_)))
+        .filter(|edge| roots.contains(&edge.source_occurrence))
+        .filter(|edge| roots.contains(&edge.target_occurrence))
+        .collect::<Vec<_>>();
+    if relationships.is_empty() {
+        // The elements that declare a relationship are drawn as cells, never as rows.
+        let origins = edges
+            .iter()
+            .filter(|edge| matches!(edge.kind, DiagramEdgeKind::Relationship(_)))
+            .map(|edge| &edge.origin_occurrence)
+            .collect::<Vec<_>>();
+        return DiagramViewMetadata::Grid {
+            layout: DiagramGridLayout::ElementTable,
+            rows: roots
+                .iter()
+                .filter(|root| !origins.contains(root))
+                .cloned()
+                .collect(),
+            columns: Vec::new(),
+            cells: Vec::new(),
+        };
+    }
+    let along = |end: fn(&DiagramEdge) -> &DiagramOccurrenceIdentity| {
+        roots
+            .iter()
+            .filter(|root| relationships.iter().any(|edge| end(edge) == *root))
+            .cloned()
+            .collect::<Vec<_>>()
+    };
+    DiagramViewMetadata::Grid {
+        layout: DiagramGridLayout::RelationshipMatrix,
+        rows: along(|edge| &edge.source_occurrence),
+        columns: along(|edge| &edge.target_occurrence),
+        cells: relationships
+            .iter()
+            .map(|edge| DiagramGridCell {
+                row: edge.source_occurrence.clone(),
+                column: edge.target_occurrence.clone(),
+                origin: edge.origin_occurrence.clone(),
+                kind: edge.kind.clone(),
+            })
+            .collect(),
     }
 }
 
@@ -1951,6 +2345,16 @@ fn outcome<T>(value: QueryOutcome<T>, operation: &str) -> Result<T, ModelQueryEr
     }
 }
 
+/// The catalog handle of `view` (a boundary token) as one of its diagram kinds.
+fn diagram_handle(view: &str, kind: sysml_query::resolved_slice::DiagramViewKind) -> String {
+    let mut hash = Sha256::new();
+    hash.update(b"spec42-generator-diagram-handle-v1\0");
+    hash.update(view.as_bytes());
+    hash.update(b"\0");
+    hash.update(format!("{:?}", diagram_kind(kind)).as_bytes());
+    format!("h:{:x}", hash.finalize())
+}
+
 fn handle_from_semantic_id(id: &str) -> String {
     let mut hash = Sha256::new();
     hash.update(b"spec42-generator-handle-v2\0");
@@ -1963,10 +2367,42 @@ fn summary_order(a: &ElementSummary, b: &ElementSummary) -> std::cmp::Ordering {
         .then_with(|| a.metaclass.as_str().cmp(b.metaclass.as_str()))
         .then_with(|| a.semantic_id.cmp(&b.semantic_id))
 }
+
+/// Resolved targets first in summary order, then ambiguous, unresolved and unsupported, each
+/// ordered by what was written, so the order never depends on the inspection's iteration.
+fn target_order(
+    a: &RelationshipTargetSummary,
+    b: &RelationshipTargetSummary,
+) -> std::cmp::Ordering {
+    use RelationshipTargetSummary as T;
+    fn rank(target: &RelationshipTargetSummary) -> u8 {
+        match target {
+            T::Resolved(_) => 0,
+            T::Ambiguous(_) => 1,
+            T::Unresolved { .. } => 2,
+            T::Unsupported { .. } => 3,
+        }
+    }
+    match (a, b) {
+        (T::Resolved(a), T::Resolved(b)) => summary_order(a, b),
+        // Each candidate list was sorted by `summary_order` when it was built, so comparing the
+        // lists element by element, then by length, is a total and deterministic order.
+        (T::Ambiguous(a), T::Ambiguous(b)) => a
+            .iter()
+            .zip(b)
+            .map(|(a, b)| summary_order(a, b))
+            .find(|order| order.is_ne())
+            .unwrap_or_else(|| a.len().cmp(&b.len())),
+        (T::Unresolved { authored: a }, T::Unresolved { authored: b })
+        | (T::Unsupported { authored: a }, T::Unsupported { authored: b }) => a.cmp(b),
+        _ => rank(a).cmp(&rank(b)),
+    }
+}
 fn api_metaclass(kind: ElementKind) -> Metaclass {
     // The semantic vocabulary uses the concrete `FlowConnection*` spelling while the generator
     // wire contract uses SysML's `Flow*` metaclass spelling. Keep the typed bridge at this boundary;
     // `Metaclass::parse` is for its own vocabulary, not a second semantic classification table.
+    // Control nodes need no bridge: both name the SysML metaclass (`DecisionNode`, a `ControlNode`).
     match kind {
         ElementKind::FlowConnectionDefinition => return Metaclass::FlowDefinition,
         ElementKind::FlowConnectionUsage => return Metaclass::FlowUsage,
@@ -1980,9 +2416,64 @@ fn api_metaclass(kind: ElementKind) -> Metaclass {
     }
 }
 
+/// The role a kind takes from the metamodel: `AcceptActionUsage` and `PerformActionUsage` are
+/// usages like any other. A succession or a binding written as a usage is a relationship between
+/// nodes, not a node.
+fn metamodel_notation_role(kind: ElementKind) -> DiagramNotationRole {
+    match kind {
+        ElementKind::SuccessionAsUsage | ElementKind::BindingConnectorAsUsage => {
+            DiagramNotationRole::Unsupported
+        }
+        kind if kind.conforms_to(ElementKind::Usage) => DiagramNotationRole::Usage,
+        kind if kind.conforms_to(ElementKind::Definition) => DiagramNotationRole::Definition,
+        _ => DiagramNotationRole::Unsupported,
+    }
+}
+
 fn diagram_notation_role(kind: ElementKind) -> DiagramNotationRole {
     let metaclass = api_metaclass(kind);
+    if metaclass.is_unrecognized() {
+        return metamodel_notation_role(kind);
+    }
     match metaclass {
+        // Named for the generator vocabulary without a notation of their own: they keep the role
+        // the metamodel gives them.
+        Metaclass::Namespace
+        | Metaclass::LibraryPackage
+        | Metaclass::AcceptActionUsage
+        | Metaclass::SendActionUsage
+        | Metaclass::ExhibitStateUsage
+        | Metaclass::Definition
+        | Metaclass::Usage
+        | Metaclass::PerformActionUsage
+        | Metaclass::ForLoopVariable
+        | Metaclass::ControlNode
+        | Metaclass::SuccessionAsUsage
+        | Metaclass::SatisfyRequirementUsage
+        | Metaclass::BindingConnectorAsUsage
+        | Metaclass::Expose
+        | Metaclass::AnnotatingElement
+        | Metaclass::Type
+        | Metaclass::Classifier
+        | Metaclass::Class
+        | Metaclass::Structure
+        | Metaclass::Association
+        | Metaclass::AssociationStructure
+        | Metaclass::DataType
+        | Metaclass::Metaclass
+        | Metaclass::Behavior
+        | Metaclass::Function
+        | Metaclass::Predicate
+        | Metaclass::Interaction
+        | Metaclass::Multiplicity
+        | Metaclass::Step
+        | Metaclass::BooleanExpression
+        | Metaclass::LiteralExpression
+        | Metaclass::Connector
+        | Metaclass::BindingConnector
+        | Metaclass::Succession
+        | Metaclass::Invariant
+        | Metaclass::MetadataFeature => metamodel_notation_role(kind),
         Metaclass::ActionDefinition
         | Metaclass::AllocationDefinition
         | Metaclass::AnalysisCaseDefinition
@@ -2011,7 +2502,8 @@ fn diagram_notation_role(kind: ElementKind) -> DiagramNotationRole {
         | Metaclass::ConjugatedPortDefinition => DiagramNotationRole::Definition,
         Metaclass::ReferenceUsage => DiagramNotationRole::ReferenceUsage,
         Metaclass::Package | Metaclass::Alias | Metaclass::Import => DiagramNotationRole::Namespace,
-        Metaclass::Documentation
+        Metaclass::Comment
+        | Metaclass::Documentation
         | Metaclass::MetadataUsage
         | Metaclass::TextualRepresentation
         | Metaclass::Diagnostic => DiagramNotationRole::Annotation,
@@ -2057,27 +2549,41 @@ fn diagram_notation_role(kind: ElementKind) -> DiagramNotationRole {
         | Metaclass::AssertUsage
         | Metaclass::AssignmentActionUsage
         | Metaclass::BindingConnectorUsage
-        | Metaclass::DecisionNodeUsage
+        | Metaclass::DecisionNode
         | Metaclass::Dependency
         | Metaclass::DerivationConnectorUsage
         | Metaclass::ElseActionUsage
         | Metaclass::FilterUsage
         | Metaclass::FlowPayload
         | Metaclass::ForLoopActionUsage
-        | Metaclass::ForkNodeUsage
+        | Metaclass::ForkNode
         | Metaclass::IfActionUsage
         | Metaclass::InterfaceEndUsage
-        | Metaclass::JoinNodeUsage
-        | Metaclass::MergeNodeUsage
+        | Metaclass::JoinNode
+        | Metaclass::MergeNode
         | Metaclass::NeedUsage
         | Metaclass::ObjectiveUsage
         | Metaclass::ParameterUsage
         | Metaclass::PurposeUsage
         | Metaclass::RequireConstraintUsage
+        | Metaclass::SuccessionFlowUsage
         | Metaclass::TerminateActionUsage
         | Metaclass::VerdictUsage
         | Metaclass::VerifyUsage
         | Metaclass::WhileLoopActionUsage => DiagramNotationRole::Usage,
+        // KerML multiplicity ranges, their bound expressions and the literal, null and
+        // metadata-access expressions written inside an expression have no SysML diagram notation.
+        Metaclass::Expression
+        | Metaclass::Feature
+        | Metaclass::FlowEnd
+        | Metaclass::MultiplicityRange
+        | Metaclass::LiteralBoolean
+        | Metaclass::LiteralInteger
+        | Metaclass::LiteralRational
+        | Metaclass::LiteralString
+        | Metaclass::MetadataAccessExpression
+        | Metaclass::LiteralInfinity
+        | Metaclass::NullExpression => DiagramNotationRole::Unsupported,
         Metaclass::Unrecognized(_) => DiagramNotationRole::Unsupported,
     }
 }
@@ -2089,13 +2595,36 @@ fn source_range(range: sysml_query::resolved_slice::TextRange) -> SourceRange {
         end_character: range.end.character,
     }
 }
+/// The multiplicity a diagram label shows, when both bounds are literal or unbounded. A diagram is
+/// never refused for an expression bound; it is drawn without the multiplicity instead.
+fn diagram_multiplicity(
+    value: MultiplicityFacts,
+) -> Option<spec42_generator_protocol::Multiplicity> {
+    match value {
+        MultiplicityFacts::Absent => None,
+        MultiplicityFacts::Declared {
+            lower,
+            upper,
+            ordered,
+            nonunique,
+        } => Some(spec42_generator_protocol::Multiplicity {
+            lower: bound(lower).ok()?,
+            upper: bound(upper).ok()?,
+            ordered,
+            unique: Some(!nonunique),
+            implied: false,
+        }),
+    }
+}
 fn bound(value: MultiplicityBound) -> Result<Option<String>, ModelQueryError> {
     match value {
         MultiplicityBound::Unbounded => Ok(None),
         MultiplicityBound::Literal(value) => Ok(Some(value.to_string())),
-        MultiplicityBound::Expression => Err(ModelQueryError::Unsupported(
-            "generator element detail cannot serialize a non-literal multiplicity bound".into(),
-        )),
+        MultiplicityBound::NonIntegerLiteral | MultiplicityBound::Expression => {
+            Err(ModelQueryError::Unsupported(
+                "generator element detail cannot serialize a non-literal multiplicity bound".into(),
+            ))
+        }
     }
 }
 fn scalar(value: &EvaluatedScalar) -> String {
@@ -2122,6 +2651,132 @@ fn generator_relationship_kind(kind: &str) -> &str {
 mod tests {
     use super::*;
     use sysml_query::{source::SourceKind, Services};
+
+    /// The ABI documents that `Unrecognized` is never produced. These two make that hold for
+    /// every value the host can publish, rather than for the values a fixture happens to use.
+    #[test]
+    fn every_element_kind_publishes_a_named_metaclass() {
+        let unnamed = ElementKind::ALL
+            .iter()
+            .filter(|kind| api_metaclass(**kind).is_unrecognized())
+            .map(|kind| kind.as_str())
+            .collect::<Vec<_>>();
+        assert!(
+            unnamed.is_empty(),
+            "element kinds published as Unrecognized: {unnamed:?}"
+        );
+    }
+
+    /// One unresolved reference is reported on its own relationship and does not take the
+    /// element's settled relationships with it; the ends of a succession keep their authored
+    /// order. Both sides: the misspelled typing is explicit, the correct one resolves.
+    #[test]
+    fn an_unresolved_reference_is_explicit_and_keeps_its_siblings() {
+        let services = Services::new();
+        let source = services
+            .source
+            .admit_memory(
+                "generator-test",
+                "shop.sysml",
+                "package Shop {\n\
+                 \x20   item def OrderId;\n\
+                 \x20   action def Validate;\n\
+                 \x20   action def Ship;\n\
+                 \x20   action def ProcessOrder {\n\
+                 \x20       in item orderId : OrderIdd;\n\
+                 \x20       in item knownId : OrderId;\n\
+                 \x20       action validate : Validate;\n\
+                 \x20       action ship : Ship;\n\
+                 \x20       first validate then ship;\n\
+                 \x20   }\n\
+                 }\n",
+                SourceKind::Workspace,
+            )
+            .unwrap();
+        let model = services.publication.publish(&[source], []).unwrap();
+        let view = GeneratorModelView::new(model, "digest", "version", QueryLimits::default())
+            .expect("generator model");
+        let elements = view.find(None).unwrap();
+        let handle = |qualified_name: &str| {
+            elements
+                .iter()
+                .find(|e| e.qualified_name == qualified_name)
+                .unwrap_or_else(|| panic!("no element {qualified_name}"))
+                .handle
+                .clone()
+        };
+        let typing = |qualified_name: &str| {
+            view.relationships(&handle(qualified_name))
+                .expect("relationships answer even with an unresolved reference")
+                .into_iter()
+                .filter(|r| r.kind == ApiRelationshipKind::Typing)
+                .map(|r| r.target)
+                .collect::<Vec<_>>()
+        };
+
+        assert_eq!(
+            typing("Shop::ProcessOrder::orderId"),
+            vec![RelationshipTargetSummary::Unresolved {
+                authored: Some("OrderIdd".into())
+            }]
+        );
+        assert!(matches!(
+            typing("Shop::ProcessOrder::knownId").as_slice(),
+            [RelationshipTargetSummary::Resolved(target)] if target.qualified_name == "Shop::OrderId"
+        ));
+        let siblings = view
+            .relationships(&handle("Shop::ProcessOrder::orderId"))
+            .unwrap();
+        assert!(
+            siblings
+                .iter()
+                .any(|r| r.kind == ApiRelationshipKind::TypeFeaturing
+                    && matches!(&r.target, RelationshipTargetSummary::Resolved(t)
+                    if t.qualified_name == "Shop::ProcessOrder")),
+            "the settled typeFeaturing survives beside the unresolved typing: {siblings:?}"
+        );
+
+        let succession = elements
+            .iter()
+            .find(|e| e.metaclass == Metaclass::SuccessionAsUsage)
+            .expect("the succession is published under a named metaclass");
+        let mut ends = view
+            .relationships(&succession.handle)
+            .unwrap()
+            .into_iter()
+            .filter(|r| r.kind == ApiRelationshipKind::Succession)
+            .collect::<Vec<_>>();
+        assert!(
+            ends.iter().all(|r| r.authored_at.is_some()),
+            "authored ends carry a position"
+        );
+        ends.sort_by(|a, b| a.authored_at.cmp(&b.authored_at));
+        let order = ends
+            .iter()
+            .filter_map(|r| match &r.target {
+                RelationshipTargetSummary::Resolved(t) => Some(t.qualified_name.as_str()),
+                _ => None,
+            })
+            .collect::<Vec<_>>();
+        assert_eq!(
+            order,
+            ["Shop::ProcessOrder::validate", "Shop::ProcessOrder::ship"]
+        );
+    }
+
+    #[test]
+    fn every_relationship_kind_publishes_a_named_kind() {
+        let unnamed = sysml_query::resolved_slice::published_relationship_kinds()
+            .into_iter()
+            .filter(|kind| {
+                ApiRelationshipKind::parse(generator_relationship_kind(kind)).is_unrecognized()
+            })
+            .collect::<Vec<_>>();
+        assert!(
+            unnamed.is_empty(),
+            "relationship kinds published as Unrecognized: {unnamed:?}"
+        );
+    }
 
     #[test]
     fn model_view_registers_one_canonical_traversal_with_provenance() {

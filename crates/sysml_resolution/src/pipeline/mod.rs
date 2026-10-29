@@ -3,7 +3,7 @@
 use std::sync::Arc;
 use std::time::Instant;
 
-use source_identity::{ContentDigest, SourceRole};
+use source_identity::{ContentDigest, SourceLanguage, SourceRole};
 use sysml_contract::StandardLibraryAvailability;
 use sysml_v2_parser::{ParseError, ParsedDocument};
 
@@ -19,20 +19,33 @@ use crate::resolve::library_seed::SettledLibrary;
 pub(crate) mod phase;
 pub(crate) mod schedule;
 
+#[derive(Clone, Copy, Default)]
+pub(crate) struct BuildControls<'a> {
+    pub(crate) lowering_memo: Option<&'a LoweringMemo>,
+    pub(crate) cancellation: Option<&'a crate::publication::BuildCancellation>,
+}
+
+impl BuildControls<'_> {
+    pub(crate) fn checkpoint(
+        &self,
+        phase: crate::ConstructionPhase,
+    ) -> Result<(), crate::BuildFailure> {
+        self.cancellation
+            .map_or(Ok(()), |control| control.checkpoint(phase))
+    }
+}
+
 #[derive(Debug, Clone)]
 pub(crate) struct OwnedSourceRecord {
     pub(crate) identity: Box<str>,
     pub(crate) role: SourceRole,
+    pub(crate) language: SourceLanguage,
     pub(crate) digest: ContentDigest,
     pub(crate) payload: crate::SourcePayload,
     pub(crate) syntax: Option<Arc<crate::syntax::SyntaxAuthority>>,
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub(crate) enum CoordinatorError {
-    DuplicateSourceIdentity,
-    ConstructionFailed,
-}
+pub(crate) type CoordinatorError = crate::BuildFailure;
 
 /// A library that has already been parsed and solved, ready to be reused by later publications.
 ///
@@ -49,6 +62,7 @@ pub(crate) struct PreparedLibrary {
 pub(crate) struct PreparedDocument {
     pub(crate) identity: Box<str>,
     pub(crate) role: SourceRole,
+    pub(crate) language: SourceLanguage,
     pub(crate) digest: ContentDigest,
     pub(crate) parsed: Arc<ParsedDocument>,
     pub(crate) parse_errors: Vec<ParseError>,
@@ -65,7 +79,7 @@ impl SemanticModelBuildCoordinator {
         standard_library_availability: StandardLibraryAvailability,
         library: Option<&PreparedLibrary>,
         reported: &[Box<str>],
-        memo: Option<&LoweringMemo>,
+        controls: BuildControls<'_>,
     ) -> Result<
         (
             resolver::ResolvedSemanticModel,
@@ -74,6 +88,8 @@ impl SemanticModelBuildCoordinator {
         ),
         CoordinatorError,
     > {
+        controls.checkpoint(crate::ConstructionPhase::SourceAdmission)?;
+        let memo = controls.lowering_memo;
         // Library sources are ordered ahead of workspace sources so that the dense declaration
         // domain assigns them a contiguous prefix. Rendered output is sorted independently by
         // document identity, so this affects storage order only. Duplicate detection therefore
@@ -98,17 +114,21 @@ impl SemanticModelBuildCoordinator {
             return Err(CoordinatorError::DuplicateSourceIdentity);
         }
 
+        let parse_source = |source| {
+            controls.checkpoint(crate::ConstructionPhase::SourceAdmission)?;
+            Self::parse_source(source)
+        };
         let parse_started = Instant::now();
         let parsed: Vec<(AdmittedSource, bool)> = match schedule {
             BuildSchedule::Sequential => sources
                 .into_iter()
-                .map(Self::parse_source)
+                .map(parse_source)
                 .collect::<Result<Vec<_>, _>>()?,
             BuildSchedule::Parallel => {
                 use rayon::prelude::*;
                 sources
                     .into_par_iter()
-                    .map(Self::parse_source)
+                    .map(parse_source)
                     .collect::<Result<Vec<_>, _>>()?
             }
         };
@@ -120,6 +140,7 @@ impl SemanticModelBuildCoordinator {
             .count();
         let parsed: Vec<AdmittedSource> = parsed.into_iter().map(|(source, _)| source).collect();
 
+        controls.checkpoint(crate::ConstructionPhase::Lowering)?;
         let lowering_started = Instant::now();
         let mut builder = SemanticModelBuilder::default();
         let mut documents = Vec::with_capacity(parsed.len());
@@ -131,50 +152,70 @@ impl SemanticModelBuildCoordinator {
                 .admit_document(
                     document.identity.clone(),
                     document.role,
+                    document.language,
                     document.digest,
                     Arc::clone(&document.parsed),
                     document.parse_errors.clone(),
                 )
                 .map_err(|_| CoordinatorError::DuplicateSourceIdentity)?;
-            documents.push((admitted, document.digest, Arc::clone(&document.parsed)));
+            documents.push((
+                admitted,
+                document.language,
+                document.digest,
+                Arc::clone(&document.parsed),
+            ));
         }
-        for (identity, role, digest, tree, errors) in parsed {
+        for (identity, role, language, digest, tree, errors) in parsed {
             let admitted = builder
-                .admit_document(identity, role, digest, Arc::clone(&tree), errors)
+                .admit_document(identity, role, language, digest, Arc::clone(&tree), errors)
                 .map_err(|_| CoordinatorError::DuplicateSourceIdentity)?;
-            documents.push((admitted, digest, tree));
+            documents.push((admitted, language, digest, tree));
         }
         // Each document is lowered on its own, in a document-local identity space, and only then
         // relocated into this build's arenas in admission order. The isolation is what makes the
         // product a value the memo can key by content digest; the ordered splice is what keeps
         // every dense identity exactly where an undivided lowering would have put it.
         let generation = memo.map(LoweringMemo::begin);
-        let products = lower_documents(&documents, memo, generation, schedule)?;
+        let document_identities: Vec<_> = builder
+            .documents
+            .iter()
+            .map(|document| document.identity.as_ref())
+            .collect();
+        let products = lower_documents(
+            &documents,
+            &document_identities,
+            memo,
+            generation,
+            schedule,
+            controls,
+        )?;
+        controls.checkpoint(crate::ConstructionPhase::Splicing)?;
         // Counted facts, not timers: which documents this build lowered and which it took from
         // the memo. A wall-clock threshold cannot state "this edit lowered exactly one document".
         let documents_reused = products.iter().filter(|(_, reused)| *reused).count();
         let documents_lowered = products.len() - documents_reused;
-        for ((document, _, _), (lowered, _)) in documents.iter().zip(products.iter()) {
-            builder
-                .splice(*document, lowered)
-                .map_err(|_| CoordinatorError::ConstructionFailed)?;
+        for ((document, _, _, _), (lowered, _)) in documents.iter().zip(products.iter()) {
+            builder.splice(*document, lowered).map_err(|error| {
+                CoordinatorError::construction(
+                    crate::ConstructionPhase::Splicing,
+                    [builder.documents[document.index()].identity.as_ref()],
+                    error,
+                )
+            })?;
         }
         drop(products);
-        if let (Some(memo), Some(generation)) = (memo, generation) {
-            memo.retain(generation);
-        }
         let (storage, sources) = builder.freeze();
         let lowering = lowering_started.elapsed();
         let resolution_started = Instant::now();
-        let (model, sources) = phase::build_model(
+        let (model, sources, semantic) = phase::build_model(
             storage,
             sources,
             policy,
             standard_library_availability,
             library.map(|library| &library.settled),
             reported,
-        )
-        .map_err(|_| CoordinatorError::ConstructionFailed)?;
+            controls,
+        )?;
         let resolution = resolution_started.elapsed();
         Ok((
             model,
@@ -183,6 +224,7 @@ impl SemanticModelBuildCoordinator {
                 parse,
                 lowering,
                 resolution,
+                semantic,
                 sources_parsed,
                 documents_lowered,
                 documents_reused,
@@ -199,6 +241,17 @@ impl SemanticModelBuildCoordinator {
         let mut parsed_here = true;
         let (tree, errors) = match source.payload {
             crate::SourcePayload::Parsed(parsed) => {
+                if parsed.language() != source.language {
+                    return Err(CoordinatorError::construction(
+                        crate::ConstructionPhase::SourceAdmission,
+                        [source.identity.as_ref()],
+                        format_args!(
+                            "parsed source language {:?} differs from admitted language {:?}",
+                            parsed.language(),
+                            source.language
+                        ),
+                    ));
+                }
                 parsed_here = false;
                 parsed.admission_parts()
             }
@@ -207,16 +260,27 @@ impl SemanticModelBuildCoordinator {
                 None => crate::syntax::ParsedSource::parse_text(
                     document.content().to_owned(),
                     document.digest(),
+                    document.language(),
                 )
                 .admission_parts(),
             },
             crate::SourcePayload::Text(content) => {
-                let result = sysml_v2_parser::parse_for_editor_owned(content);
+                let result = sysml_v2_parser::parse_for_editor_owned_with_name_language(
+                    content,
+                    crate::syntax::parser_name_language(source.language),
+                );
                 (Arc::new(result.document), result.errors)
             }
         };
         Ok((
-            (source.identity, source.role, source.digest, tree, errors),
+            (
+                source.identity,
+                source.role,
+                source.language,
+                source.digest,
+                tree,
+                errors,
+            ),
             parsed_here,
         ))
     }
@@ -227,31 +291,57 @@ impl SemanticModelBuildCoordinator {
 /// A parallel schedule lowers the misses concurrently: each document's walk touches only its own
 /// arenas, so the products are independent, and they are spliced afterwards in admission order.
 fn lower_documents(
-    documents: &[(DocumentIdx, ContentDigest, Arc<ParsedDocument>)],
+    documents: &[(
+        DocumentIdx,
+        SourceLanguage,
+        ContentDigest,
+        Arc<ParsedDocument>,
+    )],
+    document_identities: &[&str],
     memo: Option<&LoweringMemo>,
     generation: Option<crate::lower::memo::MemoGeneration>,
     schedule: BuildSchedule,
+    controls: BuildControls<'_>,
 ) -> Result<Vec<(Arc<LoweredDocument>, bool)>, CoordinatorError> {
-    let lower_one = |(_, digest, parsed): &(DocumentIdx, ContentDigest, Arc<ParsedDocument>)| {
+    let lower_one = |(document, language, digest, parsed): &(
+        DocumentIdx,
+        SourceLanguage,
+        ContentDigest,
+        Arc<ParsedDocument>,
+    )| {
+        controls.checkpoint(crate::ConstructionPhase::Lowering)?;
         match (memo, generation) {
-            (Some(memo), Some(generation)) => memo.lower(*digest, generation, parsed),
-            _ => crate::lower::document::lower_document(Arc::clone(parsed))
+            (Some(memo), Some(generation)) => memo.lower(*language, *digest, generation, parsed),
+            _ => crate::lower::document::lower_document(Arc::clone(parsed), *language)
                 .map(|lowered| (Arc::new(lowered), false)),
         }
-        .map_err(|_| CoordinatorError::ConstructionFailed)
+        .map_err(|error| {
+            CoordinatorError::construction(
+                crate::ConstructionPhase::Lowering,
+                [document_identities[document.index()]],
+                error,
+            )
+        })
     };
-    match schedule {
+    let result = match schedule {
         BuildSchedule::Sequential => documents.iter().map(lower_one).collect(),
         BuildSchedule::Parallel => {
             use rayon::prelude::*;
             documents.par_iter().map(lower_one).collect()
         }
+    };
+    // Completed per-document lowering products remain valid. Even an interrupted generation
+    // sweeps older entries, so cancelled work cannot retain an unbounded revision history.
+    if let (Some(memo), Some(generation)) = (memo, generation) {
+        memo.retain(generation);
     }
+    result
 }
 
 type AdmittedSource = (
     Box<str>,
     SourceRole,
+    SourceLanguage,
     ContentDigest,
     Arc<ParsedDocument>,
     Vec<ParseError>,

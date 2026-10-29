@@ -17,7 +17,7 @@ package Machines {
     state def TwoFinalStates {
         then armed;
         state armed;
-        final first;
+        final 'first';
         final second;
     }
 
@@ -67,6 +67,12 @@ package Machines {
       )
       (diagnostic
         (severity warning)
+        (code "transition_guard_non_boolean")
+        (source "semantic")
+        (range (start 20 8) (end 20 50))
+      )
+      (diagnostic
+        (severity warning)
         (code "transition_endpoint_invalid_context")
         (source "semantic")
         (range (start 33 8) (end 33 47))
@@ -88,14 +94,17 @@ package Machines {
 # SMG
 ~~~sexpr
 (semantic-model
-  (publication (phase resolved) (completeness complete) (has-evaluation true) (source-digest "blake3:dff8c15c9f2a6b586b685035c900542641528f563e0d736025fcad8bbef61dfe"))
+  (publication (phase resolved) (completeness complete) (has-evaluation true) (source-digest "blake3:b998501c3738de61688a83e76512d10be74bef85f51e580c8573b7993ee5e073"))
   (declarations
     (declaration (id (node (document "memory://snapshot/state_machine_shape.md") (qualified-name "Machines"))) (kind package) (membership (kind owning) (visibility default)))
     (declaration (id (node (document "memory://snapshot/state_machine_shape.md") (qualified-name "Machines::GuardIsNotBoolean"))) (kind state-def) (membership (kind owning) (visibility default)))
     (declaration (id (node (document "memory://snapshot/state_machine_shape.md") (path (named (kind package) (name "Machines")) (named (kind state-def) (name "GuardIsNotBoolean")) (anonymous (kind initial-state) (ordinal 0))))) (kind initial-state) (membership (kind feature) (visibility default)) (authored (membership (kind feature) (visibility default)) (relationships (initialState (reference "armed")))))
     (declaration (id (node (document "memory://snapshot/state_machine_shape.md") (path (named (kind package) (name "Machines")) (named (kind state-def) (name "GuardIsNotBoolean")) (anonymous (kind transition) (ordinal 0))))) (kind transition) (membership (kind feature) (visibility default)) (authored (membership (kind feature) (visibility default)) (relationships (transitionSource (reference "armed")) (transitionTarget (reference "disarmed")))))
     (declaration (id (node (document "memory://snapshot/state_machine_shape.md") (path (named (kind package) (name "Machines")) (named (kind state-def) (name "GuardIsNotBoolean")) (anonymous (kind transition) (ordinal 0)) (anonymous (kind succession) (ordinal 0))))) (kind succession) (membership (kind owning) (visibility default)) (authored (membership (kind owning) (visibility default)) (relationships (succession (reference "armed")) (succession (reference "disarmed")))))
+    (declaration (id (node (document "memory://snapshot/state_machine_shape.md") (path (named (kind package) (name "Machines")) (named (kind state-def) (name "GuardIsNotBoolean")) (anonymous (kind transition) (ordinal 0)) (anonymous (kind parameter) (ordinal 0))))) (kind parameter) (membership (kind feature) (visibility default)) (facts (direction in)))
+    (declaration (id (node (document "memory://snapshot/state_machine_shape.md") (path (named (kind package) (name "Machines")) (named (kind state-def) (name "GuardIsNotBoolean")) (anonymous (kind transition) (ordinal 0)) (anonymous (kind ref) (ordinal 0))))) (kind ref) (membership (kind feature) (visibility default)))
     (declaration (id (node (document "memory://snapshot/state_machine_shape.md") (path (named (kind package) (name "Machines")) (named (kind state-def) (name "GuardIsNotBoolean")) (anonymous (kind transition) (ordinal 0)) (anonymous (kind kerml-boolean-expression) (ordinal 0))))) (kind kerml-boolean-expression) (membership (kind feature) (visibility default)))
+    (declaration (id (node (document "memory://snapshot/state_machine_shape.md") (path (named (kind package) (name "Machines")) (named (kind state-def) (name "GuardIsNotBoolean")) (anonymous (kind transition) (ordinal 0)) (anonymous (kind kerml-boolean-expression) (ordinal 0)) (anonymous (kind kerml-literal-integer) (ordinal 0))))) (kind kerml-literal-integer) (membership (kind owning) (visibility default)))
     (declaration (id (node (document "memory://snapshot/state_machine_shape.md") (qualified-name "Machines::GuardIsNotBoolean::armed"))) (kind state) (membership (kind feature) (visibility default)))
     (declaration (id (node (document "memory://snapshot/state_machine_shape.md") (qualified-name "Machines::GuardIsNotBoolean::disarmed"))) (kind final-state) (membership (kind feature) (visibility default)))
     (declaration (id (node (document "memory://snapshot/state_machine_shape.md") (qualified-name "Machines::InitialMarkerNamesANonState"))) (kind state-def) (membership (kind owning) (visibility default)))
@@ -111,6 +120,8 @@ package Machines {
     (declaration (id (node (document "memory://snapshot/state_machine_shape.md") (path (named (kind package) (name "Machines")) (named (kind state-def) (name "TransitionLeavesItsOwnContext")) (anonymous (kind initial-state) (ordinal 0))))) (kind initial-state) (membership (kind feature) (visibility default)) (authored (membership (kind feature) (visibility default)) (relationships (initialState (reference "ready")))))
     (declaration (id (node (document "memory://snapshot/state_machine_shape.md") (path (named (kind package) (name "Machines")) (named (kind state-def) (name "TransitionLeavesItsOwnContext")) (anonymous (kind transition) (ordinal 0))))) (kind transition) (membership (kind feature) (visibility default)) (authored (membership (kind feature) (visibility default)) (relationships (transitionSource (reference "ready")) (transitionTarget (reference "Left::idle")))))
     (declaration (id (node (document "memory://snapshot/state_machine_shape.md") (path (named (kind package) (name "Machines")) (named (kind state-def) (name "TransitionLeavesItsOwnContext")) (anonymous (kind transition) (ordinal 0)) (anonymous (kind succession) (ordinal 0))))) (kind succession) (membership (kind owning) (visibility default)) (authored (membership (kind owning) (visibility default)) (relationships (succession (reference "ready")) (succession (reference "Left::idle")))))
+    (declaration (id (node (document "memory://snapshot/state_machine_shape.md") (path (named (kind package) (name "Machines")) (named (kind state-def) (name "TransitionLeavesItsOwnContext")) (anonymous (kind transition) (ordinal 0)) (anonymous (kind parameter) (ordinal 0))))) (kind parameter) (membership (kind feature) (visibility default)) (facts (direction in)))
+    (declaration (id (node (document "memory://snapshot/state_machine_shape.md") (path (named (kind package) (name "Machines")) (named (kind state-def) (name "TransitionLeavesItsOwnContext")) (anonymous (kind transition) (ordinal 0)) (anonymous (kind ref) (ordinal 0))))) (kind ref) (membership (kind feature) (visibility default)))
     (declaration (id (node (document "memory://snapshot/state_machine_shape.md") (qualified-name "Machines::TransitionLeavesItsOwnContext::done"))) (kind final-state) (membership (kind feature) (visibility default)))
     (declaration (id (node (document "memory://snapshot/state_machine_shape.md") (qualified-name "Machines::TransitionLeavesItsOwnContext::ready"))) (kind state) (membership (kind feature) (visibility default)))
     (declaration (id (node (document "memory://snapshot/state_machine_shape.md") (qualified-name "Machines::TwoFinalStates"))) (kind state-def) (membership (kind owning) (visibility default)))
@@ -176,6 +187,8 @@ package Machines {
     (relationship (kind initialState) (source (node (document "memory://snapshot/state_machine_shape.md") (path (named (kind package) (name "Machines")) (named (kind state-def) (name "TwoFinalStates")) (anonymous (kind initial-state) (ordinal 0))))) (target (node (document "memory://snapshot/state_machine_shape.md") (qualified-name "Machines::TwoFinalStates::armed"))) (provenance authored) (authored-reference (source (node (document "memory://snapshot/state_machine_shape.md") (path (named (kind package) (name "Machines")) (named (kind state-def) (name "TwoFinalStates")) (anonymous (kind initial-state) (ordinal 0))))) (kind initialState) (ordinal 0)))
     (relationship (kind typeFeaturing) (source (node (document "memory://snapshot/state_machine_shape.md") (path (named (kind package) (name "Machines")) (named (kind state-def) (name "GuardIsNotBoolean")) (anonymous (kind initial-state) (ordinal 0))))) (target (node (document "memory://snapshot/state_machine_shape.md") (qualified-name "Machines::GuardIsNotBoolean"))) (provenance implied))
     (relationship (kind typeFeaturing) (source (node (document "memory://snapshot/state_machine_shape.md") (path (named (kind package) (name "Machines")) (named (kind state-def) (name "GuardIsNotBoolean")) (anonymous (kind transition) (ordinal 0))))) (target (node (document "memory://snapshot/state_machine_shape.md") (qualified-name "Machines::GuardIsNotBoolean"))) (provenance implied))
+    (relationship (kind typeFeaturing) (source (node (document "memory://snapshot/state_machine_shape.md") (path (named (kind package) (name "Machines")) (named (kind state-def) (name "GuardIsNotBoolean")) (anonymous (kind transition) (ordinal 0)) (anonymous (kind parameter) (ordinal 0))))) (target (node (document "memory://snapshot/state_machine_shape.md") (path (named (kind package) (name "Machines")) (named (kind state-def) (name "GuardIsNotBoolean")) (anonymous (kind transition) (ordinal 0))))) (provenance implied))
+    (relationship (kind typeFeaturing) (source (node (document "memory://snapshot/state_machine_shape.md") (path (named (kind package) (name "Machines")) (named (kind state-def) (name "GuardIsNotBoolean")) (anonymous (kind transition) (ordinal 0)) (anonymous (kind ref) (ordinal 0))))) (target (node (document "memory://snapshot/state_machine_shape.md") (path (named (kind package) (name "Machines")) (named (kind state-def) (name "GuardIsNotBoolean")) (anonymous (kind transition) (ordinal 0))))) (provenance implied))
     (relationship (kind typeFeaturing) (source (node (document "memory://snapshot/state_machine_shape.md") (path (named (kind package) (name "Machines")) (named (kind state-def) (name "GuardIsNotBoolean")) (anonymous (kind transition) (ordinal 0)) (anonymous (kind kerml-boolean-expression) (ordinal 0))))) (target (node (document "memory://snapshot/state_machine_shape.md") (path (named (kind package) (name "Machines")) (named (kind state-def) (name "GuardIsNotBoolean")) (anonymous (kind transition) (ordinal 0))))) (provenance implied))
     (relationship (kind typeFeaturing) (source (node (document "memory://snapshot/state_machine_shape.md") (qualified-name "Machines::GuardIsNotBoolean::armed"))) (target (node (document "memory://snapshot/state_machine_shape.md") (qualified-name "Machines::GuardIsNotBoolean"))) (provenance implied))
     (relationship (kind typeFeaturing) (source (node (document "memory://snapshot/state_machine_shape.md") (qualified-name "Machines::GuardIsNotBoolean::disarmed"))) (target (node (document "memory://snapshot/state_machine_shape.md") (qualified-name "Machines::GuardIsNotBoolean"))) (provenance implied))
@@ -187,6 +200,8 @@ package Machines {
     (relationship (kind typeFeaturing) (source (node (document "memory://snapshot/state_machine_shape.md") (qualified-name "Machines::Left::idle"))) (target (node (document "memory://snapshot/state_machine_shape.md") (qualified-name "Machines::Left"))) (provenance implied))
     (relationship (kind typeFeaturing) (source (node (document "memory://snapshot/state_machine_shape.md") (path (named (kind package) (name "Machines")) (named (kind state-def) (name "TransitionLeavesItsOwnContext")) (anonymous (kind initial-state) (ordinal 0))))) (target (node (document "memory://snapshot/state_machine_shape.md") (qualified-name "Machines::TransitionLeavesItsOwnContext"))) (provenance implied))
     (relationship (kind typeFeaturing) (source (node (document "memory://snapshot/state_machine_shape.md") (path (named (kind package) (name "Machines")) (named (kind state-def) (name "TransitionLeavesItsOwnContext")) (anonymous (kind transition) (ordinal 0))))) (target (node (document "memory://snapshot/state_machine_shape.md") (qualified-name "Machines::TransitionLeavesItsOwnContext"))) (provenance implied))
+    (relationship (kind typeFeaturing) (source (node (document "memory://snapshot/state_machine_shape.md") (path (named (kind package) (name "Machines")) (named (kind state-def) (name "TransitionLeavesItsOwnContext")) (anonymous (kind transition) (ordinal 0)) (anonymous (kind parameter) (ordinal 0))))) (target (node (document "memory://snapshot/state_machine_shape.md") (path (named (kind package) (name "Machines")) (named (kind state-def) (name "TransitionLeavesItsOwnContext")) (anonymous (kind transition) (ordinal 0))))) (provenance implied))
+    (relationship (kind typeFeaturing) (source (node (document "memory://snapshot/state_machine_shape.md") (path (named (kind package) (name "Machines")) (named (kind state-def) (name "TransitionLeavesItsOwnContext")) (anonymous (kind transition) (ordinal 0)) (anonymous (kind ref) (ordinal 0))))) (target (node (document "memory://snapshot/state_machine_shape.md") (path (named (kind package) (name "Machines")) (named (kind state-def) (name "TransitionLeavesItsOwnContext")) (anonymous (kind transition) (ordinal 0))))) (provenance implied))
     (relationship (kind typeFeaturing) (source (node (document "memory://snapshot/state_machine_shape.md") (qualified-name "Machines::TransitionLeavesItsOwnContext::done"))) (target (node (document "memory://snapshot/state_machine_shape.md") (qualified-name "Machines::TransitionLeavesItsOwnContext"))) (provenance implied))
     (relationship (kind typeFeaturing) (source (node (document "memory://snapshot/state_machine_shape.md") (qualified-name "Machines::TransitionLeavesItsOwnContext::ready"))) (target (node (document "memory://snapshot/state_machine_shape.md") (qualified-name "Machines::TransitionLeavesItsOwnContext"))) (provenance implied))
     (relationship (kind typeFeaturing) (source (node (document "memory://snapshot/state_machine_shape.md") (path (named (kind package) (name "Machines")) (named (kind state-def) (name "TwoFinalStates")) (anonymous (kind initial-state) (ordinal 0))))) (target (node (document "memory://snapshot/state_machine_shape.md") (qualified-name "Machines::TwoFinalStates"))) (provenance implied))
@@ -207,6 +222,12 @@ package Machines {
     )
     (declaration (id (node (document "memory://snapshot/state_machine_shape.md") (path (named (kind package) (name "Machines")) (named (kind state-def) (name "GuardIsNotBoolean")) (anonymous (kind transition) (ordinal 0)))))
       (featured-by (node (document "memory://snapshot/state_machine_shape.md") (qualified-name "Machines::GuardIsNotBoolean")))
+    )
+    (declaration (id (node (document "memory://snapshot/state_machine_shape.md") (path (named (kind package) (name "Machines")) (named (kind state-def) (name "GuardIsNotBoolean")) (anonymous (kind transition) (ordinal 0)) (anonymous (kind parameter) (ordinal 0)))))
+      (featured-by (node (document "memory://snapshot/state_machine_shape.md") (path (named (kind package) (name "Machines")) (named (kind state-def) (name "GuardIsNotBoolean")) (anonymous (kind transition) (ordinal 0)))))
+    )
+    (declaration (id (node (document "memory://snapshot/state_machine_shape.md") (path (named (kind package) (name "Machines")) (named (kind state-def) (name "GuardIsNotBoolean")) (anonymous (kind transition) (ordinal 0)) (anonymous (kind ref) (ordinal 0)))))
+      (featured-by (node (document "memory://snapshot/state_machine_shape.md") (path (named (kind package) (name "Machines")) (named (kind state-def) (name "GuardIsNotBoolean")) (anonymous (kind transition) (ordinal 0)))))
     )
     (declaration (id (node (document "memory://snapshot/state_machine_shape.md") (path (named (kind package) (name "Machines")) (named (kind state-def) (name "GuardIsNotBoolean")) (anonymous (kind transition) (ordinal 0)) (anonymous (kind kerml-boolean-expression) (ordinal 0)))))
       (featured-by (node (document "memory://snapshot/state_machine_shape.md") (path (named (kind package) (name "Machines")) (named (kind state-def) (name "GuardIsNotBoolean")) (anonymous (kind transition) (ordinal 0)))))
@@ -241,6 +262,12 @@ package Machines {
     (declaration (id (node (document "memory://snapshot/state_machine_shape.md") (path (named (kind package) (name "Machines")) (named (kind state-def) (name "TransitionLeavesItsOwnContext")) (anonymous (kind transition) (ordinal 0)))))
       (featured-by (node (document "memory://snapshot/state_machine_shape.md") (qualified-name "Machines::TransitionLeavesItsOwnContext")))
     )
+    (declaration (id (node (document "memory://snapshot/state_machine_shape.md") (path (named (kind package) (name "Machines")) (named (kind state-def) (name "TransitionLeavesItsOwnContext")) (anonymous (kind transition) (ordinal 0)) (anonymous (kind parameter) (ordinal 0)))))
+      (featured-by (node (document "memory://snapshot/state_machine_shape.md") (path (named (kind package) (name "Machines")) (named (kind state-def) (name "TransitionLeavesItsOwnContext")) (anonymous (kind transition) (ordinal 0)))))
+    )
+    (declaration (id (node (document "memory://snapshot/state_machine_shape.md") (path (named (kind package) (name "Machines")) (named (kind state-def) (name "TransitionLeavesItsOwnContext")) (anonymous (kind transition) (ordinal 0)) (anonymous (kind ref) (ordinal 0)))))
+      (featured-by (node (document "memory://snapshot/state_machine_shape.md") (path (named (kind package) (name "Machines")) (named (kind state-def) (name "TransitionLeavesItsOwnContext")) (anonymous (kind transition) (ordinal 0)))))
+    )
     (declaration (id (node (document "memory://snapshot/state_machine_shape.md") (qualified-name "Machines::TransitionLeavesItsOwnContext::done")))
       (featured-by (node (document "memory://snapshot/state_machine_shape.md") (qualified-name "Machines::TransitionLeavesItsOwnContext")))
     )
@@ -259,6 +286,12 @@ package Machines {
     (declaration (id (node (document "memory://snapshot/state_machine_shape.md") (qualified-name "Machines::TwoFinalStates::second")))
       (featured-by (node (document "memory://snapshot/state_machine_shape.md") (qualified-name "Machines::TwoFinalStates")))
     )
+)
+~~~
+# EXPRESSIONS
+~~~sexpr
+(expressions
+  (declaration (id (node (document "memory://snapshot/state_machine_shape.md") (path (named (kind package) (name "Machines")) (named (kind state-def) (name "GuardIsNotBoolean")) (anonymous (kind transition) (ordinal 0)) (anonymous (kind kerml-boolean-expression) (ordinal 0))))) (outcome resolved) (literal (value (kind integer) (integer 1))))
 )
 ~~~
 # NAVIGATION

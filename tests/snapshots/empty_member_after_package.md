@@ -14,6 +14,12 @@ package MyPkg { }; in newX : Real;
     (diagnostics
       (diagnostic
         (severity warning)
+        (code "redundant_semicolon_after_body")
+        (source "parser")
+        (range (start 0 17) (end 0 18))
+      )
+      (diagnostic
+        (severity warning)
         (code "unresolved_type_reference")
         (source "semantic")
         (range (start 0 29) (end 0 33))
@@ -25,7 +31,7 @@ package MyPkg { }; in newX : Real;
 # SMG
 ~~~sexpr
 (semantic-model
-  (publication (phase resolved) (completeness complete) (has-evaluation false) (source-digest "blake3:a6a2ea2079b4d1fb5fc110bd88f052231a5b1c0115565e9aacdb373bf82083c1"))
+  (publication (phase resolved) (completeness complete) (has-evaluation false) (source-digest "blake3:3ce03d582ed14d77e3caafa22657b439bb80a7a678b8791e05ea68ed807780d2"))
   (declarations
     (declaration (id (node (document "memory://snapshot/empty_member_after_package.md") (path (anonymous (kind default-reference) (ordinal 0))))) (kind default-reference) (membership (kind feature) (visibility default)))
     (declaration (id (node (document "memory://snapshot/empty_member_after_package.md") (qualified-name "MyPkg"))) (kind package) (membership (kind owning) (visibility default)))

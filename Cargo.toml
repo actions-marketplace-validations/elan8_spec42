@@ -1,4 +1,4 @@
-﻿[workspace]
+[workspace]
 resolver = "2"
 members = [
   "crates/generator_api",
@@ -6,6 +6,9 @@ members = [
   "crates/generator_host",
   "crates/generator_protocol",
   "crates/generator_sdk",
+  "crates/diagram_draw",
+  "crates/diagram_product",
+  "crates/diagram_layout",
   "crates/language_service",
   "crates/library_catalog",
   "crates/lsp_server",
@@ -28,7 +31,7 @@ members = [
 ]
 
 [workspace.package]
-version = "0.50.0"
+version = "0.57.0"
 edition = "2021"
 authors = ["Elan8"]
 license = "MIT"
@@ -47,9 +50,14 @@ clap = { version = "4", features = ["derive"] }
 petgraph = { version = "0.8", features = ["serde-1"] }
 sha2 = "0.10"
 blake3 = "1"
-sysml-v2-parser = { git = "https://github.com/elan8/sysml-v2-parser.git", rev = "f04d51ee79e63989684fca64e7769d700ae8f5c4", features = ["serde"] }
+sysml-v2-parser = { git = "https://github.com/elan8/sysml-v2-parser.git", rev = "8cee8c16e5bb26327bb5062a4e54767610f943ef", features = ["serde"] }
 ts-rs = { version = "11", features = ["serde-compat", "serde-json-impl"] }
 zstd = "0.13"
+toml = "0.8"
+walkdir = "2"
+zip = { version = "9", default-features = false, features = ["deflate"] }
+insta = "1"
+tempfile = "3.27.0"
 
 # The resolver and the parser do real work in every integration test; unoptimised they make
 # a cold standard-library build 3-5x slower. opt-level 1 costs ~3s on an incremental rebuild.

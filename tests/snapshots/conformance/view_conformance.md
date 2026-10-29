@@ -34,18 +34,6 @@ package Views {
   (document "memory://snapshot/view_conformance.md"
     (diagnostics
       (diagnostic
-        (severity information)
-        (code "view_expose_empty")
-        (source "semantic")
-        (range (start 7 4) (end 9 5))
-      )
-      (diagnostic
-        (severity information)
-        (code "view_expose_empty")
-        (source "semantic")
-        (range (start 11 4) (end 13 5))
-      )
-      (diagnostic
         (severity warning)
         (code "viewpoint_conformance_invalid_target_kind")
         (source "semantic")
@@ -54,18 +42,6 @@ package Views {
           (related
             (uri "memory://snapshot/view_conformance.md")
             (range (start 2 4) (end 2 31))
-          )
-        )
-      )
-      (diagnostic
-        (severity warning)
-        (code "incompatible_type_kind")
-        (source "semantic")
-        (range (start 16 52) (end 16 61))
-        (related-information
-          (related
-            (uri "memory://snapshot/view_conformance.md")
-            (range (start 1 4) (end 1 23))
           )
         )
       )
@@ -100,13 +76,15 @@ package Views {
 # SMG
 ~~~sexpr
 (semantic-model
-  (publication (phase resolved) (completeness parse-recovery) (has-evaluation false) (source-digest "blake3:6f1c573000816dbb1aa695927ab2bc4c664bdb4d76e83a7d93d733063eb34f63"))
+  (publication (phase resolved) (completeness parse-recovery) (has-evaluation false) (source-digest "blake3:0da5b9f48065c722b2d01a209d903b5b431d65922d7717d2d17110b138e1042e"))
   (declarations
     (declaration (id (node (document "memory://snapshot/view_conformance.md") (qualified-name "Views"))) (kind package) (membership (kind owning) (visibility default)))
     (declaration (id (node (document "memory://snapshot/view_conformance.md") (qualified-name "Views::Concerns"))) (kind viewpoint-def) (membership (kind owning) (visibility default)))
     (declaration (id (node (document "memory://snapshot/view_conformance.md") (qualified-name "Views::Structure"))) (kind part-def) (membership (kind owning) (visibility default)))
     (declaration (id (node (document "memory://snapshot/view_conformance.md") (qualified-name "Views::Tree"))) (kind rendering-def) (membership (kind owning) (visibility default)))
-    (declaration (id (node (document "memory://snapshot/view_conformance.md") (qualified-name "Views::WithoutRepresentationLanguage"))) (kind viewpoint-def) (membership (kind owning) (visibility default)) (documentation (rep (text " no language identifier "))))
+    (declaration (id (node (document "memory://snapshot/view_conformance.md") (qualified-name "Views::WithoutRepresentationLanguage"))) (kind viewpoint-def) (membership (kind owning) (visibility default)))
+    (declaration (id (node (document "memory://snapshot/view_conformance.md") (path (named (kind package) (name "Views")) (named (kind viewpoint-def) (name "WithoutRepresentationLanguage")) (anonymous (kind textual-representation) (ordinal 0))))) (kind textual-representation) (membership (kind owning) (visibility default)) (documentation (rep (text "no language identifier "))))
+    (declaration (id (node (document "memory://snapshot/view_conformance.md") (path (named (kind package) (name "Views")) (named (kind viewpoint-def) (name "WithoutRepresentationLanguage")) (anonymous (kind default-reference) (ordinal 0))))) (kind default-reference) (membership (kind feature) (visibility default)))
     (declaration (id (node (document "memory://snapshot/view_conformance.md") (qualified-name "Views::concerns"))) (kind viewpoint) (membership (kind feature) (visibility default)) (authored (membership (kind feature) (visibility default)) (relationships (featureTyping (reference "Concerns")))))
     (declaration (id (node (document "memory://snapshot/view_conformance.md") (qualified-name "Views::conforming"))) (kind view) (membership (kind feature) (visibility default)))
     (declaration (id (node (document "memory://snapshot/view_conformance.md") (path (named (kind package) (name "Views")) (named (kind view) (name "conforming")) (anonymous (kind satisfy) (ordinal 0))))) (kind satisfy) (membership (kind feature) (visibility default)) (authored (membership (kind feature) (visibility default)) (relationships (satisfySource (reference "concerns")))))
@@ -143,6 +121,7 @@ package Views {
     (relationship (kind typing) (source (node (document "memory://snapshot/view_conformance.md") (qualified-name "Views::rendersSomethingThatIsNotARendering"))) (target (node (document "memory://snapshot/view_conformance.md") (qualified-name "Views::Structure"))) (provenance authored) (authored-reference (source (node (document "memory://snapshot/view_conformance.md") (qualified-name "Views::rendersSomethingThatIsNotARendering"))) (kind featureTyping) (ordinal 0)))
     (relationship (kind satisfySource) (source (node (document "memory://snapshot/view_conformance.md") (path (named (kind package) (name "Views")) (named (kind view) (name "satisfiesSomethingThatIsNotAViewpoint")) (anonymous (kind satisfy) (ordinal 0))))) (target (node (document "memory://snapshot/view_conformance.md") (qualified-name "Views::structure"))) (provenance authored) (authored-reference (source (node (document "memory://snapshot/view_conformance.md") (path (named (kind package) (name "Views")) (named (kind view) (name "satisfiesSomethingThatIsNotAViewpoint")) (anonymous (kind satisfy) (ordinal 0))))) (kind satisfySource) (ordinal 0)))
     (relationship (kind typing) (source (node (document "memory://snapshot/view_conformance.md") (qualified-name "Views::structure"))) (target (node (document "memory://snapshot/view_conformance.md") (qualified-name "Views::Structure"))) (provenance authored) (authored-reference (source (node (document "memory://snapshot/view_conformance.md") (qualified-name "Views::structure"))) (kind featureTyping) (ordinal 0)))
+    (relationship (kind typeFeaturing) (source (node (document "memory://snapshot/view_conformance.md") (path (named (kind package) (name "Views")) (named (kind viewpoint-def) (name "WithoutRepresentationLanguage")) (anonymous (kind default-reference) (ordinal 0))))) (target (node (document "memory://snapshot/view_conformance.md") (qualified-name "Views::WithoutRepresentationLanguage"))) (provenance implied))
     (relationship (kind typeFeaturing) (source (node (document "memory://snapshot/view_conformance.md") (path (named (kind package) (name "Views")) (named (kind view) (name "conforming")) (anonymous (kind satisfy) (ordinal 0))))) (target (node (document "memory://snapshot/view_conformance.md") (qualified-name "Views::conforming"))) (provenance implied))
     (relationship (kind typeFeaturing) (source (node (document "memory://snapshot/view_conformance.md") (path (named (kind package) (name "Views")) (named (kind view) (name "satisfiesSomethingThatIsNotAViewpoint")) (anonymous (kind satisfy) (ordinal 0))))) (target (node (document "memory://snapshot/view_conformance.md") (qualified-name "Views::satisfiesSomethingThatIsNotAViewpoint"))) (provenance implied))
   )
@@ -162,6 +141,9 @@ package Views {
     )
     (declaration (id (node (document "memory://snapshot/view_conformance.md") (qualified-name "Views::Tree")))
       (subtype (node (document "memory://snapshot/view_conformance.md") (qualified-name "Views::conformingRendering")) (scopes any))
+    )
+    (declaration (id (node (document "memory://snapshot/view_conformance.md") (path (named (kind package) (name "Views")) (named (kind viewpoint-def) (name "WithoutRepresentationLanguage")) (anonymous (kind default-reference) (ordinal 0)))))
+      (featured-by (node (document "memory://snapshot/view_conformance.md") (qualified-name "Views::WithoutRepresentationLanguage")))
     )
     (declaration (id (node (document "memory://snapshot/view_conformance.md") (qualified-name "Views::concerns")))
       (type (node (document "memory://snapshot/view_conformance.md") (qualified-name "Views::Concerns")) (provenance authored))

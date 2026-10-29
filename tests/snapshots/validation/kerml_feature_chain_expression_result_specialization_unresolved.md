@@ -4,6 +4,7 @@ description=KerML checkFeatureChainExpressionResultSpecialization remains unreso
 source_expectation=accepted
 rule_family=check
 expectation=semantics
+coverage_role=secondary
 rule_id=kerml-1.0:8.3.4.8.4:checkFeatureChainExpressionResultSpecialization
 ~~~
 # SOURCE
@@ -38,7 +39,7 @@ package Model {
 # SMG
 ~~~sexpr
 (semantic-model
-  (publication (phase resolved) (completeness complete) (has-evaluation true) (source-digest "blake3:8ac95afd4bb7f13c7ec13260e2709336d7a98c8e8e5b92d792d696786a9b8fe5"))
+  (publication (phase resolved) (completeness complete) (has-evaluation true) (source-digest "blake3:ae64d11837c9f98d2e7a804166ab067f68edf9addae84495dc4d228c53a4a469"))
   (declarations
     (declaration (id (node (document "memory://snapshot/kerml_feature_chain_expression_result_specialization_unresolved.md") (qualified-name "Model"))) (kind package) (membership (kind owning) (visibility default)))
     (declaration (id (node (document "memory://snapshot/kerml_feature_chain_expression_result_specialization_unresolved.md") (qualified-name "Model::Holder"))) (kind kerml-classifier) (membership (kind owning) (visibility default)))
@@ -64,6 +65,7 @@ package Model {
     (relationship (kind typeFeaturing) (source (node (document "memory://snapshot/kerml_feature_chain_expression_result_specialization_unresolved.md") (qualified-name "Model::Holder::outer"))) (target (node (document "memory://snapshot/kerml_feature_chain_expression_result_specialization_unresolved.md") (qualified-name "Model::Holder"))) (provenance implied))
     (relationship (kind typeFeaturing) (source (node (document "memory://snapshot/kerml_feature_chain_expression_result_specialization_unresolved.md") (qualified-name "Model::Holder::selected"))) (target (node (document "memory://snapshot/kerml_feature_chain_expression_result_specialization_unresolved.md") (qualified-name "Model::Holder"))) (provenance implied))
     (relationship (kind subsetting) (source (node (document "memory://snapshot/kerml_feature_chain_expression_result_specialization_unresolved.md") (qualified-name "Model::Holder::selected"))) (target (node (document "memory://snapshot/kerml_feature_chain_expression_result_specialization_unresolved.md") (path (named (kind package) (name "Model")) (named (kind kerml-classifier) (name "Holder")) (named (kind kerml-feature) (name "selected")) (anonymous (kind kerml-expression) (ordinal 0)) (anonymous (kind kerml-feature) (ordinal 0))))) (provenance implied))
+    (relationship (kind typeFeaturing) (source (node (document "memory://snapshot/kerml_feature_chain_expression_result_specialization_unresolved.md") (path (named (kind package) (name "Model")) (named (kind kerml-classifier) (name "Holder")) (named (kind kerml-feature) (name "selected")) (anonymous (kind kerml-expression) (ordinal 0))))) (target (node (document "memory://snapshot/kerml_feature_chain_expression_result_specialization_unresolved.md") (qualified-name "Model::Holder"))) (provenance implied))
     (relationship (kind typeFeaturing) (source (node (document "memory://snapshot/kerml_feature_chain_expression_result_specialization_unresolved.md") (path (named (kind package) (name "Model")) (named (kind kerml-classifier) (name "Holder")) (named (kind kerml-feature) (name "selected")) (anonymous (kind kerml-expression) (ordinal 0)) (anonymous (kind kerml-feature) (ordinal 0))))) (target (node (document "memory://snapshot/kerml_feature_chain_expression_result_specialization_unresolved.md") (path (named (kind package) (name "Model")) (named (kind kerml-classifier) (name "Holder")) (named (kind kerml-feature) (name "selected")) (anonymous (kind kerml-expression) (ordinal 0))))) (provenance implied))
     (relationship (kind typeFeaturing) (source (node (document "memory://snapshot/kerml_feature_chain_expression_result_specialization_unresolved.md") (path (named (kind package) (name "Model")) (named (kind kerml-classifier) (name "Holder")) (named (kind kerml-feature) (name "selected")) (anonymous (kind kerml-expression) (ordinal 0)) (anonymous (kind kerml-feature) (ordinal 1))))) (target (node (document "memory://snapshot/kerml_feature_chain_expression_result_specialization_unresolved.md") (path (named (kind package) (name "Model")) (named (kind kerml-classifier) (name "Holder")) (named (kind kerml-feature) (name "selected")) (anonymous (kind kerml-expression) (ordinal 0))))) (provenance implied))
     (relationship (kind featureChaining) (source (node (document "memory://snapshot/kerml_feature_chain_expression_result_specialization_unresolved.md") (path (named (kind package) (name "Model")) (named (kind kerml-classifier) (name "Holder")) (named (kind kerml-feature) (name "selected")) (anonymous (kind kerml-expression) (ordinal 0)) (anonymous (kind kerml-feature) (ordinal 2))))) (target (node (document "memory://snapshot/kerml_feature_chain_expression_result_specialization_unresolved.md") (path (named (kind package) (name "Model")) (named (kind kerml-classifier) (name "Holder")) (named (kind kerml-feature) (name "selected")) (anonymous (kind kerml-expression) (ordinal 0)) (anonymous (kind kerml-feature) (ordinal 1))))) (provenance implied))
@@ -72,7 +74,7 @@ package Model {
     (relationship (kind typeFeaturing) (source (node (document "memory://snapshot/kerml_feature_chain_expression_result_specialization_unresolved.md") (path (named (kind package) (name "Model")) (named (kind kerml-classifier) (name "Holder")) (named (kind kerml-feature) (name "selected")) (anonymous (kind kerml-expression) (ordinal 0)) (anonymous (kind kerml-feature) (ordinal 1)) (anonymous (kind kerml-feature) (ordinal 0))))) (target (node (document "memory://snapshot/kerml_feature_chain_expression_result_specialization_unresolved.md") (path (named (kind package) (name "Model")) (named (kind kerml-classifier) (name "Holder")) (named (kind kerml-feature) (name "selected")) (anonymous (kind kerml-expression) (ordinal 0)) (anonymous (kind kerml-feature) (ordinal 1))))) (provenance implied))
   )
   (evaluation
-    (evaluated (declaration (node (document "memory://snapshot/kerml_feature_chain_expression_result_specialization_unresolved.md") (path (named (kind package) (name "Model")) (named (kind kerml-classifier) (name "Holder")) (named (kind kerml-feature) (name "selected")) (anonymous (kind kerml-expression) (ordinal 0))))) (state unsupported))
+    (evaluated (declaration (node (document "memory://snapshot/kerml_feature_chain_expression_result_specialization_unresolved.md") (path (named (kind package) (name "Model")) (named (kind kerml-classifier) (name "Holder")) (named (kind kerml-feature) (name "selected")) (anonymous (kind kerml-expression) (ordinal 0))))) (state unresolved-operand))
   )
 )
 ~~~
@@ -89,6 +91,9 @@ package Model {
       (featured-by (node (document "memory://snapshot/kerml_feature_chain_expression_result_specialization_unresolved.md") (qualified-name "Model::Holder")))
       (supertype (node (document "memory://snapshot/kerml_feature_chain_expression_result_specialization_unresolved.md") (path (named (kind package) (name "Model")) (named (kind kerml-classifier) (name "Holder")) (named (kind kerml-feature) (name "selected")) (anonymous (kind kerml-expression) (ordinal 0)) (anonymous (kind kerml-feature) (ordinal 0)))) (scopes any feature))
       (supertype (node (document "memory://snapshot/kerml_feature_chain_expression_result_specialization_unresolved.md") (path (named (kind package) (name "Model")) (named (kind kerml-classifier) (name "Holder")) (named (kind kerml-feature) (name "selected")) (anonymous (kind kerml-expression) (ordinal 0)) (anonymous (kind kerml-feature) (ordinal 2)))) (scopes any feature))
+    )
+    (declaration (id (node (document "memory://snapshot/kerml_feature_chain_expression_result_specialization_unresolved.md") (path (named (kind package) (name "Model")) (named (kind kerml-classifier) (name "Holder")) (named (kind kerml-feature) (name "selected")) (anonymous (kind kerml-expression) (ordinal 0)))))
+      (featured-by (node (document "memory://snapshot/kerml_feature_chain_expression_result_specialization_unresolved.md") (qualified-name "Model::Holder")))
     )
     (declaration (id (node (document "memory://snapshot/kerml_feature_chain_expression_result_specialization_unresolved.md") (path (named (kind package) (name "Model")) (named (kind kerml-classifier) (name "Holder")) (named (kind kerml-feature) (name "selected")) (anonymous (kind kerml-expression) (ordinal 0)) (anonymous (kind kerml-feature) (ordinal 0)))))
       (featured-by (node (document "memory://snapshot/kerml_feature_chain_expression_result_specialization_unresolved.md") (path (named (kind package) (name "Model")) (named (kind kerml-classifier) (name "Holder")) (named (kind kerml-feature) (name "selected")) (anonymous (kind kerml-expression) (ordinal 0)))))
@@ -107,6 +112,12 @@ package Model {
     (declaration (id (node (document "memory://snapshot/kerml_feature_chain_expression_result_specialization_unresolved.md") (qualified-name "Model::Thing")))
       (subtype (node (document "memory://snapshot/kerml_feature_chain_expression_result_specialization_unresolved.md") (qualified-name "Model::Holder::outer")) (scopes any))
     )
+)
+~~~
+# EXPRESSIONS
+~~~sexpr
+(expressions
+  (declaration (id (node (document "memory://snapshot/kerml_feature_chain_expression_result_specialization_unresolved.md") (path (named (kind package) (name "Model")) (named (kind kerml-classifier) (name "Holder")) (named (kind kerml-feature) (name "selected")) (anonymous (kind kerml-expression) (ordinal 0))))) (outcome resolved) (feature-reference "outer::missing" (target unresolved)))
 )
 ~~~
 # NAVIGATION

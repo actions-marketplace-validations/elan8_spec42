@@ -91,7 +91,7 @@ share one set of authorities per host process.
 
 | Service (`sysml_query::…`) | Handle | Owns |
 |---|---|---|
-| `source::SourceService` | `SourceDocument` | admission of text as an identified document; URI normalisation; line-ending policy; providers (filesystem with ignore rules, in-memory, library roots); content digests |
+| `source::SourceService` | `SourceDocument` | admission of text as an identified document; URI normalisation; line-ending policy; the document language (KerML or SysML, from the path extension unless the host declares it; a semantic input committed to every source identity); providers (filesystem with ignore rules, in-memory, library roots); content digests |
 | `syntax::SyntaxService` | `ParsedSource` | the parser call and parse memo; syntax-fidelity queries over a parsed tree: outline, folding, token roles, package declarations, closure facts, reserved keywords; formatting-preservation checks |
 | `library::LibraryClosureService` | `LibraryClosure` | the package index over library roots and the transitive import closure a workspace needs, with its seed signature |
 | `publication::PublicationService` and `PublicationSession` | `PublishedModel`, `BuildToken`, `SessionLifecycle` | partitioning admitted documents by provenance, library-stratum reuse, constructing the immutable publication; the publication lifecycle, its input revision and build token, and the barrier that atomically admits a finished build with its dependent projections |
@@ -103,6 +103,22 @@ benchmarks. There is exactly one `Services` per host process.
 
 New capability lands in this order: implementation in the owning authority, a typed contract in
 `sysml_query`, then use from a host. Never the reverse.
+
+## Filesystem project inputs
+
+Source selection is owned by `sysml_source`: host discovery ceilings, nearest `.project.json`
+boundaries, and project-root `syside.toml` include/exclude rules. Both hosts use that selection;
+editor opens and watched-file events cannot add excluded files to a project. Explicitly admitted
+in-memory sources remain the embedder's responsibility. Configuration is read on discovery rather
+than cached independently of the publication's inputs.
+
+`library_catalog` owns dependency admission from KPAR resource usages and locally installed,
+versioned Sysand lock/environment metadata. Both hosts consume its selected roots and explicit
+failure states. The lock pins resource identity and version; environment metadata owns installed
+paths. Hosts never guess identities or roots from display names, arbitrary TOML strings, or folder
+layouts, and analysis never installs or fetches packages. A dependency failure cannot admit the
+unfiltered catalog as a fallback. The configured standard-library baseline remains mandatory and
+separate from project dependency selection.
 
 ## Phases inside the semantic authority
 
@@ -226,6 +242,39 @@ publication lifecycle state outside a `PublicationSession`.
 | CLI / MCP (`server`) | thin adapters over the batch host: validation, reports, generation; reaches `lsp_server` only to launch the editor host (`run_lsp`, config, tracing, custom RPC); one `Services` shared by both |
 | Generators | receive an immutable `PublishedModel` and typed queries; never source text |
 
+### Desired inputs and coherent editor publications
+
+The editor ingests source changes in protocol order into its desired source state. Background
+analysis may coalesce complete desired snapshots, never incremental text deltas. Each project
+bounds analysis to one active construction and one replaceable pending desired state.
+
+A host publication pairs the canonical sealed model with the opaque source/syntax handles and
+source-scope configuration from the inputs it admitted. These source handles remain host-owned:
+the sealed model still holds no parsed tree. Desired inputs may advance independently, while
+semantic readers retain the prior coherent source/model pair. The session's input-revision token
+guards preparation before it receives a build generation; the build token guards final admission.
+Source handles, model and dependent projections cross that final barrier together. A failed or
+superseded build leaves the previous pair intact. Input freshness and retained failures are owned
+by `PublicationSession`, separately from startup readiness.
+
+Accepted editor deltas and versions enter desired source state before parsing. Missing syntax is
+explicitly pending. A preparation worker holds canonical syntax leases and installs them only after
+its captured input revision passes the actor barrier; it never replaces newer editor membership or
+version metadata. Syntax-only requests may use matching desired syntax. Semantic positional requests
+return `ContentModified` while analysis is pending, and an explicit failure when the current build
+failed, rather than applying old semantic ranges to new text.
+
+Each input revision owns cancellation shared with its child build generations. Invalidation and
+close cancel obsolete work; phase boundaries cooperate without treating cancellation as a fault.
+Cancelled/failed work cannot install a partial library stratum or semantic publication. Syntax memo
+retention respects live source and AST leases across projects and sweeps replaced edit history.
+Completion delivery is independent of ordered source ingestion. Diagnostics are versioned, bounded
+in fanout and checked against the current publication; editor refresh and status notifications are
+wakes to requery the current owner, not independent stores of semantic freshness. A coalesced
+completion republishes workspace diagnostics and open library diagnostics once, replacing the old
+per-edit selective delivery plus a later full sweep. This is reporting scope over already-owned
+diagnostics, not a host implementation of dependency semantics.
+
 ### Project boundaries and library admission
 
 A filesystem model is owned by its nearest ancestor `.project.json`, bounded by the host's
@@ -325,7 +374,7 @@ Each invariant above is checked in a place the constrained crates cannot disable
 | Invariant | Where it is enforced |
 |---|---|
 | the parser is a dependency of `sysml_resolution` only; `sysml_resolution` of `sysml_query` only; `sysml_source` of `sysml_resolution` only | `deny.toml` (`cargo deny check bans`, resolved graph, dev-dependencies included); `crates/source_identity/tests/parser_authority.rs` and `authority_chain.rs` (manifest shape, nested `fuzz/` workspace, both lockfiles, local facade renames) |
-| exact dependency sets of the chain crates, the facade, `session_actor`, `workspace`, `lsp_server` (no `workspace`) and `server`; every downstream crate is a designated consumer; no async runtime in the chain | `crates/sysml_query/tests/architecture.rs` (cargo metadata) |
+| exact dependency sets of the chain crates, the facade, `session_actor`, `workspace`, `lsp_server` (no `workspace`) and `server`; every downstream crate is a designated consumer; no async runtime in the chain; `walkdir`/`sha2`/`tempfile`/`toml`/`zip`/`insta` are workspace-inherited | `crates/sysml_query/tests/architecture.rs` (cargo metadata and a repository-wide TOML parse of every manifest) |
 | the facade publishes no parser or graph type and no text-taking syntax entry point | `crates/sysml_query/tests/architecture.rs` (public API visitor) |
 | no consumer re-implements a facade query, revives a retired heuristic, holds a parsed tree or stratum outside the allow-listed host fields, or reads SysML files | `crates/sysml_query/tests/syntax_authority.rs` (retired-name list, shadowed-name set, source-probe detector with predicate-backed exemptions, field and I/O bans) |
 | a host declares no SysML text entry point and no document-keyed map outside the session's index, both against a shrinking allow-list | `crates/sysml_query/tests/architecture.rs` (AST visitors over `lsp_server/src` and `server/src`) |
@@ -335,7 +384,7 @@ Each invariant above is checked in a place the constrained crates cannot disable
 | phases only depend on earlier products; evaluation has one writer; a sealed publication holds no parse tree or source text | `crates/sysml_resolution/tests/integration/phase_order.rs` |
 | asynchronous publication admits only a build whose owner, semantic-input revision, generation, and exact expected identity are still current; successful admission invalidates old publication tokens; superseded and failed builds retain the last coherent publication | `crates/sysml_resolution/src/publication/session.rs` unit tests and `crates/lsp_server/src/session/handle.rs` concurrency tests |
 | publication and publication-derived host projections become observable atomically; recovery search data stays separate | deterministic snapshot-coherence tests in `crates/lsp_server/src/session/handle.rs` and LSP integration tests |
-| cold/warm and sequential/parallel construction produce equivalent identities and observable projections | `crates/sysml_resolution/tests/integration/incremental_reuse.rs` and `construction_schedule_parity.rs`; every fixture is also built sequentially and in parallel by `spec42-snapshot` |
+| cold/warm and sequential/parallel construction produce equivalent identities and observable projections | `crates/sysml_resolution/tests/integration/incremental_reuse.rs`, `incremental_vs_full.rs` (deterministic edit-sequence parity over publication digests and diagnostics, snapshotted with `insta`), and `construction_schedule_parity.rs`; every fixture is also built sequentially and in parallel by `spec42-snapshot` |
 | diagnostic codes, severities, exact ranges, related information, and canonical ordering are public behavior | `crates/sysml_resolution/tests/integration/diagnostics_contract.rs` and authored `EXPECTED DIAGNOSTICS` assertions under `tests/snapshots/` |
 | checked-in semantic projections and authored expectations remain current and blocker-consistent | required CI runs `cargo snapshot check`; the standalone runner owns the contract |
 | normative evidence coverage debt remains explicit while coverage is incomplete | CI runs `cargo snapshot report --format json` and uploads the report even when its deliberate coverage-debt exit is non-zero |

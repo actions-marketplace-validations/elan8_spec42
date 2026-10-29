@@ -3,7 +3,7 @@
 description=Action flow view keeps unresolved exposure explicit
 type=generate
 libraries=standard
-plugin=repository:diagram
+plugin=native:diagram
 viewKind=action-flow-view
 viewDocument=diagram_action_flow_unresolved.md
 viewQualifiedName=ActionNegative::selected
@@ -34,7 +34,7 @@ package ActionNegative {
 # SMG
 ~~~sexpr
 (semantic-model
-  (publication (phase resolved) (completeness complete) (has-evaluation true) (source-digest "blake3:094b257297e71b097d170282aa255ac79e8783bd766e5566dca383cc0ca7f7ba") (admitted (standard-library 94)))
+  (publication (phase resolved) (completeness complete) (has-evaluation true) (source-digest "blake3:c663cec3b26c2f5e9d70dab2b3ac5ff778c4a66cfa1139c0ab8443b3bae23ce9") (admitted (standard-library 94)))
   (declarations
     (declaration (id (node (document "memory://snapshot/diagram_action_flow_unresolved.md") (qualified-name "ActionNegative"))) (kind package) (membership (kind owning) (visibility default)))
     (declaration (id (node (document "memory://snapshot/diagram_action_flow_unresolved.md") (path (named (kind package) (name "ActionNegative")) (anonymous (kind import) (ordinal 0))))) (kind import) (membership (kind import) (visibility private)) (authored (membership (kind import) (visibility private)) (relationships (namespaceImport (reference "StandardViewDefinitions") (import (shape namespace) (recursive false))))))
@@ -133,8 +133,8 @@ package ActionNegative {
 ## diagram.json
 ~~~json
 {
-  "schemaVersion": 5,
-  "modelDigest": "blake3:62eaa64c4f204900f09d3762a0eb75eb925d1185219bcb7e5777160fc7933702",
+  "schemaVersion": 10,
+  "modelDigest": "blake3:3b080e216e9b7334b7adc6beb1fc7aaff4a44404df16956831cbd699f53eb60a",
   "documents": [
     {
       "uri": "memory://snapshot/diagram_action_flow_unresolved.md",

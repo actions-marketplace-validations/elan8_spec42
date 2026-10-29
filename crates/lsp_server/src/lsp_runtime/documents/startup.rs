@@ -9,8 +9,11 @@ pub(crate) async fn initialize(
 ) -> tower_lsp::jsonrpc::Result<InitializeResult> {
     let initialize_start = Instant::now();
     let roots = workspace_roots_from_initialize(&params);
-    let client_library_paths =
-        util::parse_library_paths_from_value(params.initialization_options.as_ref());
+    let library_path_base = roots.first().and_then(|root| root.to_file_path().ok());
+    let client_library_paths = util::parse_library_paths_with_base(
+        params.initialization_options.as_ref(),
+        library_path_base.as_deref(),
+    );
     let library_paths = util::merge_host_and_client_library_paths(
         &config.default_library_paths,
         client_library_paths,
@@ -27,6 +30,8 @@ pub(crate) async fn initialize(
         util::parse_code_lens_enabled_from_value(params.initialization_options.as_ref(), true);
     let perf_logging_enabled =
         util::parse_perf_logging_enabled_from_value(params.initialization_options.as_ref(), false);
+    let semantic_tokens_debug =
+        util::parse_semantic_tokens_debug_from_value(params.initialization_options.as_ref(), false);
     let diagnose_library_paths = util::parse_diagnose_library_paths_from_value(
         params.initialization_options.as_ref(),
         false,
@@ -44,9 +49,18 @@ pub(crate) async fn initialize(
     }
     runtime_config
         .set(RuntimeConfig {
+            library_path_base,
             startup_trace_id: startup_trace_id.clone(),
             code_lens_enabled,
             perf_logging_enabled,
+            semantic_tokens_debug,
+            semantic_tokens_refresh_supported: params
+                .capabilities
+                .workspace
+                .as_ref()
+                .and_then(|workspace| workspace.semantic_tokens.as_ref())
+                .and_then(|tokens| tokens.refresh_support)
+                .unwrap_or(false),
             diagnose_library_paths,
         })
         .expect("initialize called twice");
@@ -87,6 +101,7 @@ async fn initialized_handle(
     server_name: &str,
     runtime_config: &Arc<std::sync::OnceLock<RuntimeConfig>>,
 ) {
+    ensure_analysis_notifications(client, handle, runtime_config);
     let (workspace_roots, library_paths) = {
         let snap = handle.snapshot();
         (snap.workspace_roots.clone(), snap.library_paths.clone())
@@ -96,6 +111,7 @@ async fn initialized_handle(
         .expect("initialize precedes all other LSP requests");
     let startup_trace_id = cfg.startup_trace_id.clone();
     let perf_logging_enabled = cfg.perf_logging_enabled;
+    let readiness_token = handle.snapshot().diagnostic_readiness.token();
     if perf_logging_enabled {
         client
             .log_message(MessageType::INFO, format!("{} initialized", server_name))
@@ -108,7 +124,8 @@ async fn initialized_handle(
     };
     if scan_roots.is_empty() && library_paths.is_empty() {
         handle.complete_startup().await.ok();
-        send_semantic_ready_notification(client, handle).await;
+        send_semantic_ready_notification(client, handle, readiness_token).await;
+        publish_workspace_diagnostics(client, handle, runtime_config, None).await;
         return;
     }
     handle.begin_startup().await.ok();
@@ -271,7 +288,7 @@ async fn initialized_handle(
                     if snap
                         .index
                         .get(uri_norm)
-                        .map(|entry| &entry.parsed)
+                        .and_then(|entry| entry.parsed.as_ref())
                         .is_some()
                         && symbol_entries_count <= 2
                     {
@@ -316,7 +333,8 @@ async fn initialized_handle(
         }
         let diagnostics_start = Instant::now();
         handle.complete_startup().await.ok();
-        send_semantic_ready_notification(&client, &handle).await;
+        send_semantic_ready_notification(&client, &handle, readiness_token).await;
+        refresh_semantic_tokens(&client, &runtime_config).await;
         publish_workspace_diagnostics(&client, &handle, &runtime_config, None).await;
         let diagnostics_ms = diagnostics_start.elapsed().as_millis() as u64;
         log_perf(
@@ -380,4 +398,111 @@ async fn initialized_handle(
         )
         .await;
     });
+}
+
+#[cfg(test)]
+mod readiness_tests {
+    use super::*;
+    use tokio::io::{AsyncBufReadExt, AsyncReadExt, AsyncWriteExt, BufReader};
+    use tower_lsp::{LanguageServer, LspService, Server};
+
+    struct EmptyScanServer {
+        client: Client,
+        handle: WorkspaceHandle,
+        config: Arc<std::sync::OnceLock<RuntimeConfig>>,
+    }
+
+    #[tower_lsp::async_trait]
+    impl LanguageServer for EmptyScanServer {
+        async fn initialize(
+            &self,
+            _: InitializeParams,
+        ) -> tower_lsp::jsonrpc::Result<InitializeResult> {
+            Ok(InitializeResult::default())
+        }
+
+        async fn initialized(&self, _: InitializedParams) {
+            initialized_handle(&self.client, &self.handle, "empty-scan-test", &self.config).await;
+        }
+
+        async fn shutdown(&self) -> tower_lsp::jsonrpc::Result<()> {
+            Ok(())
+        }
+    }
+
+    #[tokio::test]
+    async fn empty_scan_announces_before_republishing_a_deferred_open_document() {
+        let uri = Url::parse("file:///empty-scan/bad.sysml").unwrap();
+        let mut state = ServerState::default();
+        state.index.insert(
+            uri.clone(),
+            crate::session::state::IndexEntry::for_test(&uri, "package P { } }"),
+        );
+        state.index.get_mut(&uri).unwrap().open_editor(None);
+        let handle = WorkspaceHandle::spawn(state);
+        handle.rebuild_publication().await.unwrap();
+        let config = Arc::new(std::sync::OnceLock::new());
+        config.set(RuntimeConfig::default()).unwrap();
+        let (service, socket) = LspService::new(|client| EmptyScanServer {
+            client,
+            handle,
+            config,
+        });
+        let (mut client_io, server_io) = tokio::io::duplex(16384);
+        let (reader, writer) = tokio::io::split(server_io);
+        let task = tokio::spawn(Server::new(reader, writer, socket).serve(service));
+        let messages = [
+            serde_json::json!({"jsonrpc":"2.0","id":1,"method":"initialize",
+                "params":{"capabilities":{}}}),
+            serde_json::json!({"jsonrpc":"2.0","method":"initialized","params":{}}),
+        ];
+        // Send initialize first, then await its response before initialized.
+        let mut input = BufReader::new(&mut client_io);
+        let mut saw_ready = false;
+        let result = tokio::time::timeout(Duration::from_secs(10), async {
+            for message in messages {
+                let body = message.to_string();
+                input
+                    .get_mut()
+                    .write_all(format!("Content-Length: {}\r\n\r\n{}", body.len(), body).as_bytes())
+                    .await
+                    .unwrap();
+                loop {
+                    let mut length = None;
+                    loop {
+                        let mut header = String::new();
+                        assert_ne!(input.read_line(&mut header).await.unwrap(), 0);
+                        if header == "\r\n" {
+                            break;
+                        }
+                        if let Some(value) = header.strip_prefix("Content-Length:") {
+                            length = Some(value.trim().parse::<usize>().unwrap());
+                        }
+                    }
+                    let mut body = vec![0; length.unwrap()];
+                    input.read_exact(&mut body).await.unwrap();
+                    let response: serde_json::Value = serde_json::from_slice(&body).unwrap();
+                    match response["method"].as_str() {
+                        Some("spec42/semanticIndexReady") => saw_ready = true,
+                        Some("textDocument/publishDiagnostics") => {
+                            assert!(saw_ready, "diagnostics preceded readiness: {response}");
+                            assert_eq!(response["params"]["uri"], uri.as_str());
+                            assert!(!response["params"]["diagnostics"]
+                                .as_array()
+                                .unwrap()
+                                .is_empty());
+                            return;
+                        }
+                        _ => {}
+                    }
+                    if response["id"] == 1 {
+                        break;
+                    }
+                }
+            }
+        })
+        .await;
+        task.abort();
+        result.expect("the deferred document must receive diagnostics without another edit");
+    }
 }

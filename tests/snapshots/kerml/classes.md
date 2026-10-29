@@ -44,18 +44,6 @@ package Classes {
 (fixture-diagnostics
   (document "memory://snapshot/classes.md"
     (diagnostics
-      (diagnostic
-        (severity warning)
-        (code "unresolved_reference")
-        (source "semantic")
-        (range (start 6 2) (end 6 11))
-      )
-      (diagnostic
-        (severity warning)
-        (code "unsupported_calc_definition_member")
-        (source "semantic")
-        (range (start 26 2) (end 26 16))
-      )
     )
   )
 )
@@ -63,12 +51,12 @@ package Classes {
 # SMG
 ~~~sexpr
 (semantic-model
-  (publication (phase resolved) (completeness unsupported-syntax) (has-evaluation true) (source-digest "blake3:4c91479d93359c3d2f3ae0a07da52df75ff5acf6a2a9e45359b56454ef729b47"))
+  (publication (phase resolved) (completeness complete) (has-evaluation false) (source-digest "blake3:397d08092406f3f30fa6088bb7e5966161021e1127fa563077334ccb008e7c40"))
   (declarations
     (declaration (id (node (document "memory://snapshot/classes.md") (qualified-name "Classes"))) (kind package) (membership (kind owning) (visibility default)))
-    (declaration (id (node (document "memory://snapshot/classes.md") (qualified-name "Classes::A"))) (kind class-def) (membership (kind owning) (visibility public)) (facts (short-name "1")) (authored (membership (kind owning) (visibility public)) (relationships (expressionOperand (reference "protected")))))
+    (declaration (id (node (document "memory://snapshot/classes.md") (qualified-name "Classes::A"))) (kind class-def) (membership (kind owning) (visibility public)) (facts (short-name "1")))
     (declaration (id (node (document "memory://snapshot/classes.md") (qualified-name "Classes::A::b"))) (kind kerml-feature) (membership (kind feature) (visibility default)) (authored (membership (kind feature) (visibility default)) (relationships (featureTyping (reference "B")))))
-    (declaration (id (node (document "memory://snapshot/classes.md") (qualified-name "Classes::A::c"))) (kind kerml-feature) (membership (kind feature) (visibility default)) (facts (direction in)) (authored (membership (kind feature) (visibility default)) (relationships (featureTyping (reference "C") (direction in)))))
+    (declaration (id (node (document "memory://snapshot/classes.md") (qualified-name "Classes::A::c"))) (kind kerml-feature) (membership (kind feature) (visibility protected)) (facts (direction in)) (authored (membership (kind feature) (visibility protected)) (relationships (featureTyping (reference "C") (direction in)))))
     (declaration (id (node (document "memory://snapshot/classes.md") (qualified-name "Classes::A::p"))) (kind kerml-feature) (membership (kind feature) (visibility default)) (facts (modifiers portion)) (authored (membership (kind feature) (visibility default)) (relationships (featureTyping (reference "A")))))
     (declaration (id (node (document "memory://snapshot/classes.md") (qualified-name "Classes::B"))) (kind class-def) (membership (kind owning) (visibility default)) (facts (short-name "2") (modifiers abstract)))
     (declaration (id (node (document "memory://snapshot/classes.md") (qualified-name "Classes::B::P"))) (kind package) (membership (kind owning) (visibility default)))
@@ -83,12 +71,15 @@ package Classes {
     (declaration (id (node (document "memory://snapshot/classes.md") (qualified-name "Classes::C::c"))) (kind kerml-feature) (membership (kind feature) (visibility default)) (facts (modifiers composite)) (authored (membership (kind feature) (visibility default)) (relationships (featureTyping (reference "C")))))
     (declaration (id (node (document "memory://snapshot/classes.md") (qualified-name "Classes::C::c::cc"))) (kind kerml-feature) (membership (kind feature) (visibility default)) (facts (modifiers composite)) (authored (membership (kind feature) (visibility default)) (relationships (featureTyping (reference "C")))))
     (declaration (id (node (document "memory://snapshot/classes.md") (qualified-name "Classes::C::y"))) (kind default-reference) (membership (kind feature) (visibility private)) (facts (multiplicity (lower 0) (upper unbounded))) (authored (membership (kind feature) (visibility private)) (relationships (featureTyping (reference "A")) (featureTyping (reference "2")))))
+    (declaration (id (node (document "memory://snapshot/classes.md") (path (named (kind package) (name "Classes")) (named (kind kerml-structure) (name "C")) (named (kind default-reference) (name "y")) (anonymous (kind kerml-multiplicity-range) (ordinal 0))))) (kind kerml-multiplicity-range) (membership (kind owning) (visibility default)))
+    (declaration (id (node (document "memory://snapshot/classes.md") (path (named (kind package) (name "Classes")) (named (kind kerml-structure) (name "C")) (named (kind default-reference) (name "y")) (anonymous (kind kerml-multiplicity-range) (ordinal 0)) (anonymous (kind kerml-literal-integer) (ordinal 0))))) (kind kerml-literal-integer) (membership (kind owning) (visibility default)) (facts (expression-result (node (document "memory://snapshot/classes.md") (path (named (kind package) (name "Classes")) (named (kind kerml-structure) (name "C")) (named (kind default-reference) (name "y")) (anonymous (kind kerml-multiplicity-range) (ordinal 0)) (anonymous (kind kerml-literal-integer) (ordinal 0)) (anonymous (kind kerml-feature) (ordinal 0)))))))
+    (declaration (id (node (document "memory://snapshot/classes.md") (path (named (kind package) (name "Classes")) (named (kind kerml-structure) (name "C")) (named (kind default-reference) (name "y")) (anonymous (kind kerml-multiplicity-range) (ordinal 0)) (anonymous (kind kerml-literal-infinity) (ordinal 0))))) (kind kerml-literal-infinity) (membership (kind owning) (visibility default)) (facts (expression-result (node (document "memory://snapshot/classes.md") (path (named (kind package) (name "Classes")) (named (kind kerml-structure) (name "C")) (named (kind default-reference) (name "y")) (anonymous (kind kerml-multiplicity-range) (ordinal 0)) (anonymous (kind kerml-literal-infinity) (ordinal 0)) (anonymous (kind kerml-feature) (ordinal 0)))))))
+    (declaration (id (node (document "memory://snapshot/classes.md") (path (named (kind package) (name "Classes")) (named (kind kerml-structure) (name "C")) (named (kind default-reference) (name "y")) (anonymous (kind kerml-multiplicity-range) (ordinal 0)) (anonymous (kind kerml-literal-integer) (ordinal 0)) (anonymous (kind kerml-feature) (ordinal 0))))) (kind kerml-feature) (membership (kind feature) (visibility default)) (facts (direction out)))
+    (declaration (id (node (document "memory://snapshot/classes.md") (path (named (kind package) (name "Classes")) (named (kind kerml-structure) (name "C")) (named (kind default-reference) (name "y")) (anonymous (kind kerml-multiplicity-range) (ordinal 0)) (anonymous (kind kerml-literal-infinity) (ordinal 0)) (anonymous (kind kerml-feature) (ordinal 0))))) (kind kerml-feature) (membership (kind feature) (visibility default)) (facts (direction out)))
+    (declaration (id (node (document "memory://snapshot/classes.md") (qualified-name "Classes::C::z"))) (kind alias) (membership (kind alias) (visibility default)) (authored (membership (kind alias) (visibility default)) (relationships (aliasBinding (reference "y")))))
     (declaration (id (node (document "memory://snapshot/classes.md") (qualified-name "Classes::f"))) (kind kerml-feature) (membership (kind feature) (visibility default)) (authored (membership (kind feature) (visibility default)) (relationships (featureTyping (reference "A")))))
   )
   (references
-    (reference (id (source (node (document "memory://snapshot/classes.md") (qualified-name "Classes::A"))) (kind expressionOperand) (ordinal 0))
-      (authored-target "protected")
-      (outcome (status unresolved)))
     (reference (id (source (node (document "memory://snapshot/classes.md") (qualified-name "Classes::A::b"))) (kind featureTyping) (ordinal 0))
       (authored-target "B")
       (outcome (status resolved) (target (node (document "memory://snapshot/classes.md") (qualified-name "Classes::B")))))
@@ -131,6 +122,9 @@ package Classes {
     (reference (id (source (node (document "memory://snapshot/classes.md") (qualified-name "Classes::C::y"))) (kind featureTyping) (ordinal 1))
       (authored-target "2")
       (outcome (status resolved) (target (node (document "memory://snapshot/classes.md") (qualified-name "Classes::B")))))
+    (reference (id (source (node (document "memory://snapshot/classes.md") (qualified-name "Classes::C::z"))) (kind aliasBinding) (ordinal 0))
+      (authored-target "y")
+      (outcome (status resolved) (target (node (document "memory://snapshot/classes.md") (qualified-name "Classes::C::y")))))
     (reference (id (source (node (document "memory://snapshot/classes.md") (qualified-name "Classes::f"))) (kind featureTyping) (ordinal 0))
       (authored-target "A")
       (outcome (status resolved) (target (node (document "memory://snapshot/classes.md") (qualified-name "Classes::A")))))
@@ -150,6 +144,7 @@ package Classes {
     (relationship (kind typing) (source (node (document "memory://snapshot/classes.md") (qualified-name "Classes::C::c::cc"))) (target (node (document "memory://snapshot/classes.md") (qualified-name "Classes::C"))) (provenance authored) (authored-reference (source (node (document "memory://snapshot/classes.md") (qualified-name "Classes::C::c::cc"))) (kind featureTyping) (ordinal 0)))
     (relationship (kind typing) (source (node (document "memory://snapshot/classes.md") (qualified-name "Classes::C::y"))) (target (node (document "memory://snapshot/classes.md") (qualified-name "Classes::A"))) (provenance authored) (authored-reference (source (node (document "memory://snapshot/classes.md") (qualified-name "Classes::C::y"))) (kind featureTyping) (ordinal 0)))
     (relationship (kind typing) (source (node (document "memory://snapshot/classes.md") (qualified-name "Classes::C::y"))) (target (node (document "memory://snapshot/classes.md") (qualified-name "Classes::B"))) (provenance authored) (authored-reference (source (node (document "memory://snapshot/classes.md") (qualified-name "Classes::C::y"))) (kind featureTyping) (ordinal 1)))
+    (relationship (kind aliasBinding) (source (node (document "memory://snapshot/classes.md") (qualified-name "Classes::C::z"))) (target (node (document "memory://snapshot/classes.md") (qualified-name "Classes::C::y"))) (provenance authored) (authored-reference (source (node (document "memory://snapshot/classes.md") (qualified-name "Classes::C::z"))) (kind aliasBinding) (ordinal 0)))
     (relationship (kind typing) (source (node (document "memory://snapshot/classes.md") (qualified-name "Classes::f"))) (target (node (document "memory://snapshot/classes.md") (qualified-name "Classes::A"))) (provenance authored) (authored-reference (source (node (document "memory://snapshot/classes.md") (qualified-name "Classes::f"))) (kind featureTyping) (ordinal 0)))
     (relationship (kind typeFeaturing) (source (node (document "memory://snapshot/classes.md") (qualified-name "Classes::A::b"))) (target (node (document "memory://snapshot/classes.md") (qualified-name "Classes::A"))) (provenance implied))
     (relationship (kind typeFeaturing) (source (node (document "memory://snapshot/classes.md") (qualified-name "Classes::A::c"))) (target (node (document "memory://snapshot/classes.md") (qualified-name "Classes::A"))) (provenance implied))
@@ -164,9 +159,13 @@ package Classes {
     (relationship (kind typeFeaturing) (source (node (document "memory://snapshot/classes.md") (qualified-name "Classes::C::c"))) (target (node (document "memory://snapshot/classes.md") (qualified-name "Classes::C"))) (provenance implied))
     (relationship (kind typeFeaturing) (source (node (document "memory://snapshot/classes.md") (qualified-name "Classes::C::c::cc"))) (target (node (document "memory://snapshot/classes.md") (qualified-name "Classes::C::c"))) (provenance implied))
     (relationship (kind typeFeaturing) (source (node (document "memory://snapshot/classes.md") (qualified-name "Classes::C::y"))) (target (node (document "memory://snapshot/classes.md") (qualified-name "Classes::C"))) (provenance implied))
+    (relationship (kind typeFeaturing) (source (node (document "memory://snapshot/classes.md") (path (named (kind package) (name "Classes")) (named (kind kerml-structure) (name "C")) (named (kind default-reference) (name "y")) (anonymous (kind kerml-multiplicity-range) (ordinal 0))))) (target (node (document "memory://snapshot/classes.md") (qualified-name "Classes::C"))) (provenance implied))
+    (relationship (kind typeFeaturing) (source (node (document "memory://snapshot/classes.md") (path (named (kind package) (name "Classes")) (named (kind kerml-structure) (name "C")) (named (kind default-reference) (name "y")) (anonymous (kind kerml-multiplicity-range) (ordinal 0)) (anonymous (kind kerml-literal-integer) (ordinal 0))))) (target (node (document "memory://snapshot/classes.md") (qualified-name "Classes::C"))) (provenance implied))
+    (relationship (kind typeFeaturing) (source (node (document "memory://snapshot/classes.md") (path (named (kind package) (name "Classes")) (named (kind kerml-structure) (name "C")) (named (kind default-reference) (name "y")) (anonymous (kind kerml-multiplicity-range) (ordinal 0)) (anonymous (kind kerml-literal-infinity) (ordinal 0))))) (target (node (document "memory://snapshot/classes.md") (qualified-name "Classes::C"))) (provenance implied))
+    (relationship (kind typeFeaturing) (source (node (document "memory://snapshot/classes.md") (path (named (kind package) (name "Classes")) (named (kind kerml-structure) (name "C")) (named (kind default-reference) (name "y")) (anonymous (kind kerml-multiplicity-range) (ordinal 0)) (anonymous (kind kerml-literal-integer) (ordinal 0)) (anonymous (kind kerml-feature) (ordinal 0))))) (target (node (document "memory://snapshot/classes.md") (path (named (kind package) (name "Classes")) (named (kind kerml-structure) (name "C")) (named (kind default-reference) (name "y")) (anonymous (kind kerml-multiplicity-range) (ordinal 0)) (anonymous (kind kerml-literal-integer) (ordinal 0))))) (provenance implied))
+    (relationship (kind typeFeaturing) (source (node (document "memory://snapshot/classes.md") (path (named (kind package) (name "Classes")) (named (kind kerml-structure) (name "C")) (named (kind default-reference) (name "y")) (anonymous (kind kerml-multiplicity-range) (ordinal 0)) (anonymous (kind kerml-literal-infinity) (ordinal 0)) (anonymous (kind kerml-feature) (ordinal 0))))) (target (node (document "memory://snapshot/classes.md") (path (named (kind package) (name "Classes")) (named (kind kerml-structure) (name "C")) (named (kind default-reference) (name "y")) (anonymous (kind kerml-multiplicity-range) (ordinal 0)) (anonymous (kind kerml-literal-infinity) (ordinal 0))))) (provenance implied))
   )
   (evaluation
-    (evaluated (declaration (node (document "memory://snapshot/classes.md") (qualified-name "Classes::A"))) (state unresolved-operand))
   )
 )
 ~~~
@@ -276,6 +275,21 @@ package Classes {
       (supertype (node (document "memory://snapshot/classes.md") (qualified-name "Classes::A")) (scopes any))
       (supertype (node (document "memory://snapshot/classes.md") (qualified-name "Classes::B")) (scopes any))
     )
+    (declaration (id (node (document "memory://snapshot/classes.md") (path (named (kind package) (name "Classes")) (named (kind kerml-structure) (name "C")) (named (kind default-reference) (name "y")) (anonymous (kind kerml-multiplicity-range) (ordinal 0)))))
+      (featured-by (node (document "memory://snapshot/classes.md") (qualified-name "Classes::C")))
+    )
+    (declaration (id (node (document "memory://snapshot/classes.md") (path (named (kind package) (name "Classes")) (named (kind kerml-structure) (name "C")) (named (kind default-reference) (name "y")) (anonymous (kind kerml-multiplicity-range) (ordinal 0)) (anonymous (kind kerml-literal-integer) (ordinal 0)))))
+      (featured-by (node (document "memory://snapshot/classes.md") (qualified-name "Classes::C")))
+    )
+    (declaration (id (node (document "memory://snapshot/classes.md") (path (named (kind package) (name "Classes")) (named (kind kerml-structure) (name "C")) (named (kind default-reference) (name "y")) (anonymous (kind kerml-multiplicity-range) (ordinal 0)) (anonymous (kind kerml-literal-infinity) (ordinal 0)))))
+      (featured-by (node (document "memory://snapshot/classes.md") (qualified-name "Classes::C")))
+    )
+    (declaration (id (node (document "memory://snapshot/classes.md") (path (named (kind package) (name "Classes")) (named (kind kerml-structure) (name "C")) (named (kind default-reference) (name "y")) (anonymous (kind kerml-multiplicity-range) (ordinal 0)) (anonymous (kind kerml-literal-integer) (ordinal 0)) (anonymous (kind kerml-feature) (ordinal 0)))))
+      (featured-by (node (document "memory://snapshot/classes.md") (path (named (kind package) (name "Classes")) (named (kind kerml-structure) (name "C")) (named (kind default-reference) (name "y")) (anonymous (kind kerml-multiplicity-range) (ordinal 0)) (anonymous (kind kerml-literal-integer) (ordinal 0)))))
+    )
+    (declaration (id (node (document "memory://snapshot/classes.md") (path (named (kind package) (name "Classes")) (named (kind kerml-structure) (name "C")) (named (kind default-reference) (name "y")) (anonymous (kind kerml-multiplicity-range) (ordinal 0)) (anonymous (kind kerml-literal-infinity) (ordinal 0)) (anonymous (kind kerml-feature) (ordinal 0)))))
+      (featured-by (node (document "memory://snapshot/classes.md") (path (named (kind package) (name "Classes")) (named (kind kerml-structure) (name "C")) (named (kind default-reference) (name "y")) (anonymous (kind kerml-multiplicity-range) (ordinal 0)) (anonymous (kind kerml-literal-infinity) (ordinal 0)))))
+    )
     (declaration (id (node (document "memory://snapshot/classes.md") (qualified-name "Classes::f")))
       (type (node (document "memory://snapshot/classes.md") (qualified-name "Classes::A")) (provenance authored))
       (effective-type (node (document "memory://snapshot/classes.md") (qualified-name "Classes::A")) (source direct))
@@ -283,14 +297,14 @@ package Classes {
     )
 )
 ~~~
+# EXPRESSIONS
+~~~sexpr
+(expressions
+)
+~~~
 # NAVIGATION
 ~~~sexpr
 (navigation
-  (query (document "memory://snapshot/classes.md") (range (start 6 2) (end 6 11)) (probe (position 6 2))
-    (reference (id (source (node (document "memory://snapshot/classes.md") (qualified-name "Classes::A"))) (kind expressionOperand) (ordinal 0) (authored-target "protected")
-      (outcome (status unresolved)))
-    )
-  )
   (query (document "memory://snapshot/classes.md") (range (start 5 13) (end 5 14)) (probe (position 5 13))
     (reference (id (source (node (document "memory://snapshot/classes.md") (qualified-name "Classes::A::b"))) (kind featureTyping) (ordinal 0) (authored-target "B")
       (outcome (status resolved) (target (node (document "memory://snapshot/classes.md") (qualified-name "Classes::B")))))
@@ -359,6 +373,11 @@ package Classes {
   (query (document "memory://snapshot/classes.md") (range (start 25 16) (end 25 19)) (probe (position 25 16))
     (reference (id (source (node (document "memory://snapshot/classes.md") (qualified-name "Classes::C::y"))) (kind featureTyping) (ordinal 1) (authored-target "2")
       (outcome (status resolved) (target (node (document "memory://snapshot/classes.md") (qualified-name "Classes::B")))))
+    )
+  )
+  (query (document "memory://snapshot/classes.md") (range (start 26 14) (end 26 15)) (probe (position 26 14))
+    (reference (id (source (node (document "memory://snapshot/classes.md") (qualified-name "Classes::C::z"))) (kind aliasBinding) (ordinal 0) (authored-target "y")
+      (outcome (status resolved) (target (node (document "memory://snapshot/classes.md") (qualified-name "Classes::C::y")))))
     )
   )
   (query (document "memory://snapshot/classes.md") (range (start 2 12) (end 2 13)) (probe (position 2 12))

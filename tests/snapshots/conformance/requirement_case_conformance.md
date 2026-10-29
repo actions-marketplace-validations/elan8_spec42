@@ -22,13 +22,13 @@ package RequirementsAndCases {
     }
 
     requirement def TwoSubjects {
-        subject first : Vehicle;
+        subject 'first' : Vehicle;
         subject second : Vehicle;
     }
 
     requirement def SubjectAfterActor {
         actor operator : Vehicle;
-        subject item : Vehicle;
+        subject 'item' : Vehicle;
     }
 
     use case def ConformingInclude {
@@ -77,7 +77,7 @@ package RequirementsAndCases {
         (related-information
           (related
             (uri "memory://snapshot/requirement_case_conformance.md")
-            (range (start 17 8) (end 17 32))
+            (range (start 17 8) (end 17 34))
           )
         )
       )
@@ -85,7 +85,7 @@ package RequirementsAndCases {
         (severity warning)
         (code "subject_member_not_first")
         (source "semantic")
-        (range (start 23 8) (end 23 31))
+        (range (start 23 8) (end 23 33))
         (related-information
           (related
             (uri "memory://snapshot/requirement_case_conformance.md")
@@ -124,7 +124,7 @@ package RequirementsAndCases {
 # SMG
 ~~~sexpr
 (semantic-model
-  (publication (phase resolved) (completeness complete) (has-evaluation false) (source-digest "blake3:74bfdfd058c9fe8f199d83bd3c095fb9c01bf34b5bc53cb977632e5a9c2e9486"))
+  (publication (phase resolved) (completeness complete) (has-evaluation false) (source-digest "blake3:4fb492baf48f1a7cd1b077daaae2f8b3d6481b8467575eb1feb20f09f485e24c"))
   (declarations
     (declaration (id (node (document "memory://snapshot/requirement_case_conformance.md") (qualified-name "RequirementsAndCases"))) (kind package) (membership (kind owning) (visibility default)))
     (declaration (id (node (document "memory://snapshot/requirement_case_conformance.md") (qualified-name "RequirementsAndCases::ConformingInclude"))) (kind use-case-def) (membership (kind owning) (visibility default)) (authored (membership (kind owning) (visibility default)) (relationships (includeUseCase (reference "drive")))))
@@ -143,11 +143,11 @@ package RequirementsAndCases {
     (declaration (id (node (document "memory://snapshot/requirement_case_conformance.md") (qualified-name "RequirementsAndCases::TwoSubjects::second"))) (kind subject) (membership (kind feature) (visibility default)) (authored (membership (kind feature) (visibility default)) (relationships (featureTyping (reference "Vehicle")))))
     (declaration (id (node (document "memory://snapshot/requirement_case_conformance.md") (qualified-name "RequirementsAndCases::Vehicle"))) (kind part-def) (membership (kind owning) (visibility default)))
     (declaration (id (node (document "memory://snapshot/requirement_case_conformance.md") (qualified-name "RequirementsAndCases::VerifiesARequirement"))) (kind verification-def) (membership (kind owning) (visibility default)))
-    (declaration (id (node (document "memory://snapshot/requirement_case_conformance.md") (qualified-name "RequirementsAndCases::VerifiesARequirement::objective"))) (kind requirement) (membership (kind feature) (visibility default)))
-    (declaration (id (node (document "memory://snapshot/requirement_case_conformance.md") (path (named (kind package) (name "RequirementsAndCases")) (named (kind verification-def) (name "VerifiesARequirement")) (named (kind requirement) (name "objective")) (anonymous (kind verify-requirement) (ordinal 0))))) (kind verify-requirement) (membership (kind feature) (visibility default)) (authored (membership (kind feature) (visibility default)) (relationships (verifyRequirementTarget (reference "limit")))))
+    (declaration (id (node (document "memory://snapshot/requirement_case_conformance.md") (qualified-name "RequirementsAndCases::VerifiesARequirement::objective"))) (kind objective-requirement) (membership (kind feature) (visibility default)))
+    (declaration (id (node (document "memory://snapshot/requirement_case_conformance.md") (path (named (kind package) (name "RequirementsAndCases")) (named (kind verification-def) (name "VerifiesARequirement")) (named (kind objective-requirement) (name "objective")) (anonymous (kind verify-requirement) (ordinal 0))))) (kind verify-requirement) (membership (kind feature) (visibility default)) (authored (membership (kind feature) (visibility default)) (relationships (verifyRequirementTarget (reference "limit")))))
     (declaration (id (node (document "memory://snapshot/requirement_case_conformance.md") (qualified-name "RequirementsAndCases::VerifiesSomethingThatIsNotARequirement"))) (kind verification-def) (membership (kind owning) (visibility default)))
-    (declaration (id (node (document "memory://snapshot/requirement_case_conformance.md") (qualified-name "RequirementsAndCases::VerifiesSomethingThatIsNotARequirement::objective"))) (kind requirement) (membership (kind feature) (visibility default)))
-    (declaration (id (node (document "memory://snapshot/requirement_case_conformance.md") (path (named (kind package) (name "RequirementsAndCases")) (named (kind verification-def) (name "VerifiesSomethingThatIsNotARequirement")) (named (kind requirement) (name "objective")) (anonymous (kind verify-requirement) (ordinal 0))))) (kind verify-requirement) (membership (kind feature) (visibility default)) (authored (membership (kind feature) (visibility default)) (relationships (verifyRequirementTarget (reference "vehicle")))))
+    (declaration (id (node (document "memory://snapshot/requirement_case_conformance.md") (qualified-name "RequirementsAndCases::VerifiesSomethingThatIsNotARequirement::objective"))) (kind objective-requirement) (membership (kind feature) (visibility default)))
+    (declaration (id (node (document "memory://snapshot/requirement_case_conformance.md") (path (named (kind package) (name "RequirementsAndCases")) (named (kind verification-def) (name "VerifiesSomethingThatIsNotARequirement")) (named (kind objective-requirement) (name "objective")) (anonymous (kind verify-requirement) (ordinal 0))))) (kind verify-requirement) (membership (kind feature) (visibility default)) (authored (membership (kind feature) (visibility default)) (relationships (verifyRequirementTarget (reference "vehicle")))))
     (declaration (id (node (document "memory://snapshot/requirement_case_conformance.md") (qualified-name "RequirementsAndCases::drive"))) (kind use-case) (membership (kind feature) (visibility default)) (authored (membership (kind feature) (visibility default)) (relationships (featureTyping (reference "Drive")))))
     (declaration (id (node (document "memory://snapshot/requirement_case_conformance.md") (qualified-name "RequirementsAndCases::limit"))) (kind requirement) (membership (kind feature) (visibility default)) (authored (membership (kind feature) (visibility default)) (relationships (featureTyping (reference "Limit")))))
     (declaration (id (node (document "memory://snapshot/requirement_case_conformance.md") (qualified-name "RequirementsAndCases::vehicle"))) (kind part) (membership (kind feature) (visibility default)) (authored (membership (kind feature) (visibility default)) (relationships (featureTyping (reference "Vehicle")))))
@@ -177,10 +177,10 @@ package RequirementsAndCases {
     (reference (id (source (node (document "memory://snapshot/requirement_case_conformance.md") (qualified-name "RequirementsAndCases::TwoSubjects::second"))) (kind featureTyping) (ordinal 0))
       (authored-target "Vehicle")
       (outcome (status resolved) (target (node (document "memory://snapshot/requirement_case_conformance.md") (qualified-name "RequirementsAndCases::Vehicle")))))
-    (reference (id (source (node (document "memory://snapshot/requirement_case_conformance.md") (path (named (kind package) (name "RequirementsAndCases")) (named (kind verification-def) (name "VerifiesARequirement")) (named (kind requirement) (name "objective")) (anonymous (kind verify-requirement) (ordinal 0))))) (kind verifyRequirementTarget) (ordinal 0))
+    (reference (id (source (node (document "memory://snapshot/requirement_case_conformance.md") (path (named (kind package) (name "RequirementsAndCases")) (named (kind verification-def) (name "VerifiesARequirement")) (named (kind objective-requirement) (name "objective")) (anonymous (kind verify-requirement) (ordinal 0))))) (kind verifyRequirementTarget) (ordinal 0))
       (authored-target "limit")
       (outcome (status resolved) (target (node (document "memory://snapshot/requirement_case_conformance.md") (qualified-name "RequirementsAndCases::limit")))))
-    (reference (id (source (node (document "memory://snapshot/requirement_case_conformance.md") (path (named (kind package) (name "RequirementsAndCases")) (named (kind verification-def) (name "VerifiesSomethingThatIsNotARequirement")) (named (kind requirement) (name "objective")) (anonymous (kind verify-requirement) (ordinal 0))))) (kind verifyRequirementTarget) (ordinal 0))
+    (reference (id (source (node (document "memory://snapshot/requirement_case_conformance.md") (path (named (kind package) (name "RequirementsAndCases")) (named (kind verification-def) (name "VerifiesSomethingThatIsNotARequirement")) (named (kind objective-requirement) (name "objective")) (anonymous (kind verify-requirement) (ordinal 0))))) (kind verifyRequirementTarget) (ordinal 0))
       (authored-target "vehicle")
       (outcome (status resolved) (target (node (document "memory://snapshot/requirement_case_conformance.md") (qualified-name "RequirementsAndCases::vehicle")))))
     (reference (id (source (node (document "memory://snapshot/requirement_case_conformance.md") (qualified-name "RequirementsAndCases::drive"))) (kind featureTyping) (ordinal 0))
@@ -202,8 +202,8 @@ package RequirementsAndCases {
     (relationship (kind typing) (source (node (document "memory://snapshot/requirement_case_conformance.md") (qualified-name "RequirementsAndCases::SubjectAfterActor::operator"))) (target (node (document "memory://snapshot/requirement_case_conformance.md") (qualified-name "RequirementsAndCases::Vehicle"))) (provenance authored) (authored-reference (source (node (document "memory://snapshot/requirement_case_conformance.md") (qualified-name "RequirementsAndCases::SubjectAfterActor::operator"))) (kind featureTyping) (ordinal 0)))
     (relationship (kind typing) (source (node (document "memory://snapshot/requirement_case_conformance.md") (qualified-name "RequirementsAndCases::TwoSubjects::first"))) (target (node (document "memory://snapshot/requirement_case_conformance.md") (qualified-name "RequirementsAndCases::Vehicle"))) (provenance authored) (authored-reference (source (node (document "memory://snapshot/requirement_case_conformance.md") (qualified-name "RequirementsAndCases::TwoSubjects::first"))) (kind featureTyping) (ordinal 0)))
     (relationship (kind typing) (source (node (document "memory://snapshot/requirement_case_conformance.md") (qualified-name "RequirementsAndCases::TwoSubjects::second"))) (target (node (document "memory://snapshot/requirement_case_conformance.md") (qualified-name "RequirementsAndCases::Vehicle"))) (provenance authored) (authored-reference (source (node (document "memory://snapshot/requirement_case_conformance.md") (qualified-name "RequirementsAndCases::TwoSubjects::second"))) (kind featureTyping) (ordinal 0)))
-    (relationship (kind verifyRequirementTarget) (source (node (document "memory://snapshot/requirement_case_conformance.md") (path (named (kind package) (name "RequirementsAndCases")) (named (kind verification-def) (name "VerifiesARequirement")) (named (kind requirement) (name "objective")) (anonymous (kind verify-requirement) (ordinal 0))))) (target (node (document "memory://snapshot/requirement_case_conformance.md") (qualified-name "RequirementsAndCases::limit"))) (provenance authored) (authored-reference (source (node (document "memory://snapshot/requirement_case_conformance.md") (path (named (kind package) (name "RequirementsAndCases")) (named (kind verification-def) (name "VerifiesARequirement")) (named (kind requirement) (name "objective")) (anonymous (kind verify-requirement) (ordinal 0))))) (kind verifyRequirementTarget) (ordinal 0)))
-    (relationship (kind verifyRequirementTarget) (source (node (document "memory://snapshot/requirement_case_conformance.md") (path (named (kind package) (name "RequirementsAndCases")) (named (kind verification-def) (name "VerifiesSomethingThatIsNotARequirement")) (named (kind requirement) (name "objective")) (anonymous (kind verify-requirement) (ordinal 0))))) (target (node (document "memory://snapshot/requirement_case_conformance.md") (qualified-name "RequirementsAndCases::vehicle"))) (provenance authored) (authored-reference (source (node (document "memory://snapshot/requirement_case_conformance.md") (path (named (kind package) (name "RequirementsAndCases")) (named (kind verification-def) (name "VerifiesSomethingThatIsNotARequirement")) (named (kind requirement) (name "objective")) (anonymous (kind verify-requirement) (ordinal 0))))) (kind verifyRequirementTarget) (ordinal 0)))
+    (relationship (kind verifyRequirementTarget) (source (node (document "memory://snapshot/requirement_case_conformance.md") (path (named (kind package) (name "RequirementsAndCases")) (named (kind verification-def) (name "VerifiesARequirement")) (named (kind objective-requirement) (name "objective")) (anonymous (kind verify-requirement) (ordinal 0))))) (target (node (document "memory://snapshot/requirement_case_conformance.md") (qualified-name "RequirementsAndCases::limit"))) (provenance authored) (authored-reference (source (node (document "memory://snapshot/requirement_case_conformance.md") (path (named (kind package) (name "RequirementsAndCases")) (named (kind verification-def) (name "VerifiesARequirement")) (named (kind objective-requirement) (name "objective")) (anonymous (kind verify-requirement) (ordinal 0))))) (kind verifyRequirementTarget) (ordinal 0)))
+    (relationship (kind verifyRequirementTarget) (source (node (document "memory://snapshot/requirement_case_conformance.md") (path (named (kind package) (name "RequirementsAndCases")) (named (kind verification-def) (name "VerifiesSomethingThatIsNotARequirement")) (named (kind objective-requirement) (name "objective")) (anonymous (kind verify-requirement) (ordinal 0))))) (target (node (document "memory://snapshot/requirement_case_conformance.md") (qualified-name "RequirementsAndCases::vehicle"))) (provenance authored) (authored-reference (source (node (document "memory://snapshot/requirement_case_conformance.md") (path (named (kind package) (name "RequirementsAndCases")) (named (kind verification-def) (name "VerifiesSomethingThatIsNotARequirement")) (named (kind objective-requirement) (name "objective")) (anonymous (kind verify-requirement) (ordinal 0))))) (kind verifyRequirementTarget) (ordinal 0)))
     (relationship (kind typing) (source (node (document "memory://snapshot/requirement_case_conformance.md") (qualified-name "RequirementsAndCases::drive"))) (target (node (document "memory://snapshot/requirement_case_conformance.md") (qualified-name "RequirementsAndCases::Drive"))) (provenance authored) (authored-reference (source (node (document "memory://snapshot/requirement_case_conformance.md") (qualified-name "RequirementsAndCases::drive"))) (kind featureTyping) (ordinal 0)))
     (relationship (kind typing) (source (node (document "memory://snapshot/requirement_case_conformance.md") (qualified-name "RequirementsAndCases::limit"))) (target (node (document "memory://snapshot/requirement_case_conformance.md") (qualified-name "RequirementsAndCases::Limit"))) (provenance authored) (authored-reference (source (node (document "memory://snapshot/requirement_case_conformance.md") (qualified-name "RequirementsAndCases::limit"))) (kind featureTyping) (ordinal 0)))
     (relationship (kind typing) (source (node (document "memory://snapshot/requirement_case_conformance.md") (qualified-name "RequirementsAndCases::vehicle"))) (target (node (document "memory://snapshot/requirement_case_conformance.md") (qualified-name "RequirementsAndCases::Vehicle"))) (provenance authored) (authored-reference (source (node (document "memory://snapshot/requirement_case_conformance.md") (qualified-name "RequirementsAndCases::vehicle"))) (kind featureTyping) (ordinal 0)))
@@ -214,9 +214,9 @@ package RequirementsAndCases {
     (relationship (kind typeFeaturing) (source (node (document "memory://snapshot/requirement_case_conformance.md") (qualified-name "RequirementsAndCases::TwoSubjects::first"))) (target (node (document "memory://snapshot/requirement_case_conformance.md") (qualified-name "RequirementsAndCases::TwoSubjects"))) (provenance implied))
     (relationship (kind typeFeaturing) (source (node (document "memory://snapshot/requirement_case_conformance.md") (qualified-name "RequirementsAndCases::TwoSubjects::second"))) (target (node (document "memory://snapshot/requirement_case_conformance.md") (qualified-name "RequirementsAndCases::TwoSubjects"))) (provenance implied))
     (relationship (kind typeFeaturing) (source (node (document "memory://snapshot/requirement_case_conformance.md") (qualified-name "RequirementsAndCases::VerifiesARequirement::objective"))) (target (node (document "memory://snapshot/requirement_case_conformance.md") (qualified-name "RequirementsAndCases::VerifiesARequirement"))) (provenance implied))
-    (relationship (kind typeFeaturing) (source (node (document "memory://snapshot/requirement_case_conformance.md") (path (named (kind package) (name "RequirementsAndCases")) (named (kind verification-def) (name "VerifiesARequirement")) (named (kind requirement) (name "objective")) (anonymous (kind verify-requirement) (ordinal 0))))) (target (node (document "memory://snapshot/requirement_case_conformance.md") (qualified-name "RequirementsAndCases::VerifiesARequirement::objective"))) (provenance implied))
+    (relationship (kind typeFeaturing) (source (node (document "memory://snapshot/requirement_case_conformance.md") (path (named (kind package) (name "RequirementsAndCases")) (named (kind verification-def) (name "VerifiesARequirement")) (named (kind objective-requirement) (name "objective")) (anonymous (kind verify-requirement) (ordinal 0))))) (target (node (document "memory://snapshot/requirement_case_conformance.md") (qualified-name "RequirementsAndCases::VerifiesARequirement::objective"))) (provenance implied))
     (relationship (kind typeFeaturing) (source (node (document "memory://snapshot/requirement_case_conformance.md") (qualified-name "RequirementsAndCases::VerifiesSomethingThatIsNotARequirement::objective"))) (target (node (document "memory://snapshot/requirement_case_conformance.md") (qualified-name "RequirementsAndCases::VerifiesSomethingThatIsNotARequirement"))) (provenance implied))
-    (relationship (kind typeFeaturing) (source (node (document "memory://snapshot/requirement_case_conformance.md") (path (named (kind package) (name "RequirementsAndCases")) (named (kind verification-def) (name "VerifiesSomethingThatIsNotARequirement")) (named (kind requirement) (name "objective")) (anonymous (kind verify-requirement) (ordinal 0))))) (target (node (document "memory://snapshot/requirement_case_conformance.md") (qualified-name "RequirementsAndCases::VerifiesSomethingThatIsNotARequirement::objective"))) (provenance implied))
+    (relationship (kind typeFeaturing) (source (node (document "memory://snapshot/requirement_case_conformance.md") (path (named (kind package) (name "RequirementsAndCases")) (named (kind verification-def) (name "VerifiesSomethingThatIsNotARequirement")) (named (kind objective-requirement) (name "objective")) (anonymous (kind verify-requirement) (ordinal 0))))) (target (node (document "memory://snapshot/requirement_case_conformance.md") (qualified-name "RequirementsAndCases::VerifiesSomethingThatIsNotARequirement::objective"))) (provenance implied))
   )
   (evaluation
   )
@@ -271,13 +271,13 @@ package RequirementsAndCases {
     (declaration (id (node (document "memory://snapshot/requirement_case_conformance.md") (qualified-name "RequirementsAndCases::VerifiesARequirement::objective")))
       (featured-by (node (document "memory://snapshot/requirement_case_conformance.md") (qualified-name "RequirementsAndCases::VerifiesARequirement")))
     )
-    (declaration (id (node (document "memory://snapshot/requirement_case_conformance.md") (path (named (kind package) (name "RequirementsAndCases")) (named (kind verification-def) (name "VerifiesARequirement")) (named (kind requirement) (name "objective")) (anonymous (kind verify-requirement) (ordinal 0)))))
+    (declaration (id (node (document "memory://snapshot/requirement_case_conformance.md") (path (named (kind package) (name "RequirementsAndCases")) (named (kind verification-def) (name "VerifiesARequirement")) (named (kind objective-requirement) (name "objective")) (anonymous (kind verify-requirement) (ordinal 0)))))
       (featured-by (node (document "memory://snapshot/requirement_case_conformance.md") (qualified-name "RequirementsAndCases::VerifiesARequirement::objective")))
     )
     (declaration (id (node (document "memory://snapshot/requirement_case_conformance.md") (qualified-name "RequirementsAndCases::VerifiesSomethingThatIsNotARequirement::objective")))
       (featured-by (node (document "memory://snapshot/requirement_case_conformance.md") (qualified-name "RequirementsAndCases::VerifiesSomethingThatIsNotARequirement")))
     )
-    (declaration (id (node (document "memory://snapshot/requirement_case_conformance.md") (path (named (kind package) (name "RequirementsAndCases")) (named (kind verification-def) (name "VerifiesSomethingThatIsNotARequirement")) (named (kind requirement) (name "objective")) (anonymous (kind verify-requirement) (ordinal 0)))))
+    (declaration (id (node (document "memory://snapshot/requirement_case_conformance.md") (path (named (kind package) (name "RequirementsAndCases")) (named (kind verification-def) (name "VerifiesSomethingThatIsNotARequirement")) (named (kind objective-requirement) (name "objective")) (anonymous (kind verify-requirement) (ordinal 0)))))
       (featured-by (node (document "memory://snapshot/requirement_case_conformance.md") (qualified-name "RequirementsAndCases::VerifiesSomethingThatIsNotARequirement::objective")))
     )
     (declaration (id (node (document "memory://snapshot/requirement_case_conformance.md") (qualified-name "RequirementsAndCases::drive")))
@@ -320,7 +320,7 @@ package RequirementsAndCases {
       (outcome (status resolved) (target (node (document "memory://snapshot/requirement_case_conformance.md") (qualified-name "RequirementsAndCases::vehicle")))))
     )
   )
-  (query (document "memory://snapshot/requirement_case_conformance.md") (range (start 23 23) (end 23 30)) (probe (position 23 23))
+  (query (document "memory://snapshot/requirement_case_conformance.md") (range (start 23 25) (end 23 32)) (probe (position 23 25))
     (reference (id (source (node (document "memory://snapshot/requirement_case_conformance.md") (qualified-name "RequirementsAndCases::SubjectAfterActor::item"))) (kind featureTyping) (ordinal 0) (authored-target "Vehicle")
       (outcome (status resolved) (target (node (document "memory://snapshot/requirement_case_conformance.md") (qualified-name "RequirementsAndCases::Vehicle")))))
     )
@@ -330,7 +330,7 @@ package RequirementsAndCases {
       (outcome (status resolved) (target (node (document "memory://snapshot/requirement_case_conformance.md") (qualified-name "RequirementsAndCases::Vehicle")))))
     )
   )
-  (query (document "memory://snapshot/requirement_case_conformance.md") (range (start 17 24) (end 17 31)) (probe (position 17 24))
+  (query (document "memory://snapshot/requirement_case_conformance.md") (range (start 17 26) (end 17 33)) (probe (position 17 26))
     (reference (id (source (node (document "memory://snapshot/requirement_case_conformance.md") (qualified-name "RequirementsAndCases::TwoSubjects::first"))) (kind featureTyping) (ordinal 0) (authored-target "Vehicle")
       (outcome (status resolved) (target (node (document "memory://snapshot/requirement_case_conformance.md") (qualified-name "RequirementsAndCases::Vehicle")))))
     )
@@ -341,12 +341,12 @@ package RequirementsAndCases {
     )
   )
   (query (document "memory://snapshot/requirement_case_conformance.md") (range (start 36 19) (end 36 24)) (probe (position 36 19))
-    (reference (id (source (node (document "memory://snapshot/requirement_case_conformance.md") (path (named (kind package) (name "RequirementsAndCases")) (named (kind verification-def) (name "VerifiesARequirement")) (named (kind requirement) (name "objective")) (anonymous (kind verify-requirement) (ordinal 0))))) (kind verifyRequirementTarget) (ordinal 0) (authored-target "limit")
+    (reference (id (source (node (document "memory://snapshot/requirement_case_conformance.md") (path (named (kind package) (name "RequirementsAndCases")) (named (kind verification-def) (name "VerifiesARequirement")) (named (kind objective-requirement) (name "objective")) (anonymous (kind verify-requirement) (ordinal 0))))) (kind verifyRequirementTarget) (ordinal 0) (authored-target "limit")
       (outcome (status resolved) (target (node (document "memory://snapshot/requirement_case_conformance.md") (qualified-name "RequirementsAndCases::limit")))))
     )
   )
   (query (document "memory://snapshot/requirement_case_conformance.md") (range (start 42 19) (end 42 26)) (probe (position 42 19))
-    (reference (id (source (node (document "memory://snapshot/requirement_case_conformance.md") (path (named (kind package) (name "RequirementsAndCases")) (named (kind verification-def) (name "VerifiesSomethingThatIsNotARequirement")) (named (kind requirement) (name "objective")) (anonymous (kind verify-requirement) (ordinal 0))))) (kind verifyRequirementTarget) (ordinal 0) (authored-target "vehicle")
+    (reference (id (source (node (document "memory://snapshot/requirement_case_conformance.md") (path (named (kind package) (name "RequirementsAndCases")) (named (kind verification-def) (name "VerifiesSomethingThatIsNotARequirement")) (named (kind objective-requirement) (name "objective")) (anonymous (kind verify-requirement) (ordinal 0))))) (kind verifyRequirementTarget) (ordinal 0) (authored-target "vehicle")
       (outcome (status resolved) (target (node (document "memory://snapshot/requirement_case_conformance.md") (qualified-name "RequirementsAndCases::vehicle")))))
     )
   )

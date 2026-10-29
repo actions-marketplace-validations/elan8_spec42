@@ -8,11 +8,12 @@
 use std::collections::HashSet;
 
 use sysml_v2_parser::ast::{
-    AttributeBody, AttributeBodyElement, AttributeDef, AttributeUsage, Import, ItemUsage,
-    LibraryPackage, MetadataBody, MetadataBodyElement, MetadataDef, MetadataUsage, Package,
-    PackageBody, PackageBodyElement, PartDef, PartDefBody, PartDefBodyElement, PartUsage,
-    PartUsageBody, PartUsageBodyElement, PortBody, PortBodyElement, PortDef, PortDefBody,
-    PortDefBodyElement, PortUsage, QualifiedIdentification, RefDecl, RootElement,
+    AttributeBody, AttributeBodyElement, AttributeDef, AttributeUsage, DefaultReferenceUsage,
+    Expression, Import, ItemUsage, LibraryPackage, MetadataBody, MetadataBodyElement, MetadataDef,
+    MetadataUsage, Package, PackageBody, PackageBodyElement, PartDef, PartDefBody,
+    PartDefBodyElement, PartUsage, PartUsageBody, PartUsageBodyElement, PortBody, PortBodyElement,
+    PortDef, PortDefBody, PortDefBodyElement, PortUsage, QualifiedIdentification, RefDecl,
+    RootElement, ViewBody, ViewBodyElement, ViewDef, ViewDefBody, ViewDefBodyElement, ViewUsage,
 };
 use sysml_v2_parser::{Node, ParsedDocument as ParsedRoot};
 
@@ -140,13 +141,33 @@ pub(crate) fn walk_package_body_element_type_refs(
         PackageBodyElement::MetadataUsage(metadata_usage) => {
             walk_metadata_usage_type_refs(document, &metadata_usage.value, out);
         }
+        PackageBodyElement::ViewDef(view) => walk_view_def_type_refs(document, &view.value, out),
         PackageBodyElement::ViewUsage(view) => {
-            push_optional_type_reference(
-                reference_text(document, view.value.type_name).as_deref(),
-                out,
-            );
+            walk_view_usage_type_refs(document, &view.value, out)
         }
         _ => {}
+    }
+}
+
+fn walk_view_def_type_refs(document: &ParsedRoot, view: &ViewDef, out: &mut RefSink) {
+    push_optional_typing_reference(document, view.specializes.as_deref(), out);
+    if let ViewDefBody::Brace { elements, .. } = &view.body {
+        for member in elements {
+            if let ViewDefBodyElement::ViewUsage(nested) = &member.value {
+                walk_view_usage_type_refs(document, &nested.value, out);
+            }
+        }
+    }
+}
+
+fn walk_view_usage_type_refs(document: &ParsedRoot, view: &ViewUsage, out: &mut RefSink) {
+    push_optional_typing_reference(document, view.typing.as_deref(), out);
+    if let ViewBody::Brace { elements, .. } = &view.body {
+        for member in elements {
+            if let ViewBodyElement::ViewUsage(nested) = &member.value {
+                walk_view_usage_type_refs(document, &nested.value, out);
+            }
+        }
     }
 }
 
@@ -195,18 +216,19 @@ pub(crate) fn walk_part_def_body_element_type_refs(
             walk_ref_decl_type_refs(document, &ref_decl.value, out)
         }
         PartDefBodyElement::ExhibitState(exhibit_state) => {
-            push_optional_type_reference(
-                typing_target_display(document, exhibit_state.value.typing.as_deref()).as_deref(),
-                out,
-            );
+            push_optional_typing_reference(document, exhibit_state.value.typing.as_deref(), out);
         }
         PartDefBodyElement::Connection(connection) => {
+            push_optional_typing_reference(document, connection.value.typing.as_deref(), out);
             push_optional_type_reference(
-                reference_text(document, connection.value.type_reference).as_deref(),
-                out,
-            );
-            push_optional_type_reference(
-                subsetting_target(document, connection.value.subsets.as_deref()),
+                subsetting_target(
+                    document,
+                    connection
+                        .value
+                        .subsets
+                        .as_ref()
+                        .map(|(relationship, _)| &relationship.value),
+                ),
                 out,
             );
             push_optional_type_reference(
@@ -223,10 +245,7 @@ pub(crate) fn walk_part_usage_type_refs(
     part_usage: &PartUsage,
     out: &mut RefSink,
 ) {
-    push_optional_type_reference(
-        typing_target_display(document, part_usage.typing.as_deref()).as_deref(),
-        out,
-    );
+    push_optional_typing_reference(document, part_usage.typing.as_deref(), out);
     push_optional_type_reference(
         subsetting_target(document, part_usage.redefines.as_deref()),
         out,
@@ -299,10 +318,7 @@ pub(crate) fn walk_port_usage_type_refs(
     port_usage: &PortUsage,
     out: &mut RefSink,
 ) {
-    push_optional_type_reference(
-        typing_target_display(document, port_usage.typing.as_deref()).as_deref(),
-        out,
-    );
+    push_optional_typing_reference(document, port_usage.typing.as_deref(), out);
     push_optional_type_reference(
         subsetting_target(document, port_usage.redefines.as_deref()),
         out,
@@ -336,6 +352,9 @@ pub(crate) fn walk_attribute_def_type_refs(
     out: &mut RefSink,
 ) {
     push_optional_typing_reference(document, attribute_def.typing.as_deref(), out);
+    if let Some(value) = attribute_def.value.as_deref() {
+        walk_expression_reference_targets(document, &value.expression, out);
+    }
     walk_attribute_body_type_refs(document, &attribute_def.body, out);
 }
 
@@ -363,6 +382,9 @@ pub(crate) fn walk_attribute_usage_type_refs(
         subsetting_target(document, attribute_usage.crosses.as_deref()),
         out,
     );
+    if let Some(value) = attribute_usage.value.as_deref() {
+        walk_expression_reference_targets(document, &value.expression, out);
+    }
     walk_attribute_body_type_refs(document, &attribute_usage.body, out);
 }
 
@@ -382,9 +404,35 @@ pub(crate) fn walk_attribute_body_type_refs(
             AttributeBodyElement::AttributeUsage(attribute_usage) => {
                 walk_attribute_usage_type_refs(document, &attribute_usage.value, out);
             }
+            AttributeBodyElement::DefaultReferenceUsage(usage) => {
+                walk_default_reference_usage_type_refs(document, &usage.value, out);
+            }
+            AttributeBodyElement::RefDecl(ref_decl) => {
+                walk_ref_decl_type_refs(document, &ref_decl.value, out);
+            }
             _ => {}
         }
     }
+}
+
+/// A keyword-less usage (`:> annotatedElement : SysML::RequirementUsage;`) names its types and
+/// value operands exactly as an `attribute` member does, so it seeds the same closure targets.
+pub(crate) fn walk_default_reference_usage_type_refs(
+    document: &ParsedRoot,
+    usage: &DefaultReferenceUsage,
+    out: &mut RefSink,
+) {
+    push_optional_typing_reference(document, usage.typing.as_deref(), out);
+    push_optional_type_reference(subsetting_target(document, usage.redefines.as_deref()), out);
+    push_optional_type_reference(
+        subsetting_target(document, usage.references.as_deref()),
+        out,
+    );
+    push_optional_type_reference(subsetting_target(document, usage.crosses.as_deref()), out);
+    if let Some(value) = usage.value.as_deref() {
+        walk_expression_reference_targets(document, &value.expression, out);
+    }
+    walk_attribute_body_type_refs(document, &usage.body, out);
 }
 
 pub(crate) fn walk_item_usage_type_refs(
@@ -392,10 +440,7 @@ pub(crate) fn walk_item_usage_type_refs(
     item_usage: &ItemUsage,
     out: &mut RefSink,
 ) {
-    push_optional_type_reference(
-        reference_text(document, item_usage.type_name).as_deref(),
-        out,
-    );
+    push_optional_typing_reference(document, item_usage.typing.as_deref(), out);
     walk_attribute_body_type_refs(document, &item_usage.body, out);
 }
 
@@ -404,10 +449,7 @@ pub(crate) fn walk_ref_decl_type_refs(
     ref_decl: &RefDecl,
     out: &mut RefSink,
 ) {
-    push_optional_type_reference(
-        typing_target_display(document, ref_decl.typing.as_deref()).as_deref(),
-        out,
-    );
+    push_optional_typing_reference(document, ref_decl.typing.as_deref(), out);
 }
 
 pub(crate) fn walk_metadata_def_type_refs(
@@ -425,7 +467,7 @@ pub(crate) fn walk_metadata_usage_type_refs(
     out: &mut RefSink,
 ) {
     push_optional_type_reference(
-        reference_text(document, metadata_usage.type_reference).as_deref(),
+        reference_text(document, Some(metadata_usage.type_reference)).as_deref(),
         out,
     );
     for target in &metadata_usage.about_targets {
@@ -460,8 +502,12 @@ fn push_optional_typing_reference(
     relationship: Option<&sysml_v2_parser::ast::TypingRelationship>,
     out: &mut RefSink,
 ) {
-    if let Some(target) = typing_target_display(document, relationship) {
-        push_type_reference(&target, out);
+    if let Some(relationship) = relationship {
+        for target in &relationship.target {
+            if let Some(text) = reference_text(document, Some(*target)) {
+                push_type_reference(&text, out);
+            }
+        }
     }
 }
 
@@ -730,6 +776,74 @@ pub struct PackageTargets {
     pub type_reference_targets: Vec<String>,
 }
 
+/// A value expression's qualified references: an invocation callee, a bare feature reference, or
+/// a member access -- so a library reachable only through a value expression still seeds the
+/// closure. `attribute conversionFactor = RationalFunctions::rat(1, 100);` names
+/// `RationalFunctions` in no typing clause and no import; without this walk its package is never
+/// admitted and the reference is `unresolved_reference` for a document that is, in fact, part of
+/// the model (spec42#129).
+///
+/// Not exhaustive of every [`Expression`] shape -- `_ => {}` covers the rest. A shape this walk
+/// does not descend into (`Index`/`Bracket` operands, `Select`/collection-operator bodies, ...)
+/// only costs a closure seed the reference's own import, if authored, still supplies; it is a
+/// discovery heuristic; resolution's own correctness never depends on it.
+pub(super) fn walk_expression_reference_targets(
+    document: &ParsedRoot,
+    expression: &Node<Expression>,
+    out: &mut RefSink,
+) {
+    match &expression.value {
+        Expression::FeatureRef(reference) => {
+            push_optional_type_reference(
+                reference_text(document, Some(*reference)).as_deref(),
+                out,
+            );
+        }
+        Expression::MemberAccess { base, member, .. } => {
+            walk_expression_reference_targets(document, base, out);
+            push_optional_type_reference(reference_text(document, Some(*member)).as_deref(), out);
+        }
+        Expression::Invocation { callee, args } => {
+            walk_expression_reference_targets(document, callee, out);
+            for argument in args {
+                walk_expression_reference_targets(document, &argument.value, out);
+            }
+        }
+        Expression::BinaryOp { left, right, .. } => {
+            walk_expression_reference_targets(document, left, out);
+            walk_expression_reference_targets(document, right, out);
+        }
+        Expression::UnaryOp { operand, .. } => {
+            walk_expression_reference_targets(document, operand, out);
+        }
+        Expression::Classification { metaclass } => {
+            push_optional_type_reference(
+                reference_text(document, Some(*metaclass)).as_deref(),
+                out,
+            );
+        }
+        Expression::MetaCast { base, metaclass } => {
+            walk_expression_reference_targets(document, base, out);
+            push_optional_type_reference(
+                reference_text(document, Some(*metaclass)).as_deref(),
+                out,
+            );
+        }
+        Expression::TypeCheck {
+            operand, type_name, ..
+        } => {
+            if let Some(operand) = operand {
+                walk_expression_reference_targets(document, operand, out);
+            }
+            push_optional_type_reference(
+                reference_text(document, Some(*type_name)).as_deref(),
+                out,
+            );
+        }
+        _ => {}
+    }
+}
+
 fn push_type_reference(target: &str, out: &mut RefSink) {
     let target = target.trim();
     if target.is_empty() || target.starts_with("checks meta ") {
@@ -761,6 +875,108 @@ mod tests {
                 .closure_facts()
                 .type_reference_targets,
             vec!["Domain::Wheel".to_string()]
+        );
+    }
+
+    #[test]
+    fn a_part_usage_with_multiple_typings_seeds_every_package() {
+        assert_eq!(
+            SyntaxAuthority::new()
+                .parse_text("package App { part w : Domain::Wheel, Other::Transport; }")
+                .closure_facts()
+                .type_reference_targets,
+            ["Domain::Wheel", "Other::Transport"]
+        );
+    }
+
+    #[test]
+    fn nested_view_typings_seed_every_authored_package() {
+        let parsed = SyntaxAuthority::new().parse_text(
+            "package App { view document : Domain::Document, Other::Document { \
+             view section : Domain::Section, Other::Section { \
+             view detail : Third::Detail; } } }",
+        );
+        assert!(parsed.is_clean(), "nested views should parse");
+        assert_eq!(
+            parsed.closure_facts().type_reference_targets,
+            [
+                "Domain::Document",
+                "Other::Document",
+                "Domain::Section",
+                "Other::Section",
+                "Third::Detail",
+            ]
+        );
+    }
+
+    #[test]
+    fn view_definition_specialization_and_nested_view_typings_seed_packages() {
+        let parsed = SyntaxAuthority::new().parse_text(
+            "package App { view def Document : Domain::Document { \
+             view section : Third::Section; } }",
+        );
+        assert!(parsed.is_clean(), "view definition should parse");
+        assert_eq!(
+            parsed.closure_facts().type_reference_targets,
+            ["Domain::Document", "Third::Section"]
+        );
+    }
+
+    /// spec42#129: `RationalFunctions::rat(1, 100)` names `RationalFunctions` in a value
+    /// expression, not a typing clause and not an import. Before this walk, a document reachable
+    /// only this way was never admitted and the reference was `unresolved_reference` for a
+    /// package that is, in fact, part of the model.
+    #[test]
+    fn an_invocation_callee_in_an_attribute_value_seeds_its_package() {
+        assert_eq!(
+            SyntaxAuthority::new()
+                .parse_text("package App { attribute x = RationalFunctions::rat(1, 100); }")
+                .closure_facts()
+                .type_reference_targets,
+            vec!["RationalFunctions::rat".to_string()]
+        );
+    }
+
+    /// The sibling case for a value expression that is a bare qualified reference, not an
+    /// invocation: `attribute x = Domain::defaultMass;`.
+    #[test]
+    fn a_bare_feature_reference_in_an_attribute_value_seeds_its_package() {
+        assert_eq!(
+            SyntaxAuthority::new()
+                .parse_text("package App { attribute x = Domain::defaultMass; }")
+                .closure_facts()
+                .type_reference_targets,
+            vec!["Domain::defaultMass".to_string()]
+        );
+    }
+
+    /// An `attribute def`'s own default value is walked the same way as a usage's.
+    #[test]
+    fn an_attribute_def_value_seeds_its_package() {
+        assert_eq!(
+            SyntaxAuthority::new()
+                .parse_text("package App { attribute def X = RationalFunctions::rat(1, 100); }")
+                .closure_facts()
+                .type_reference_targets,
+            vec!["RationalFunctions::rat".to_string()]
+        );
+    }
+
+    /// A qualified reference nested inside an invocation's arguments also seeds its package, not
+    /// only the callee itself.
+    #[test]
+    fn an_invocation_argument_seeds_its_package() {
+        assert_eq!(
+            SyntaxAuthority::new()
+                .parse_text(
+                    "package App { attribute x = RationalFunctions::rat(Domain::numer, 100); }"
+                )
+                .closure_facts()
+                .type_reference_targets,
+            vec![
+                "RationalFunctions::rat".to_string(),
+                "Domain::numer".to_string()
+            ]
         );
     }
 

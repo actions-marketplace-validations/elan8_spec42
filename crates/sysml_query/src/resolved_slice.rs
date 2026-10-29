@@ -3,33 +3,43 @@
 use std::fmt;
 
 use crate::source::Url;
+pub use sysml_resolution::{
+    published_relationship_kinds, ContextualExpressionOutcome, PublishedContextualExpression,
+};
 
 pub use sysml_resolution::{
     requirement_collection_from_kind, ActionDerivedFactCollection, ActionDerivedFactKind,
-    ActionDerivedFactOutcome, ActionDerivedFactPrerequisite, AffectedDocument, AnalysisEvaluation,
-    AnnotationForm, AuthoredUnit, AuthoredValue, BindingConnector, BindingConnectorCheckKind,
-    BindingConnectorValidationOutcome, BindingConnectorValidationPrerequisite, BuildMeasurements,
-    Conformance, ConformanceObstacle, ConnectedElement, DefinitionUsageDerivedKind,
-    DefinitionUsageDerivedOutcome, DefinitionUsageDerivedPrerequisite, DerivedElementOwner,
-    Diagnostic, DiagnosticCategory, DiagnosticCode, DiagnosticLocation, DiagnosticOrigin,
-    DiagnosticSeverity, DiagramCompartment, DiagramCompartmentKind, DiagramCompartmentProvenance,
+    ActionDerivedFactOutcome, ActionDerivedFactPrerequisite, AdmittedSourceCounts,
+    AffectedDocument, AnalysisEvaluation, AnnotationForm, AnonymousElementReference, AuthoredUnit,
+    AuthoredValue, BindingConnector, BindingConnectorCheckKind, BindingConnectorValidationOutcome,
+    BindingConnectorValidationPrerequisite, BuildMeasurements, Conformance, ConformanceObstacle,
+    ConnectedElement, ConnectorEndpoint, ConnectorKind, DefinitionUsageDerivedKind,
+    DefinitionUsageDerivedOutcome, DefinitionUsageDerivedPrerequisite, DerivationEndpoint,
+    DerivationRelationship, DerivedElementOwner, Diagnostic, DiagnosticCategory, DiagnosticCode,
+    DiagnosticLocation, DiagnosticOrigin, DiagnosticSeverity, DiagramBrowserMembers,
+    DiagramBrowserRow, DiagramCompartment, DiagramCompartmentKind, DiagramCompartmentProvenance,
     DiagramEdge, DiagramEdgeKind, DiagramElement, DiagramElementTyping, DiagramEndpointOccurrence,
-    DiagramIncompleteReason, DiagramOccurrenceIdentity, DiagramRelationship,
+    DiagramIncompleteReason, DiagramMembership, DiagramOccurrenceIdentity, DiagramRelationship,
     DiagramRelationshipEndpoint, DiagramRelationshipKind, DiagramRelationshipTarget, DiagramScene,
-    DiagramSemanticReference, DiagramSequenceEndpoint, DiagramSequenceMessage,
-    DiagramSequenceOrder, DiagramSequenceScene, DiagramStateTransition,
+    DiagramSemanticReference, DiagramSequenceCycleStep, DiagramSequenceEndpoint,
+    DiagramSequenceMessage, DiagramSequenceOrder, DiagramSequenceScene, DiagramStateTransition,
     DiagramStateTransitionScene, DiagramStateVertex, DiagramStateVertexKind,
-    DiagramTransitionFeature, DiagramViewCatalogEntry, DiagramViewKind, DiagramViewProjection,
-    DocumentId, DocumentToken, Documentation, EffectiveType, EffectiveTypeEntry,
-    EffectiveTypeOrigin, EffectiveTyping, ElementDerivedDocumentationCollection, ElementDetails,
-    ElementDetailsAt, ElementEvaluation, ElementInspection, ElementInspectionAt, ElementKind,
-    ElementModifier, ElementRelationship, ElementSearch, ElementSource, EvaluatedScalar,
-    EvaluationFailure, EvaluationState, ExpectedMeasurement, FeatureDerivedRelationshipCollection,
-    FeatureDirection, InheritedFeature, LibrarySpecializationAnchorBranch, MembershipFacts,
-    MembershipId, MembershipKind, MembershipRelationship, MembershipRole, MultiplicityBound,
-    MultiplicityFacts, NamespaceDerivedElementCollection, NamespaceImportDerivedElement,
-    NavigationTarget, OccurrenceRole, PortionKind, PublicationCompleteness, PublicationIdentity,
-    PublicationModelDigest, PublicationObstacle, PublishedDiagnostics, PublishedElement,
+    DiagramSuccessionGuard, DiagramTransitionFeature, DiagramViewCatalogEntry, DiagramViewKind,
+    DiagramViewProjection, DocumentId, DocumentToken, Documentation, EffectiveType,
+    EffectiveTypeEntry, EffectiveTypeOrigin, EffectiveTyping,
+    ElementDerivedDocumentationCollection, ElementDetails, ElementDetailsAt, ElementEvaluation,
+    ElementInspection, ElementInspectionAt, ElementKind, ElementModifier, ElementRelationship,
+    ElementSearch, ElementSource, EvaluatedScalar, EvaluationFailure, EvaluationState,
+    ExpectedMeasurement, ExpressionNode, ExpressionNodeKind, ExpressionOperator, ExpressionOutcome,
+    FeatureDerivedRelationshipCollection, FeatureDirection, InheritedFeature,
+    LibrarySpecializationAnchorBranch, MembershipFacts, MembershipId, MembershipKind,
+    MembershipRelationship, MembershipRole, MetadataAnnotationForm, MetadataAnnotationValue,
+    MultiplicityBound, MultiplicityFacts, NamespaceDerivedElementCollection,
+    NamespaceImportDerivedElement, NavigationTarget, OccurrenceRole, PortionKind, ProjectedElement,
+    ProjectionEnvelope, ProjectionPhase, ProjectionTruncation, PublicationCompleteness,
+    PublicationIdentity, PublicationModelDigest, PublicationObstacle, PublishedConnectionGraph,
+    PublishedConnector, PublishedConnectorEnd, PublishedDiagnostics, PublishedElement,
+    PublishedExpression, PublishedMetadataAnnotation, PublishedModelProjection,
     QualifiedElementReference, QualifiedReferenceOutcome, QualifiedReferenceTarget, QueryAnswer,
     QueryOutcome, RedefinitionCheckKind, RedefinitionCheckOutcome, RedefinitionCheckPrerequisite,
     ReferenceAt, ReferencedDetails, RelatedLocation, RelationshipFamily, RelationshipOutcome,
@@ -44,12 +54,16 @@ pub use sysml_resolution::{
     TypeDerivedFactPrerequisite, TypeDerivedFactValue, TypeDerivedRelationshipCollection,
     TypeFeaturingCheckKind, TypeFeaturingCheckOutcome, TypeFeaturingCheckPrerequisite,
     TypeReference, UnitResolution, ValueKind, VerificationOutcome, VerificationRequirement,
-    Visibility, VisibilityProvenance, VisibleMemberRef, VisibleMembers,
+    ViewExposedElements, ViewExposureObstacle, Visibility, VisibilityProvenance, VisibleMemberRef,
+    VisibleMembers,
 };
 
 pub use sysml_resolution::source::RootDigest;
 /// Provenance of an admitted source; the one enum the source authority defines.
 pub use sysml_resolution::source::SourceKind;
+/// The schema version [`PublishedModel::projection`] is recorded under.
+pub use sysml_resolution::MODEL_PROJECTION_SCHEMA_VERSION;
+pub use sysml_resolution::{EffectiveIdentification, EffectiveName, EffectiveNameProvenance};
 
 /// Opaque published semantic state. Share it behind `Arc`; do not duplicate its owner.
 ///
@@ -176,6 +190,14 @@ impl PublishedModel {
         EvaluationQueries { model: &self.inner }
     }
 
+    pub fn structure(&self) -> StructureQueries<'_> {
+        StructureQueries { model: &self.inner }
+    }
+
+    pub fn projection(&self) -> ProjectionQueries<'_> {
+        ProjectionQueries { model: &self.inner }
+    }
+
     pub fn diagnostics(&self) -> DiagnosticQueries<'_> {
         DiagnosticQueries { model: &self.inner }
     }
@@ -284,8 +306,31 @@ impl DiagramQueries<'_> {
         self.model.diagram_view_catalog()
     }
 
+    /// The view as its first catalogued kind; see `view_of_kind`.
     pub fn view(&self, identity: SymbolId) -> QueryOutcome<DiagramViewProjection> {
         self.model.diagram_view(identity)
+    }
+
+    /// The view as one of its catalogued kinds. A view typed by several standard view definitions
+    /// (`view v : GeneralView, InterconnectionView`) has a catalog entry, and a projection, per
+    /// kind.
+    pub fn view_of_kind(
+        &self,
+        identity: SymbolId,
+        kind: DiagramViewKind,
+    ) -> QueryOutcome<DiagramViewProjection> {
+        self.model.diagram_view_of_kind(identity, kind)
+    }
+
+    /// The view, as `kind` when given, with the browser branches `expanded` names loaded; see
+    /// `PublishedResolution::diagram_view_expanding`.
+    pub fn view_expanding(
+        &self,
+        identity: SymbolId,
+        kind: Option<DiagramViewKind>,
+        expanded: &dyn Fn(&str) -> bool,
+    ) -> QueryOutcome<DiagramViewProjection> {
+        self.model.diagram_view_expanding(identity, kind, expanded)
     }
 
     /// The display name of one catalogued view, borrowed from the publication.
@@ -351,6 +396,50 @@ impl EvaluationQueries<'_> {
     /// What this publication settled for one element's authored expression.
     pub fn evaluate(&self, symbol: SymbolId) -> QueryOutcome<ElementEvaluation> {
         self.model.evaluate(symbol)
+    }
+}
+
+/// Resolved structure of language constructs a consumer interprets rather than validates: the
+/// expression trees of feature / constraint / calc bodies, with inheritance applied and every
+/// feature reference resolved.
+///
+/// The facade adapts; it classifies nothing and resolves nothing -- every node was settled by
+/// `sysml_resolution` at the publication barrier.
+pub struct StructureQueries<'a> {
+    model: &'a sysml_resolution::PublishedResolution,
+}
+
+impl StructureQueries<'_> {
+    /// An inherited expression in a specific derived type or usage. The authored tree remains
+    /// available through `expression`; this answer retains provenance and contextual targets.
+    pub fn expression_in_context(
+        &self,
+        symbol: SymbolId,
+        context: SymbolId,
+    ) -> QueryOutcome<ContextualExpressionOutcome> {
+        self.model.contextual_expression(symbol, context)
+    }
+    /// The resolved expression tree of one element's authored constraint / calc / value
+    /// expression.
+    pub fn expression(&self, symbol: SymbolId) -> QueryOutcome<PublishedExpression> {
+        self.model.resolved_expression(symbol)
+    }
+}
+
+/// The whole-model projection: every workspace element with its full details and composed
+/// resolved facts, every connector, and a publication envelope, as one deterministic answer.
+///
+/// The composition of the per-element query groups, not a new derivation. Read-only: there is no
+/// element-mutation surface here, and this is not the OMG Systems Modeling API JSON.
+pub struct ProjectionQueries<'a> {
+    model: &'a sysml_resolution::PublishedResolution,
+}
+
+impl ProjectionQueries<'_> {
+    /// `max_nodes` bounds the element list and the per-element composition work; pass
+    /// `usize::MAX` for the whole workspace.
+    pub fn model(&self, max_nodes: usize) -> QueryOutcome<PublishedModelProjection> {
+        self.model.model_projection(max_nodes)
     }
 }
 
@@ -588,9 +677,24 @@ impl InspectionQueries<'_> {
         self.model.resolve_qualified_reference(reference)
     }
 
+    /// Resolves an anonymous owned member through its canonical owner-scoped identity.
+    pub fn resolve_anonymous_member(
+        &self,
+        reference: &AnonymousElementReference,
+    ) -> QualifiedReferenceOutcome {
+        self.model.resolve_anonymous_member(reference)
+    }
+
     /// Everything the publication knows about one element.
     pub fn inspect(&self, symbol: SymbolId) -> QueryOutcome<ElementInspection> {
         self.model.inspect(symbol)
+    }
+
+    /// The canonical `ViewUsage::exposedElement` result for any view usage, independent of the
+    /// diagram catalog. Elements are deduplicated in canonical identity order; obstacles retain
+    /// unresolved or unsupported expose and filter facts alongside the usable subset.
+    pub fn exposed_elements(&self, view: SymbolId) -> QueryOutcome<ViewExposedElements> {
+        self.model.view_exposed_elements(view)
     }
 
     /// Resolves a canonical Membership relationship identity without substituting its member
@@ -670,6 +774,12 @@ impl InspectionQueries<'_> {
     /// Workspace-authored satisfy statements, with directional ends and explicit outcomes.
     pub fn satisfy_relationships(&self) -> QueryOutcome<Box<[SatisfyRelationship]>> {
         self.model.satisfy_relationships()
+    }
+
+    /// Workspace requirement derivations (`RequirementDerivation` library): the original and
+    /// derived requirement ends of each `DerivationConnections::Derivation` connection usage.
+    pub fn derivation_relationships(&self) -> QueryOutcome<Box<[DerivationRelationship]>> {
+        self.model.derivation_relationships()
     }
 
     /// One exact Feature relationship collection from the canonical relationship store.
@@ -786,6 +896,23 @@ impl InspectionQueries<'_> {
         self.model.binding_connectors()
     }
 
+    /// Every metadata annotation bound to one element: its authored form, the annotating
+    /// definition, its `about` targets, and the resolved values its body redefines
+    /// (`@Risk { probability = 0.3; }`).
+    pub fn metadata_annotations(
+        &self,
+        symbol: SymbolId,
+    ) -> QueryOutcome<Box<[PublishedMetadataAnnotation]>> {
+        self.model.metadata_annotations(symbol)
+    }
+
+    /// The `connect` / `interface` topology reachable from one element: every connector it owns
+    /// (directly or transitively), each with its `:` type and resolved ends. Sibling of
+    /// [`Self::binding_connectors`].
+    pub fn connections(&self, root: SymbolId) -> QueryOutcome<PublishedConnectionGraph> {
+        self.model.connections(root)
+    }
+
     /// The applicability outcome for one closed binding-connector validation rule.
     pub fn binding_connector_validation(
         &self,
@@ -802,6 +929,13 @@ impl InspectionQueries<'_> {
     pub fn effective_features(&self, symbol: SymbolId) -> QueryOutcome<Box<[SymbolEntry]>> {
         self.model.effective_features(symbol)
     }
+
+    pub fn effective_identification(
+        &self,
+        symbol: SymbolId,
+    ) -> QueryOutcome<EffectiveIdentification<'_>> {
+        self.model.effective_identification(symbol)
+    }
 }
 
 pub struct DebugQueries<'a> {
@@ -814,6 +948,8 @@ pub struct EditorProbe {
     pub position: TextPosition,
     pub qualifier: Option<String>,
     pub rename_to: Option<String>,
+    /// Include ordered feature collections and effective identification in the projection.
+    pub features: bool,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -838,6 +974,22 @@ impl DebugQueries<'_> {
 
     pub fn write_types_sexpr(&self, output: &mut dyn fmt::Write) -> fmt::Result {
         self.model.debug().write_types_sexpr(output)
+    }
+
+    pub fn write_expressions_sexpr(&self, output: &mut dyn fmt::Write) -> fmt::Result {
+        self.model.debug().write_expressions_sexpr(output)
+    }
+
+    pub fn write_metadata_annotations_sexpr(&self, output: &mut dyn fmt::Write) -> fmt::Result {
+        self.model.debug().write_metadata_annotations_sexpr(output)
+    }
+
+    pub fn write_connections_sexpr(&self, output: &mut dyn fmt::Write) -> fmt::Result {
+        self.model.debug().write_connections_sexpr(output)
+    }
+
+    pub fn write_projection_sexpr(&self, output: &mut dyn fmt::Write) -> fmt::Result {
+        self.model.debug().write_projection_sexpr(output)
     }
 
     pub fn write_editor_queries_sexpr(
@@ -887,6 +1039,16 @@ impl DebugQueries<'_> {
                     .model
                     .element_details_at(&probe.document, probe.position),
             )?;
+            if probe.features {
+                let details = self
+                    .model
+                    .element_details_at(&probe.document, probe.position);
+                if let QueryAnswer::Resolved(at) = &details.answer {
+                    if let Some(element) = &at.containing {
+                        write_feature_queries(model, output, element.inspection.identity)?;
+                    }
+                }
+            }
             writeln!(output, "  )")?;
         }
         // Once per probed document rather than once per probe: the outline is a property of the
@@ -1192,6 +1354,120 @@ fn write_members_outcome(
     writeln!(output, ")")
 }
 
+fn write_effective_identification(
+    output: &mut dyn fmt::Write,
+    outcome: &QueryOutcome<EffectiveIdentification<'_>>,
+) -> fmt::Result {
+    write!(
+        output,
+        " (effective-identification (status {})",
+        outcome_status(outcome)
+    )?;
+    if let QueryAnswer::Resolved(value) = &outcome.answer {
+        for (label, component) in [("name", &value.name), ("short-name", &value.short_name)] {
+            write!(output, " ({label} ")?;
+            match component {
+                EffectiveName::Resolved(name) => write!(output, "(resolved {name:?})")?,
+                EffectiveName::Absent => write!(output, "absent")?,
+                EffectiveName::Unresolved => write!(output, "unresolved")?,
+                EffectiveName::NonConverged => write!(output, "non-converged")?,
+            }
+            write!(output, ")")?;
+        }
+        write!(output, " (provenance {:?})", value.provenance)?;
+    }
+    write!(output, ")")
+}
+
+fn write_feature_queries(
+    model: &sysml_resolution::PublishedResolution,
+    output: &mut dyn fmt::Write,
+    symbol: SymbolId,
+) -> fmt::Result {
+    writeln!(output, "    (feature-queries")?;
+    write!(output, "      ")?;
+    write_effective_identification(output, &model.effective_identification(symbol))?;
+    writeln!(output)?;
+    let effective = model.effective_features(symbol);
+    writeln!(
+        output,
+        "      (effective-features (status {})",
+        outcome_status(&effective)
+    )?;
+    if let QueryAnswer::Resolved(features) = &effective.answer {
+        for feature in features.iter() {
+            write!(
+                output,
+                "        (feature (qualified-name {:?})",
+                model.qualified_name(feature.identity).unwrap_or_default(),
+            )?;
+            match &feature.name {
+                Some(name) => write!(output, " (authored-name {name:?})")?,
+                None => write!(output, " (authored-name absent)")?,
+            }
+            write_effective_identification(
+                output,
+                &model.effective_identification(feature.identity),
+            )?;
+            writeln!(output, ")")?;
+        }
+    }
+    writeln!(output, "      )")?;
+    let owned = model.type_derived_elements(symbol, TypeDerivedElementCollection::OwnedFeature);
+    write!(
+        output,
+        "      (owned-features (status {})",
+        outcome_status(&owned)
+    )?;
+    if let QueryAnswer::Resolved(features) = &owned.answer {
+        for feature in features.iter() {
+            write!(
+                output,
+                " (member {:?})",
+                model.qualified_name(*feature).unwrap_or_default()
+            )?;
+        }
+    }
+    writeln!(output, ")")?;
+    for kind in [
+        DefinitionUsageDerivedKind::DefinitionOwnedPart,
+        DefinitionUsageDerivedKind::UsageNestedPart,
+        DefinitionUsageDerivedKind::DefinitionOwnedView,
+        DefinitionUsageDerivedKind::UsageNestedView,
+    ] {
+        let derived = model.definition_usage_derived(symbol, kind);
+        write!(
+            output,
+            "      (derived (kind {kind:?}) (status {})",
+            outcome_status(&derived)
+        )?;
+        if let QueryAnswer::Resolved(value) = &derived.answer {
+            match value {
+                DefinitionUsageDerivedOutcome::Elements(features) => {
+                    for feature in features.iter() {
+                        write!(
+                            output,
+                            " (member {:?})",
+                            model.qualified_name(*feature).unwrap_or_default()
+                        )?;
+                    }
+                }
+                DefinitionUsageDerivedOutcome::Unsupported { prerequisite } => {
+                    write!(output, " (unsupported (prerequisite {prerequisite:?}))")?;
+                }
+                DefinitionUsageDerivedOutcome::Boolean(value) => {
+                    write!(output, " (value {value})")?
+                }
+                DefinitionUsageDerivedOutcome::Memberships(values) => {
+                    write!(output, " (membership-count {})", values.len())?;
+                }
+            }
+        }
+        writeln!(output, ")")?;
+    }
+    writeln!(output, "    )")
+}
+
 fn write_details_at_outcome(
     model: &sysml_resolution::PublishedResolution,
     output: &mut dyn fmt::Write,
@@ -1316,6 +1592,13 @@ fn write_element(
         }
         writeln!(output, ")")?;
     }
+    if !inspection.implied_modifiers.is_empty() {
+        write!(output, "{indent}  (implied-modifiers")?;
+        for modifier in inspection.implied_modifiers.iter() {
+            write!(output, " {:?}", modifier.as_str())?;
+        }
+        writeln!(output, ")")?;
+    }
     if let Some(portion) = inspection.portion_kind {
         writeln!(output, "{indent}  (portion {})", portion_name(portion))?;
     }
@@ -1383,22 +1666,31 @@ fn write_element(
                     .unwrap_or_default()
             )?;
             match &entry.origin {
-                EffectiveTypeOrigin::Direct => write!(output, " (origin direct))")?,
-                EffectiveTypeOrigin::Inherited(_) => write!(output, " (origin inherited))")?,
+                EffectiveTypeOrigin::Direct => write!(output, " (origin direct)")?,
+                EffectiveTypeOrigin::Inherited(_) => write!(output, " (origin inherited)")?,
             }
+            write!(
+                output,
+                " (provenance {}))",
+                match entry.provenance {
+                    RelationshipProvenance::Authored => "authored",
+                    RelationshipProvenance::Implied => "implied",
+                }
+            )?;
         }
         writeln!(output, ")")?;
     }
     for feature in details.inherited_features.iter() {
         writeln!(
             output,
-            "{indent}  (inherited-feature (qualified-name {:?}) (declared-in {:?}))",
+            "{indent}  (inherited-feature (qualified-name {:?}) (declared-in {:?}) (direct {}))",
             model
                 .qualified_name(feature.feature.identity)
                 .unwrap_or_default(),
             model
                 .qualified_name(feature.declared_in.identity)
-                .unwrap_or_default()
+                .unwrap_or_default(),
+            feature.is_direct
         )?;
     }
     for entry in details.metadata.iter() {
@@ -1532,6 +1824,7 @@ fn write_bound(output: &mut dyn fmt::Write, bound: MultiplicityBound) -> fmt::Re
     match bound {
         MultiplicityBound::Unbounded => write!(output, "unbounded"),
         MultiplicityBound::Literal(value) => write!(output, "{value}"),
+        MultiplicityBound::NonIntegerLiteral => write!(output, "non-integer-literal"),
         MultiplicityBound::Expression => write!(output, "expression"),
     }
 }

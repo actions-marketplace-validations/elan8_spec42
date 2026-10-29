@@ -7,7 +7,9 @@
 //! editor's parse and the build's parse are one tree. Library construction failure is explicit:
 //! it is never disguised by silently selecting a different construction path.
 
+mod cancellation;
 mod session;
+pub use cancellation::BuildCancellation;
 
 use std::sync::{Arc, Mutex};
 
@@ -18,12 +20,13 @@ use sysml_source::{SourceDocument, SourceKind};
 use crate::lower::memo::LoweringMemo;
 use crate::syntax::SyntaxAuthority;
 use crate::{
-    build_library_stratum_memoized, BuildRequest, ConstructionSchedule, LibraryStratum,
-    PublicationIdentity, PublishedResolution, SourceInput,
+    BuildRequest, ConstructionSchedule, LibraryStratum, PublicationIdentity, PublishedResolution,
+    SourceInput,
 };
 
 pub use session::{
-    BuildToken, PublicationOutcome, PublicationToken, Published, Session, SessionLifecycle,
+    AnalysisStatus, BuildToken, InputRevisionToken, PublicationOutcome, PublicationToken,
+    Published, Session, SessionLifecycle,
 };
 
 /// The semantic phase which rejected a publication request.
@@ -33,7 +36,10 @@ pub enum PublicationFailureStage {
     LibraryConstruction,
     RequestConstruction,
     ModelConstruction,
+    PreparationWorker,
     ConstructionWorker,
+    PublicationAdmission,
+    Cancelled,
 }
 
 /// A typed failure from the sole publication construction path.
@@ -52,11 +58,42 @@ impl PublicationBuildFailure {
         &self.message
     }
 
+    /// Cooperative cancellation before or during request preparation.
+    pub fn cancelled() -> Self {
+        Self::at(PublicationFailureStage::Cancelled, "publication cancelled")
+    }
+
+    pub fn is_cancelled(&self) -> bool {
+        self.stage == PublicationFailureStage::Cancelled
+    }
+
+    fn from_build_failure(stage: PublicationFailureStage, error: crate::BuildFailure) -> Self {
+        let stage = if matches!(error, crate::BuildFailure::Cancelled { .. }) {
+            PublicationFailureStage::Cancelled
+        } else {
+            stage
+        };
+        Self::at(stage, error)
+    }
+
     fn at(stage: PublicationFailureStage, error: impl std::fmt::Display) -> Self {
         Self {
             stage,
             message: error.to_string(),
         }
+    }
+
+    /// A completed model must belong to the exact request admitted by the session.
+    pub fn admission_identity_mismatch() -> Self {
+        Self::at(
+            PublicationFailureStage::PublicationAdmission,
+            "finished model identity differs from the admitted build request",
+        )
+    }
+
+    /// Preparation worker failed before returning its request or typed preparation error.
+    pub fn preparation_worker(error: impl std::fmt::Display) -> Self {
+        Self::at(PublicationFailureStage::PreparationWorker, error)
     }
 
     /// Construction worker failed before it could return its typed semantic result.
@@ -75,9 +112,9 @@ impl std::error::Error for PublicationBuildFailure {}
 
 /// An immutable, dependency-complete request prepared by [`PublicationAuthority::prepare`].
 ///
-/// Preparing never parses: the identity is computed from document digests, and the documents are
-/// parsed (a memo hit, or one parse) when the request is built. A host therefore captures the
-/// identity on its executor and does the work on a blocking thread.
+/// Workspace documents are parsed when the request is built. Preparing can construct a missing
+/// library stratum, including parsing and solving its sources. Hosts perform preparation off their
+/// executor and verify their captured input revision before starting the prepared build.
 #[derive(Debug)]
 pub struct PreparedPublication {
     request: BuildRequest,
@@ -90,6 +127,11 @@ impl PreparedPublication {
 
     pub fn request(&self) -> &BuildRequest {
         &self.request
+    }
+
+    pub fn with_cancellation(mut self, cancellation: BuildCancellation) -> Self {
+        self.request = self.request.with_cancellation(Some(cancellation));
+        self
     }
 
     pub fn build(self) -> Result<PublishedResolution, PublicationBuildFailure> {
@@ -105,7 +147,10 @@ impl PreparedPublication {
         self,
     ) -> Result<(PublishedResolution, crate::BuildMeasurements), PublicationBuildFailure> {
         crate::build_measured(self.request).map_err(|error| {
-            PublicationBuildFailure::at(PublicationFailureStage::ModelConstruction, error)
+            PublicationBuildFailure::from_build_failure(
+                PublicationFailureStage::ModelConstruction,
+                error,
+            )
         })
     }
 }
@@ -220,12 +265,13 @@ impl PublicationAuthority {
             standard_library_availability,
             reported_documents,
             ConstructionSchedule::Sequential,
+            None,
         )
         .and_then(PreparedPublication::build_measured)
     }
 
-    /// Prepares the canonical request without parsing or building it, so an atomic publication
-    /// owner can capture its dependency-complete identity before background construction starts.
+    /// Prepares the canonical request and its dependency-complete identity. A cache miss can
+    /// construct a library stratum; this operation belongs on a blocking worker in async hosts.
     pub fn prepare(
         &self,
         documents: &[SourceDocument],
@@ -249,6 +295,23 @@ impl PublicationAuthority {
             standard_library_availability,
             reported_documents,
             ConstructionSchedule::Parallel,
+            None,
+        )
+    }
+
+    pub fn prepare_cancellable(
+        &self,
+        documents: &[SourceDocument],
+        availability: StandardLibraryAvailability,
+        reported: impl IntoIterator<Item = Box<str>>,
+        cancellation: &BuildCancellation,
+    ) -> Result<PreparedPublication, PublicationBuildFailure> {
+        self.prepare_with_schedule(
+            documents,
+            availability,
+            reported,
+            ConstructionSchedule::Parallel,
+            Some(cancellation),
         )
     }
 
@@ -258,7 +321,9 @@ impl PublicationAuthority {
         standard_library_availability: StandardLibraryAvailability,
         reported_documents: impl IntoIterator<Item = Box<str>>,
         schedule: ConstructionSchedule,
+        cancellation: Option<&BuildCancellation>,
     ) -> Result<PreparedPublication, PublicationBuildFailure> {
+        checkpoint(cancellation, crate::ConstructionPhase::SourceAdmission)?;
         let mut ordered = documents.iter().collect::<Vec<_>>();
         ordered.sort_unstable_by(|left, right| left.uri().as_str().cmp(right.uri().as_str()));
 
@@ -283,7 +348,7 @@ impl PublicationAuthority {
         let request = if libraries.is_empty() {
             BuildRequest::new(workspace, schedule, crate::RESOLVED_CONTRACT)
         } else {
-            let stratum = self.library_stratum(&libraries)?;
+            let stratum = self.library_stratum(&libraries, cancellation)?;
             BuildRequest::with_library(workspace, schedule, crate::RESOLVED_CONTRACT, stratum)
         }
         .map_err(|error| {
@@ -292,15 +357,48 @@ impl PublicationAuthority {
         .reporting(reported)
         .with_standard_library_availability(standard_library_availability)
         .with_syntax(Arc::clone(&self.syntax))
-        .with_lowering(Arc::clone(&self.lowering));
+        .with_lowering(Arc::clone(&self.lowering))
+        .with_cancellation(cancellation.cloned());
+        checkpoint(cancellation, crate::ConstructionPhase::SourceAdmission)?;
         Ok(PreparedPublication { request })
     }
 
     fn library_stratum(
         &self,
         libraries: &[(&SourceDocument, SourceInput)],
+        cancellation: Option<&BuildCancellation>,
     ) -> Result<Arc<LibraryStratum>, PublicationBuildFailure> {
+        checkpoint(cancellation, crate::ConstructionPhase::LibrarySeed)?;
         let key = library_key(libraries.iter().map(|(document, _)| *document));
+        {
+            let cached = self
+                .library
+                .lock()
+                .unwrap_or_else(std::sync::PoisonError::into_inner);
+            if let Some(entry) = cached.as_ref() {
+                if entry.key == key {
+                    return Ok(Arc::clone(&entry.stratum));
+                }
+            }
+        }
+        // Construction can run nested Rayon jobs, which may steal another publication request
+        // from the same pool. Holding this cache lock would let that request wait on itself.
+        // Concurrent misses may build the same immutable stratum; reconcile only after building.
+        let stratum = Arc::new(
+            crate::build_library_stratum_cancellable(
+                libraries.iter().map(|(_, source)| source.clone()).collect(),
+                Some(Arc::clone(&self.syntax)),
+                Some(Arc::clone(&self.lowering)),
+                cancellation.cloned(),
+            )
+            .map_err(|error| {
+                PublicationBuildFailure::from_build_failure(
+                    PublicationFailureStage::LibraryConstruction,
+                    error,
+                )
+            })?,
+        );
+        checkpoint(cancellation, crate::ConstructionPhase::LibrarySeed)?;
         let mut cached = self
             .library
             .lock()
@@ -310,22 +408,23 @@ impl PublicationAuthority {
                 return Ok(Arc::clone(&entry.stratum));
             }
         }
-        let stratum = Arc::new(
-            build_library_stratum_memoized(
-                libraries.iter().map(|(_, source)| source.clone()).collect(),
-                Some(Arc::clone(&self.syntax)),
-                Some(Arc::clone(&self.lowering)),
-            )
-            .map_err(|error| {
-                PublicationBuildFailure::at(PublicationFailureStage::LibraryConstruction, error)
-            })?,
-        );
         *cached = Some(CachedLibraryStratum {
             key,
             stratum: Arc::clone(&stratum),
         });
         Ok(stratum)
     }
+}
+
+fn checkpoint(
+    cancellation: Option<&BuildCancellation>,
+    phase: crate::ConstructionPhase,
+) -> Result<(), PublicationBuildFailure> {
+    cancellation.map_or(Ok(()), |control| {
+        control.checkpoint(phase).map_err(|error| {
+            PublicationBuildFailure::from_build_failure(PublicationFailureStage::Cancelled, error)
+        })
+    })
 }
 
 /// The stratum identity: every library document's URI, provenance, and content digest, in URI
@@ -343,6 +442,7 @@ fn library_source_identity(document: &SourceDocument) -> LibrarySourceIdentity<'
             SourceKind::Library => SourceRole::Library,
             SourceKind::External => SourceRole::External,
         },
+        document.language(),
         document.digest(),
         document.library_location(),
     )
@@ -608,6 +708,124 @@ mod tests {
 
         assert_eq!(error.stage(), PublicationFailureStage::LibraryConstruction);
         assert!(authority.library.lock().unwrap().is_none());
+    }
+
+    #[test]
+    fn concurrent_library_preparation_does_not_hold_the_cache_lock_across_nested_work() {
+        use rayon::prelude::*;
+
+        let authority = authority();
+        let documents: Vec<_> = (0..8)
+            .map(|index| {
+                document(
+                    &format!("memory://library/lib{index}.sysml"),
+                    &format!("standard library package Lib{index} {{ part def P; }}"),
+                    SourceKind::StandardLibrary,
+                )
+            })
+            .collect();
+        let pool = rayon::ThreadPoolBuilder::new()
+            .num_threads(1)
+            .stack_size(16 * 1024 * 1024)
+            .build()
+            .unwrap();
+        let identities: Vec<_> = pool.install(|| {
+            (0..8)
+                .into_par_iter()
+                .map(|_| {
+                    authority
+                        .prepare(&documents, [])
+                        .unwrap()
+                        .identity()
+                        .clone()
+                })
+                .collect()
+        });
+        let warm = authority
+            .prepare(&documents, [])
+            .unwrap()
+            .identity()
+            .clone();
+        let cold = self::authority()
+            .prepare(&documents, [])
+            .unwrap()
+            .identity()
+            .clone();
+        assert!(identities.iter().all(|identity| identity == &warm));
+        assert_eq!(warm, cold);
+    }
+
+    #[test]
+    fn cancellation_at_each_expensive_boundary_returns_no_publication() {
+        use crate::ConstructionPhase;
+        let phases = [
+            ConstructionPhase::SourceAdmission,
+            ConstructionPhase::Lowering,
+            ConstructionPhase::Splicing,
+            ConstructionPhase::Resolution,
+            ConstructionPhase::Evaluation,
+            ConstructionPhase::Indexing,
+            ConstructionPhase::Diagnostics,
+        ];
+        for phase in phases {
+            let authority = authority();
+            let workspace = document(
+                "memory://cancellation/model.sysml",
+                "package P { part def A; part a : A; }",
+                SourceKind::Workspace,
+            );
+            let cancellation = BuildCancellation::at_phase(phase);
+            let result = authority
+                .prepare_cancellable(
+                    std::slice::from_ref(&workspace),
+                    StandardLibraryAvailability::Unavailable,
+                    [],
+                    &cancellation,
+                )
+                .and_then(PreparedPublication::build_measured);
+            let error = result.unwrap_err();
+            assert_eq!(
+                error.stage(),
+                PublicationFailureStage::Cancelled,
+                "{phase:?}"
+            );
+            assert!(error.is_cancelled());
+            assert!(authority.library.lock().unwrap().is_none());
+            // A cancelled model is never cached as a publication. Completed per-document phase
+            // products may be reused by a later complete build under the same complete key.
+            let recovered = authority.publish(&[workspace], []);
+            assert!(recovered.is_ok(), "{phase:?}: {recovered:?}");
+        }
+    }
+
+    #[test]
+    fn cancelling_library_preparation_does_not_install_a_partial_stratum() {
+        let authority = authority();
+        let library = document(
+            "memory://cancellation/lib.sysml",
+            "library package Lib { part def A; }",
+            SourceKind::Library,
+        );
+        let cancellation = BuildCancellation::at_phase(crate::ConstructionPhase::LibrarySeed);
+        let error = authority
+            .prepare_cancellable(
+                std::slice::from_ref(&library),
+                StandardLibraryAvailability::Unavailable,
+                [],
+                &cancellation,
+            )
+            .unwrap_err();
+        assert!(error.is_cancelled());
+        assert!(authority.library.lock().unwrap().is_none());
+        authority.publish(&[library], []).unwrap();
+        assert!(authority.library.lock().unwrap().is_some());
+    }
+
+    #[test]
+    fn preparation_worker_failure_has_a_distinct_typed_stage() {
+        let failure = PublicationBuildFailure::preparation_worker("worker panicked");
+        assert_eq!(failure.stage(), PublicationFailureStage::PreparationWorker);
+        assert_eq!(failure.message(), "worker panicked");
     }
 
     #[test]

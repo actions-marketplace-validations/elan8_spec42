@@ -8,7 +8,7 @@ Spec42 is open, local-first tooling for [SysML v2](https://www.omg.org/sysml/sys
 [![Install from Marketplace](https://img.shields.io/badge/Install-VS%20Code%20Marketplace-007ACC?logo=visual-studio-code)](https://marketplace.visualstudio.com/items?itemName=Elan8.spec42)
 [![Download Releases](https://img.shields.io/badge/Download-GitHub%20Releases-24292F?logo=github)](https://github.com/elan8/spec42/releases)
 
-![Spec42 SysML v2 editor and visualizer](vscode/media/screenshot.png)
+![Spec42 SysML v2 editor with the diagram view and Feature Inspector](vscode/media/screenshot.png)
 
 ## Why Spec42
 
@@ -16,7 +16,7 @@ SysML v2 is powerful, but textual models only help when the tooling keeps pace: 
 
 Spec42 is built for that continuity. One immutable analysis publication backs the VS Code extension, CLI validation, GitHub Actions, generators, and assistant integrations. What you see while modeling is what CI will check.
 
-It stays local-first: the language server, standard library, and Elan8 domain/method libraries ship with Spec42. You can work offline, keep models in your own repositories, and adopt automation without a proprietary runtime.
+It stays local-first: the language server, standard library, and Elan8 domain libraries ship with Spec42. You can work offline, keep models in your own repositories, and adopt automation without a proprietary runtime.
 
 ## What you get
 
@@ -24,15 +24,15 @@ It stays local-first: the language server, standard library, and Elan8 domain/me
 - **Ways to understand the model, not just the text** — navigation and Feature Inspector consume typed semantic queries for resolved typing, inheritance, relationships, and values.
 - **Validation you can trust in automation** — the same engine in `spec42 check`, with text/JSON/SARIF/JUnit output for local scripts and CI quality gates.
 - **Extensible model products** — generators consume the immutable publication; the VS Code diagram experience is backed by a repository-owned generator plugin and a versioned render product rather than a built-in semantic subsystem.
-- **Libraries ready to use** — bundled OMG SysML libraries plus searchable Elan8 domain and method libraries, with room for your own library roots.
+- **Libraries ready to use** — bundled OMG SysML libraries plus searchable Elan8 domain libraries, with room for your own library roots.
 - **Room for assistants** — Copilot Language Model Tools in VS Code, plus CLI helpers for other AI hosts.
 
 ## Where Spec42 fits
 
 | Surface | Role |
 | --- | --- |
-| **VS Code** | Primary modeling environment: edit, explore, visualize, inspect. |
-| **CLI** | Doctor, check, validation-only model summary, generation, and assistant-oriented commands. |
+| **VS Code** | Primary modeling environment: edit, navigate, diagram, inspect. |
+| **CLI** | Doctor, check, model export (validation plus a typed structural JSON projection), generation, and assistant-oriented commands. |
 | **GitHub Action** | Repeatable model validation with optional SARIF upload. |
 | **LM Tools** | Validation and model context for AI-assisted workflows. |
 | **Zed** | Lightweight editor support with the same server family. |
@@ -64,7 +64,7 @@ It stays local-first: the language server, standard library, and Elan8 domain/me
 
 1. Install **[SysML v2 Editor](https://marketplace.visualstudio.com/items?itemName=Elan8.spec42)** from the VS Code Marketplace.
 2. Open a `.sysml` / `.kerml` file, or try the bundled **timer** example from the Spec42 sidebar.
-3. Follow the full walkthrough in **[Getting Started](https://elan8.github.io/spec42/guide/getting-started)**.
+3. Follow the full walkthrough in **[Getting Started](docs/user/GETTING-STARTED.md)**.
 
 To start a clean multi-file workspace from the CLI, run:
 
@@ -78,12 +78,12 @@ CLI and CI users can download platform archives from [GitHub Releases](https://g
 
 ## Documentation
 
-- [User documentation](https://elan8.github.io/spec42/) — getting started, explorer, visualizer, inspector, libraries
+- [User documentation](docs/README.md) — getting started, diagram view, Feature Inspector, libraries
 - [VS Code extension](vscode/README.md)
 - [GitHub Action](docs/user/GITHUB-ACTION.md)
 - [AI assistants](docs/user/AI-ASSISTANTS.md)
 - [Troubleshooting](docs/user/TROUBLESHOOTING.md)
-- [What's included](https://elan8.github.io/spec42/reference/whats-included)
+- [What's included](docs/reference/WHATS-INCLUDED.md)
 - [Conformance matrix](docs/reference/CONFORMANCE-MATRIX.md)
 - [Contributor development guide](DEVELOPMENT.md)
 

@@ -1,0 +1,555 @@
+//! Native Rust SVG drawing for Spec42 diagram views (spec42 #176 / #181).
+//!
+//! Every shipped view prepares and draws in this crate. General, Interconnection, Action-Flow,
+//! and State-Transition also lay out through elkrs. Sequence, Browser, Grid, and Geometry skip
+//! ELK. Headless export (`crates/server`) and the interactive webview (`spec42/draw` on
+//! `lsp_server`) both call [`pipeline`].
+
+pub mod action_flow;
+pub mod behavior_common;
+mod catalog;
+mod containers;
+pub mod disclosure;
+pub mod draw_input;
+mod edges;
+mod graph_normalization;
+mod hit_target;
+mod ibd_containers;
+mod ibd_edges;
+mod ibd_node;
+mod ibd_ports;
+mod ibd_route;
+mod json_util;
+mod layout;
+mod markers;
+pub mod nesting;
+mod node_notation;
+mod nodes;
+mod ortho_route;
+pub mod pipeline;
+mod port_legend;
+mod prepare;
+pub mod sequence;
+pub mod state_transition;
+pub mod svg;
+pub mod svg_markers;
+mod sysml_node;
+pub mod theme;
+mod tooltip;
+pub mod types;
+pub mod view_frame;
+pub mod xml;
+
+use std::collections::HashMap;
+
+use behavior_common::{BehaviorLayoutResult, PreparedView};
+use svg::{format_number as n, Element};
+use theme::Theme;
+use types::{GeneralViewGraph, InterconnectionViewGraph, LaidOutNode};
+
+const DEFAULT_NODE_WIDTH: f64 = 200.0;
+const DEFAULT_NODE_HEIGHT: f64 = 70.0;
+
+/// Port of `contentBounds` in `render/export.ts`: the bounding box of every node's laid-out rect,
+/// falling back to a fixed placeholder box when there are no nodes. General-View-specific (its
+/// `LaidOutNode` shape); the behavior views compute their own extents directly, matching
+/// `renderActionFlowView`/`renderStateTransitionView`/`renderSequenceView`'s own return values.
+fn content_bounds(nodes: &[LaidOutNode]) -> (f64, f64, f64, f64) {
+    if nodes.is_empty() {
+        return (0.0, 0.0, 100.0, 100.0);
+    }
+    let min_x = nodes
+        .iter()
+        .map(|node| node.x)
+        .fold(f64::INFINITY, f64::min);
+    let min_y = nodes
+        .iter()
+        .map(|node| node.y)
+        .fold(f64::INFINITY, f64::min);
+    let max_x = nodes
+        .iter()
+        .map(|node| {
+            node.x
+                + if node.width > 0.0 {
+                    node.width
+                } else {
+                    DEFAULT_NODE_WIDTH
+                }
+        })
+        .fold(f64::NEG_INFINITY, f64::max);
+    let max_y = nodes
+        .iter()
+        .map(|node| {
+            node.y
+                + if node.height > 0.0 {
+                    node.height
+                } else {
+                    DEFAULT_NODE_HEIGHT
+                }
+        })
+        .fold(f64::NEG_INFINITY, f64::max);
+    (min_x, min_y, max_x - min_x, max_y - min_y)
+}
+
+fn bounds_with_routes(
+    bounds: (f64, f64, f64, f64),
+    points: impl IntoIterator<Item = types::Point>,
+) -> (f64, f64, f64, f64) {
+    let (mut left, mut top, width, height) = bounds;
+    let (mut right, mut bottom) = (left + width, top + height);
+    for point in points {
+        left = left.min(point.x);
+        top = top.min(point.y);
+        right = right.max(point.x);
+        bottom = bottom.max(point.y);
+    }
+    (left, top, right - left, bottom - top)
+}
+
+/// The margin around a diagram's content inside its view box.
+const VIEW_MARGIN: f64 = 16.0;
+
+/// Port of `renderVisualization`'s shared SVG skeleton in `renderer.ts`, as it actually reaches
+/// serialized output through `exportHeadlessSvg`/`controller.exportSvg()` (`render/export.ts`):
+/// `svg.sysml-viz-svg` -> `rect.viz-bg` + `defs` (the 8 general/IBD markers, plus `extra_marker`
+/// when a behavior view supplies one -- `addMarkers`/`addActionFlowMarkers`/etc. all append into
+/// the *same* `defs`, confirmed from `renderer.ts`: every view's SVG carries all 8 general/IBD
+/// markers regardless of whether it uses them) + `style` (node chrome) -> `g.viz-root` -> view
+/// content. `width`/`height` size the `viz-bg` canvas rect only; `bounds` (already `{x,y,width,
+/// height}`) independently feeds the `viewBox`, padded 40px on every side, exactly as `exportSvg`
+/// computes it -- the two are unrelated in the original.
+fn render_svg_document(
+    theme: &Theme,
+    width: f64,
+    height: f64,
+    title: &str,
+    bounds: (f64, f64, f64, f64),
+    extra_marker: Option<Element>,
+    root_content: Element,
+) -> String {
+    let (bounds_x, bounds_y, bounds_width, bounds_height) = bounds;
+    // The view box is the content with a margin, and the background covers exactly the view
+    // box, so an exported figure is neither cropped nor padded out to a viewer's canvas.
+    let (view_x, view_y) = (bounds_x - VIEW_MARGIN, bounds_y - VIEW_MARGIN);
+    let (view_width, view_height) = (
+        bounds_width + 2.0 * VIEW_MARGIN,
+        bounds_height + 2.0 * VIEW_MARGIN,
+    );
+    let _ = (width, height);
+    let viz_bg = Element::new("rect")
+        .attr("class", "viz-bg")
+        .attr_f("x", view_x)
+        .attr_f("y", view_y)
+        .attr_f("width", view_width)
+        .attr_f("height", view_height)
+        .attr("fill", theme.canvas_background);
+
+    let view_box = format!(
+        "{} {} {} {}",
+        n(view_x),
+        n(view_y),
+        n(view_width),
+        n(view_height)
+    );
+
+    let defs = markers::markers(theme).maybe_child(extra_marker);
+
+    Element::new("svg")
+        .attr("class", "sysml-viz-svg")
+        .attr("width", "100%")
+        .attr("height", "100%")
+        .attr("viewBox", view_box)
+        .attr("role", "img")
+        .attr(
+            "aria-label",
+            if title.is_empty() {
+                "SysML view".to_string()
+            } else {
+                title.to_string()
+            },
+        )
+        .attr("data-color-scheme", theme.color_scheme)
+        .style("touch-action", "none")
+        .style("cursor", "grab")
+        .child(viz_bg)
+        .child(defs)
+        .child(markers::node_chrome_style(theme))
+        .child(root_content)
+        .attr_trailing("xmlns", "http://www.w3.org/2000/svg")
+        .to_string()
+}
+
+/// Port of General View's branch of `renderVisualization`: package containers, edges, nodes (that
+/// draw order -- containers under edges under nodes -- matches the `redrawGeneral` call sequence
+/// in `renderer.ts`).
+pub fn render_general_view_svg(
+    graph: &GeneralViewGraph,
+    theme: &Theme,
+    width: f64,
+    height: f64,
+) -> String {
+    let nodes_by_id: HashMap<&str, &LaidOutNode> = graph
+        .nodes
+        .iter()
+        .map(|node| (node.id.as_str(), node))
+        .collect();
+
+    let mut root = Element::new("g").attr("class", "viz-root");
+    if let Some(containers_layer) =
+        containers::draw_general_package_containers(&graph.meta, &graph.nodes, theme)
+    {
+        root = root.child(containers_layer);
+    }
+    if graph
+        .nodes
+        .iter()
+        .any(|node| node.attributes.contains_key("generalContainerHeaderHeight"))
+    {
+        root = root.child(nodes::draw_general_containers(&graph.nodes, theme));
+    }
+    for edge_layer in edges::draw_edges(&graph.edges, &nodes_by_id, theme) {
+        root = root.child(edge_layer);
+    }
+    root = root.child(nodes::draw_nodes(&graph.nodes, theme));
+
+    let bounds = bounds_with_routes(
+        content_bounds(&graph.nodes),
+        graph.edges.iter().flat_map(|edge| {
+            edge.layout.iter().flat_map(|layout| {
+                layout.sections.first().into_iter().flat_map(|section| {
+                    section
+                        .start_point
+                        .into_iter()
+                        .chain(section.bend_points.iter().copied())
+                        .chain(section.end_point)
+                })
+            })
+        }),
+    );
+    let (root, (left, top, right, bottom)) = view_frame::enclose(
+        root,
+        &graph.title,
+        (bounds.0, bounds.1, bounds.0 + bounds.2, bounds.1 + bounds.3),
+        theme,
+    );
+    render_svg_document(
+        theme,
+        width,
+        height,
+        &graph.title,
+        (left, top, right - left, bottom - top),
+        graph
+            .edges
+            .iter()
+            .any(|edge| {
+                matches!(
+                    edge.edge_kind.as_deref(),
+                    Some("reference-subsetting" | "redefinition")
+                )
+            })
+            .then(|| markers::general_relationship_markers(theme)),
+        root,
+    )
+}
+
+/// Port of `renderSequenceView`'s call site in `renderer.ts` (`addSequenceMarkers` +
+/// `renderSequenceView`, then `contentBoundsFromExtents` feeding `exportSvg`'s `viewBox`).
+pub fn render_sequence_view_svg(
+    prepared: &PreparedView,
+    theme: &Theme,
+    width: f64,
+    height: f64,
+) -> String {
+    let (root, (min_x, min_y, max_x, max_y)) =
+        sequence::render_sequence_view(prepared, theme, width, height);
+    let bounds = (
+        min_x,
+        min_y,
+        (max_x - min_x).max(1.0),
+        (max_y - min_y).max(1.0),
+    );
+    render_svg_document(
+        theme,
+        width,
+        height,
+        &prepared.title,
+        bounds,
+        Some(sequence::sequence_marker(theme)),
+        root,
+    )
+}
+
+/// Port of `renderBrowserView` in `views/standard-views-render.ts`.
+pub fn render_browser_view_svg(
+    prepared: &PreparedView,
+    theme: &Theme,
+    width: f64,
+    height: f64,
+) -> String {
+    let (root, (min_x, min_y, max_x, max_y)) =
+        catalog::render_browser_view(prepared, theme, width, height);
+    let bounds = (
+        min_x,
+        min_y,
+        (max_x - min_x).max(1.0),
+        (max_y - min_y).max(1.0),
+    );
+    render_svg_document(theme, width, height, &prepared.title, bounds, None, root)
+}
+
+/// Port of `renderGridView` in `views/standard-views-render.ts`.
+pub fn render_grid_view_svg(
+    prepared: &PreparedView,
+    theme: &Theme,
+    width: f64,
+    height: f64,
+) -> String {
+    let (root, (min_x, min_y, max_x, max_y)) =
+        catalog::render_grid_view(prepared, theme, width, height);
+    let bounds = (
+        min_x,
+        min_y,
+        (max_x - min_x).max(1.0),
+        (max_y - min_y).max(1.0),
+    );
+    render_svg_document(theme, width, height, &prepared.title, bounds, None, root)
+}
+
+/// Port of `renderGeometryView` in `views/standard-views-render.ts`.
+pub fn render_geometry_view_svg(
+    prepared: &PreparedView,
+    theme: &Theme,
+    width: f64,
+    height: f64,
+) -> String {
+    let (root, (min_x, min_y, max_x, max_y)) =
+        catalog::render_geometry_view(prepared, theme, width, height);
+    let bounds = (
+        min_x,
+        min_y,
+        (max_x - min_x).max(1.0),
+        (max_y - min_y).max(1.0),
+    );
+    render_svg_document(theme, width, height, &prepared.title, bounds, None, root)
+}
+
+/// Port of `renderStateTransitionView`'s call site in `renderer.ts`.
+pub fn render_state_transition_view_svg(
+    prepared: &PreparedView,
+    layout: &BehaviorLayoutResult,
+    theme: &Theme,
+    width: f64,
+    height: f64,
+) -> String {
+    let (root, (min_x, min_y, max_x, max_y)) =
+        state_transition::render_state_transition_view(prepared, layout, theme, width, height);
+    let bounds = (
+        min_x,
+        min_y,
+        (max_x - min_x).max(1.0),
+        (max_y - min_y).max(1.0),
+    );
+    render_svg_document(
+        theme,
+        width,
+        height,
+        &prepared.title,
+        bounds,
+        Some(state_transition::state_transition_marker(theme)),
+        root,
+    )
+}
+
+/// Port of `renderActionFlowView`'s call site in `renderer.ts`.
+pub fn render_action_flow_view_svg(
+    prepared: &PreparedView,
+    layout: &BehaviorLayoutResult,
+    theme: &Theme,
+    width: f64,
+    height: f64,
+) -> String {
+    let (root, (min_x, min_y, max_x, max_y)) =
+        action_flow::render_action_flow_view(prepared, layout, theme, width, height);
+    let bounds = (
+        min_x,
+        min_y,
+        (max_x - min_x).max(1.0),
+        (max_y - min_y).max(1.0),
+    );
+    let typed_projection =
+        prepared.meta.get("typedProjection") == Some(&serde_json::Value::Bool(true));
+    let (background_width, background_height) = if typed_projection {
+        (
+            width.max(bounds.0 + bounds.2 + 40.0),
+            height.max(bounds.1 + bounds.3 + 40.0),
+        )
+    } else {
+        (width, height)
+    };
+    render_svg_document(
+        theme,
+        background_width,
+        background_height,
+        &prepared.title,
+        bounds,
+        Some(if typed_projection {
+            action_flow::typed_action_flow_markers(theme)
+        } else {
+            action_flow::action_flow_marker(theme)
+        }),
+        root,
+    )
+}
+
+/// Draw the interconnection content inside the same root-view frame as other standard views.
+/// Ports, labels, containers and routed edges contribute to the enclosing frame bounds.
+pub fn render_interconnection_view_svg(
+    graph: &InterconnectionViewGraph,
+    theme: &Theme,
+    width: f64,
+    height: f64,
+) -> String {
+    let nodes_by_id: HashMap<&str, &LaidOutNode> = graph
+        .nodes
+        .iter()
+        .map(|node| (node.id.as_str(), node))
+        .collect();
+    let bounds = content_bounds(&graph.nodes);
+    let layout_containers = graph
+        .interconnection_layout
+        .as_ref()
+        .map(|l| l.containers.as_slice())
+        .unwrap_or(&[]);
+    let layout_edges = graph
+        .interconnection_layout
+        .as_ref()
+        .map(|l| l.edges.as_slice())
+        .unwrap_or(&[]);
+    let layout_edges_by_id = layout_edges
+        .iter()
+        .map(|edge| (edge.id.as_str(), edge))
+        .collect();
+
+    let mut root = Element::new("g").attr("class", "viz-root");
+    if let Some(containers_layer) = ibd_containers::draw_interconnection_containers(
+        &graph.meta,
+        &graph.nodes,
+        theme,
+        layout_containers,
+    ) {
+        root = root.child(containers_layer);
+    }
+
+    let (viz_nodes, overlay) =
+        nodes::draw_ibd_nodes(&graph.nodes, theme, graph.interconnection_layout.as_ref());
+    root = root.child(viz_nodes);
+
+    for edge_layer in ibd_edges::draw_ibd_edges(
+        &graph.edges,
+        &nodes_by_id,
+        layout_edges,
+        graph
+            .interconnection_layout
+            .as_ref()
+            .map(|layout| layout.nodes.as_slice())
+            .unwrap_or(&[]),
+        theme,
+    ) {
+        root = root.child(edge_layer);
+    }
+
+    if let Some(overlay) = overlay {
+        root = root.child(overlay);
+    }
+
+    // Ports and their labels lie outside the parts, so the figure is larger than its parts.
+    let mut extent = (bounds.0, bounds.1, bounds.0 + bounds.2, bounds.1 + bounds.3);
+    let mut include = |left: f64, top: f64, right: f64, bottom: f64| {
+        extent = (
+            extent.0.min(left),
+            extent.1.min(top),
+            extent.2.max(right),
+            extent.3.max(bottom),
+        );
+    };
+    for node in graph
+        .interconnection_layout
+        .iter()
+        .flat_map(|layout| &layout.nodes)
+    {
+        for anchor in node.port_anchors.values() {
+            let (x, y) = (node.x + anchor.x, node.y + anchor.y);
+            include(x - 6.0, y - 6.0, x + 6.0, y + 6.0);
+            if let Some(label) = &anchor.label {
+                let (left, top) = (node.x + label.x, node.y + label.y);
+                include(left, top, left + label.width, top + label.height + 2.0);
+            }
+        }
+    }
+    let mut bounds = bounds_with_routes(
+        (extent.0, extent.1, extent.2 - extent.0, extent.3 - extent.1),
+        graph
+            .edges
+            .iter()
+            .flat_map(|edge| ibd_edges::route_points_for_edge(edge, &layout_edges_by_id)),
+    );
+    // The connector colours' legend sits below the content, inside the view frame.
+    if let Some((legend, legend_bottom)) = port_legend::draw_port_family_legend(
+        &graph.meta,
+        &graph.edges,
+        theme,
+        (bounds.0, bounds.1 + bounds.3 + 24.0),
+    ) {
+        root = root.child(legend);
+        bounds.3 = legend_bottom - bounds.1;
+    }
+    let (root, (left, top, right, bottom)) = view_frame::enclose(
+        root,
+        &graph.title,
+        (bounds.0, bounds.1, bounds.0 + bounds.2, bounds.1 + bounds.3),
+        theme,
+    );
+    render_svg_document(
+        theme,
+        width,
+        height,
+        &graph.title,
+        (left, top, right - left, bottom - top),
+        None,
+        root,
+    )
+}
+
+pub use disclosure::DisclosureState;
+pub use draw_input::{
+    render_svg_from_json, render_svg_from_json_with_theme, render_svg_from_str, DrawError,
+};
+pub use nesting::Nesting;
+pub use pipeline::{
+    draw_input_from_payload, draw_input_from_payload_with_disclosure, render_svg_from_payload,
+    render_svg_from_payload_str, render_svg_from_payload_with_options,
+    render_svg_from_payload_with_theme, PipelineError,
+};
+
+#[cfg(test)]
+mod export_bounds_tests {
+    use super::*;
+
+    #[test]
+    fn export_includes_routes_outside_the_node_boxes() {
+        assert_eq!(
+            bounds_with_routes(
+                (100.0, 100.0, 200.0, 200.0),
+                [
+                    types::Point { x: -80.0, y: 150.0 },
+                    types::Point { x: 160.0, y: 420.0 }
+                ],
+            ),
+            (-80.0, 100.0, 380.0, 320.0)
+        );
+        assert_eq!(
+            bounds_with_routes((0.0, 0.0, 100.0, 100.0), []),
+            (0.0, 0.0, 100.0, 100.0)
+        );
+    }
+}

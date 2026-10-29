@@ -28,34 +28,28 @@ part def System {
   (document "memory://snapshot/coverage_connectors.md"
     (diagnostics
       (diagnostic
-        (severity information)
-        (code "unconnected_port")
-        (source "semantic")
-        (range (start 0 13) (end 0 21))
-      )
-      (diagnostic
-        (severity information)
-        (code "unconnected_port")
-        (source "semantic")
-        (range (start 0 22) (end 0 30))
-      )
-      (diagnostic
-        (severity information)
-        (code "unconnected_port")
-        (source "semantic")
-        (range (start 1 13) (end 1 21))
-      )
-      (diagnostic
-        (severity information)
-        (code "unconnected_port")
-        (source "semantic")
-        (range (start 1 22) (end 1 30))
+        (severity error)
+        (code "unrecognized_declaration_in_scope")
+        (source "parser")
+        (range (start 7 4) (end 8 4))
       )
       (diagnostic
         (severity error)
         (code "unrecognized_declaration_in_scope")
         (source "parser")
-        (range (start 7 4) (end 13 4))
+        (range (start 8 4) (end 10 4))
+      )
+      (diagnostic
+        (severity error)
+        (code "unexpected_keyword_in_scope")
+        (source "parser")
+        (range (start 10 4) (end 11 4))
+      )
+      (diagnostic
+        (severity error)
+        (code "unexpected_keyword_in_scope")
+        (source "parser")
+        (range (start 11 4) (end 13 4))
       )
     )
   )
@@ -64,7 +58,7 @@ part def System {
 # SMG
 ~~~sexpr
 (semantic-model
-  (publication (phase resolved) (completeness parse-recovery) (has-evaluation false) (source-digest "blake3:161429c0dd614f928a85292a7c7f59528ada4f3eaebf79d2bb8facd801568277"))
+  (publication (phase resolved) (completeness parse-recovery) (has-evaluation false) (source-digest "blake3:23cb4a6e070d5d2bfd006b1538c2fcb0e2e7f5fa1853543ba6526d1a03e509cb"))
   (declarations
     (declaration (id (node (document "memory://snapshot/coverage_connectors.md") (qualified-name "A"))) (kind part-def) (membership (kind owning) (visibility default)))
     (declaration (id (node (document "memory://snapshot/coverage_connectors.md") (qualified-name "A::p1"))) (kind port) (membership (kind feature) (visibility default)))
