@@ -31,10 +31,10 @@ use crate::model::Visibility;
 use std::sync::Arc;
 use sysml_v2_parser::ast::{
     AssertConstraintMember, CalcDef, CalcDefBody, CalcDefBodyElement, CalcUsage as ParserCalcUsage,
-    CollectionOperatorBody, CollectionOperatorParameterTerminator, ConstraintDef,
-    ConstraintDefBody, ConstraintDefBodyElement, ConstraintUsage as ParserConstraintUsage,
-    Expression, MembershipKind as ParserMembershipKind, Node, RequireConstraint,
-    SequenceExpressionList,
+    CollectionOperator, CollectionOperatorBody, CollectionOperatorParameterTerminator,
+    ConstraintDef, ConstraintDefBody, ConstraintDefBodyElement,
+    ConstraintUsage as ParserConstraintUsage, Expression, MembershipKind as ParserMembershipKind,
+    Node, RequireConstraint, SequenceExpressionList,
 };
 
 use crate::lower::facts::ExpressionOperandRole;
@@ -415,7 +415,47 @@ impl SemanticModelBuilder {
         let Some(text) = quantity_unit_text(&parsed, &operands.value) else {
             return Ok(());
         };
-        self.push_unit_token(declaration, document, &text, operands.span)
+        let mut names = Vec::new();
+        for element in &operands.value.elements {
+            unit_reference_names(&element.expression.value, &mut names);
+        }
+        let mut reference = None;
+        for &target in &names {
+            let span = parsed
+                .qualified_reference(target)
+                .ok_or(ConstructionError::InvalidParserReference)?
+                .metadata
+                .span;
+            let ordinal = self
+                .next_reference_ordinals
+                .get(&(declaration, ReferenceKind::QuantityUnit))
+                .copied()
+                .unwrap_or(0);
+            self.push_reference(PendingReference {
+                source: declaration,
+                kind: ReferenceKind::QuantityUnit,
+                document,
+                local: target,
+                flags: RelationshipFlags::default(),
+                span,
+                import: None,
+            })?;
+            reference = Some(ordinal);
+        }
+        let single = matches!(
+            operands.value.elements.as_slice(),
+            [element] if matches!(
+                element.expression.value,
+                Expression::FeatureRef(_) | Expression::FeatureChainRef(_)
+            )
+        );
+        self.push_unit_token(
+            declaration,
+            document,
+            &text,
+            operands.span,
+            reference.filter(|_| single),
+        )
     }
 
     /// Lowers one authored `filter` condition: its references, and the classified expression that
@@ -1020,28 +1060,30 @@ impl SemanticModelBuilder {
         self.lower_calc_def_body(document, declaration, &node.value.body)
     }
 
-    /// Retains the indexed primary argument as an owned expression tree. Operator arguments
+    /// Retains an index or selection primary as an owned expression tree. Operator arguments
     /// already have identities; register their shapes and lower each in that identity instead
     /// of flattening indexing into the surrounding feature chain (KerML 8.3.4.8.4, .6).
-    pub(super) fn lower_indexed_access_argument(
+    pub(super) fn lower_access_operator_argument(
         &mut self,
         document: DocumentIdx,
         expression: DeclarationId,
         node: &Node<Expression>,
     ) -> Result<(), ConstructionError> {
         let mut site = self.calc_expression_site(document, &node.value);
-        if matches!(node.value, Expression::Index { .. }) {
+        if matches!(
+            node.value,
+            Expression::Index { .. }
+                | Expression::CollectionOp {
+                    op: CollectionOperator::Select,
+                    ..
+                }
+        ) {
             site.operand_scope = crate::lower::facts::ExpressionOperandScope::OwnedArguments;
         }
         self.push_evaluation_fact(expression, site);
         if let Expression::Index { base, operands, .. } = &node.value {
             self.note_expression_node(expression, node);
-            let arguments = self
-                .expression_arguments
-                .iter()
-                .filter(|argument| argument.expression == expression)
-                .copied()
-                .collect::<Vec<_>>();
+            let arguments = self.operator_arguments(expression)?;
             let nodes = std::iter::once(base.as_ref()).chain(
                 operands
                     .value
@@ -1059,7 +1101,39 @@ impl SemanticModelBuilder {
                     argument.result,
                     operand,
                 )?;
-                self.lower_indexed_access_argument(document, argument.argument, operand)?;
+                self.lower_access_operator_argument(document, argument.argument, operand)?;
+            }
+            Ok(())
+        } else if let Expression::CollectionOp {
+            op: CollectionOperator::Select,
+            base,
+            args,
+            brace_body,
+            ..
+        } = &node.value
+        {
+            self.note_expression_node(expression, node);
+            let arguments = self.operator_arguments(expression)?;
+            // record_operator_expression mints this contiguous range from the same accepted
+            // AST node, including its callback. Recovery cannot supply a different shape here;
+            // a mismatch is an internal identity violation, not malformed user syntax.
+            if arguments.len() != 1 + args.len() + usize::from(brace_body.is_some()) {
+                return Err(ConstructionError::InvalidIdentity);
+            }
+            let nodes =
+                std::iter::once(base.as_ref()).chain(args.iter().map(|argument| &argument.value));
+            for (argument, operand) in arguments.iter().zip(nodes) {
+                self.record_value_expression_shape(
+                    document,
+                    argument.argument,
+                    argument.result,
+                    operand,
+                )?;
+                self.lower_access_operator_argument(document, argument.argument, operand)?;
+            }
+            if let Some(body) = brace_body {
+                let argument = arguments.last().ok_or(ConstructionError::InvalidIdentity)?;
+                self.lower_expression_body_contents(document, argument.argument, body)?;
             }
             Ok(())
         } else {
@@ -1089,6 +1163,15 @@ impl SemanticModelBuilder {
             None,
             body.span,
         )?;
+        self.lower_expression_body_contents(document, expression, body)
+    }
+
+    fn lower_expression_body_contents(
+        &mut self,
+        document: DocumentIdx,
+        expression: DeclarationId,
+        body: &Node<CollectionOperatorBody>,
+    ) -> Result<(), ConstructionError> {
         if let Some(doc) = &body.value.doc {
             self.record_doc_comment(document, expression, doc)?;
         }
@@ -1378,6 +1461,27 @@ impl SemanticModelBuilder {
             self.lower_subsetting_relationship(document, declaration, relationship)?;
         }
         self.lower_calc_def_body(document, declaration, &node.value.body)
+    }
+}
+
+/// The names a unit expression is written with, left to right. An exponent is a literal and names
+/// nothing.
+fn unit_reference_names(
+    expression: &Expression,
+    names: &mut Vec<sysml_v2_parser::ast::QualifiedReferenceId>,
+) {
+    match expression {
+        Expression::FeatureRef(target) | Expression::FeatureChainRef(target) => names.push(*target),
+        Expression::BinaryOp { left, right, .. } => {
+            unit_reference_names(&left.value, names);
+            unit_reference_names(&right.value, names);
+        }
+        Expression::Sequence { operands, .. } => {
+            for element in &operands.value.elements {
+                unit_reference_names(&element.expression.value, names);
+            }
+        }
+        _ => {}
     }
 }
 

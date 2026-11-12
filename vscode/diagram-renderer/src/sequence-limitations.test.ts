@@ -52,8 +52,6 @@ describe("canonical sequence limitation presentation", () => {
   it("keeps accessible details available for nonempty and empty products, and clears stale details", async () => {
     document.body.innerHTML = `
       <select id="view-select"></select><span id="status"></span><span id="view-kind"></span>
-      <button id="home"></button><button id="copy-json"></button><button id="view-definition"></button>
-      <input id="transparent-export" type="checkbox"><button id="export-svg"></button><button id="export-png"></button>
       <aside id="limitations" hidden></aside><main id="diagram"></main>`;
     const postMessage = vi.fn();
     vi.stubGlobal("acquireVsCodeApi", () => ({ postMessage }));
@@ -68,11 +66,26 @@ describe("canonical sequence limitation presentation", () => {
     summary.focus();
     expect(document.activeElement).toBe(summary);
     expect(document.querySelector("#limitations")!.hasAttribute("hidden")).toBe(false);
+    const retained = document.createElement("span");
+    document.querySelector("#diagram")!.appendChild(retained);
+    window.dispatchEvent(new MessageEvent("message", { data: { type: "status", header: "Updating view..." } }));
+    expect(document.querySelector("#diagram")!.contains(retained)).toBe(true);
+    expect(document.querySelector("#status")!.textContent).toBe("Updating view...");
+    expect(document.querySelector("#limitations")!.hasAttribute("hidden")).toBe(false);
     const buttons = [...document.querySelectorAll<HTMLButtonElement>("#limitations button")];
     buttons[0].click();
     expect(postMessage).toHaveBeenCalledWith(expect.objectContaining({ type: "openSource", target: expect.objectContaining({ uri: expect.any(String) }) }));
     buttons.at(-1)!.click();
     expect(postMessage).toHaveBeenCalledWith({ type: "copyLimitations", modelDigest: product.modelDigest, viewHandle: "scenario" });
+
+    send(fixture("diagram_sequence_unsupported_details"));
+    await vi.waitFor(() => expect(document.querySelector("#limitations code")!.textContent).toBe("unsupported-syntax"));
+    const diagnosticLink = document.querySelector<HTMLButtonElement>("#limitations li button")!;
+    expect(diagnosticLink.textContent).toContain("unsupported_state_definition_member");
+    diagnosticLink.click();
+    expect(postMessage).toHaveBeenCalledWith({ type: "openSource", target: {
+      uri: "memory://snapshot/diagram_sequence_unsupported_details.md", startLine: 16, startCharacter: 24, endLine: 16, endCharacter: 51,
+    } });
 
     document.querySelector<HTMLDetailsElement>("details")!.open = true;
     send(fixture("sequence_event_cycle"));

@@ -56,6 +56,7 @@ use crate::model::NameId;
 use crate::model::ReferenceKind;
 use crate::model::Visibility;
 use crate::MembershipRole;
+use crate::StateSubactionKind;
 use hashbrown::HashTable;
 use std::hash::BuildHasher;
 
@@ -74,11 +75,12 @@ use sysml_v2_parser::ast::StringLiteral;
 use sysml_v2_parser::ast::{
     AliasBody, AliasDef, AnnotatingMember, CommentAnnotation, Dependency, DocComment, ExposeMember,
     Expression, ExtendedDefinition, FeatureValue, FeatureValueKind as ParserFeatureValueKind,
-    Import, ImportShape, LibraryPackage, Membership, MembershipKind as ParserMembershipKind,
-    NamespaceDecl, Node, Package, PackageBody, PackageBodyElement, QualifiedIdentification,
-    QualifiedReferenceId, RelationshipBodyElement, RootElement, Span, SubsettingKind,
-    SubsettingRelationship, TextualRepresentation, TypeCheckKind, VariantTypedUsage, VariantUsage,
-    VariantUsageForm, Visibility as ParserVisibility,
+    Import, ImportShape, ImportVisibility, LibraryPackage, Membership,
+    MembershipKind as ParserMembershipKind, NamespaceDecl, Node, Package, PackageBody,
+    PackageBodyElement, QualifiedIdentification, QualifiedReferenceId, RelationshipBodyElement,
+    RootElement, Span, SubsettingKind, SubsettingRelationship, TextualRepresentation,
+    TypeCheckKind, VariantTypedUsage, VariantUsage, VariantUsageForm,
+    Visibility as ParserVisibility,
 };
 use sysml_v2_parser::{ParseError, ParsedDocument};
 
@@ -154,12 +156,16 @@ pub(crate) struct SemanticModelBuilder {
     pub(crate) declarations: Vec<Declaration>,
     pub(crate) declaration_facts: Vec<DeclarationFacts>,
     pub(crate) memberships: Vec<MembershipRecord>,
+    /// Last state or entry action in each body, for TargetTransitionUsage source binding.
+    transition_sources: BTreeMap<DeclarationId, DeclarationId>,
     pub(crate) references: Vec<AuthoredReference>,
     pub(crate) relationship_declarations: Vec<AuthoredRelationshipDeclaration>,
     pub(crate) documentation: Vec<DocumentationRecord>,
     pub(crate) feature_values: Vec<FeatureValueRecord>,
     pub(crate) operator_expressions: Vec<OperatorExpressionRecord>,
     pub(crate) expression_arguments: Vec<ExpressionArgumentRecord>,
+    /// Contiguous argument records minted by each accepted operator expression.
+    operator_argument_ranges: BTreeMap<DeclarationId, std::ops::Range<usize>>,
     pub(crate) constructor_expressions: Vec<ConstructorExpressionRecord>,
     pub(crate) pending_instantiations: Vec<PendingInstantiation>,
     pub(crate) instantiation_scopes: Vec<InstantiationScope>,
@@ -1041,12 +1047,17 @@ impl SemanticModelBuilder {
                 op: CollectionOperator::Select,
                 base,
                 args,
-                brace_body: None,
+                brace_body,
                 ..
             } => (
                 OperatorExpressionKind::Select,
                 std::iter::once(site(base))
                     .chain(args.iter().map(|argument| site(&argument.value)))
+                    .chain(
+                        brace_body
+                            .iter()
+                            .map(|body| (body.span, DeclarationKind::KermlExpression)),
+                    )
                     .collect::<Vec<_>>(),
             ),
             _ => return Ok(()),
@@ -1056,6 +1067,7 @@ impl SemanticModelBuilder {
             result,
             kind,
         });
+        let argument_start = self.expression_arguments.len();
         for (ordinal, (span, kind)) in spans.into_iter().enumerate() {
             self.push_expression_argument(
                 document,
@@ -1065,7 +1077,20 @@ impl SemanticModelBuilder {
                 span,
             )?;
         }
+        self.operator_argument_ranges
+            .insert(expression, argument_start..self.expression_arguments.len());
         Ok(())
+    }
+
+    fn operator_arguments(
+        &self,
+        expression: DeclarationId,
+    ) -> Result<Vec<ExpressionArgumentRecord>, ConstructionError> {
+        let range = self
+            .operator_argument_ranges
+            .get(&expression)
+            .ok_or(ConstructionError::InvalidIdentity)?;
+        Ok(self.expression_arguments[range.clone()].to_vec())
     }
 
     /// Pushes a membership whose OMG metaclass carries a role the member's element kind does not
@@ -1116,6 +1141,13 @@ impl SemanticModelBuilder {
             role,
             span,
         });
+        if self.declarations[member.index()].kind == DeclarationKind::StateUsage
+            || role == Some(MembershipRole::StateSubaction(StateSubactionKind::Entry))
+        {
+            if let Some(owner) = self.declarations[member.index()].owner {
+                self.transition_sources.insert(owner, member);
+            }
+        }
         Ok(())
     }
 
@@ -1282,7 +1314,7 @@ impl SemanticModelBuilder {
             node: &'a Node<Expression>,
             chain: &mut Vec<QualifiedReferenceId>,
             casts: &mut Vec<(usize, QualifiedReferenceId)>,
-            indexed_base: &mut Option<&'a Node<Expression>>,
+            operator_base: &mut Option<&'a Node<Expression>>,
         ) -> bool {
             match &node.value {
                 Expression::FeatureRef(target) | Expression::FeatureChainRef(target) => {
@@ -1290,14 +1322,14 @@ impl SemanticModelBuilder {
                     true
                 }
                 Expression::MemberAccess { base, member, .. } => {
-                    if !collect(base, chain, casts, indexed_base) {
+                    if !collect(base, chain, casts, operator_base) {
                         return false;
                     }
                     chain.push(*member);
                     true
                 }
                 Expression::Sequence { operands, .. } => match operands.value.elements.as_slice() {
-                    [only] => collect(&only.expression, chain, casts, indexed_base),
+                    [only] => collect(&only.expression, chain, casts, operator_base),
                     _ => false,
                 },
                 Expression::TypeCheck {
@@ -1305,7 +1337,7 @@ impl SemanticModelBuilder {
                     operand: Some(operand),
                     type_name,
                 } => {
-                    if !collect(operand, chain, casts, indexed_base) {
+                    if !collect(operand, chain, casts, operator_base) {
                         return false;
                     }
                     if *kind == TypeCheckKind::As {
@@ -1313,8 +1345,12 @@ impl SemanticModelBuilder {
                     }
                     true
                 }
-                Expression::Index { .. } => {
-                    *indexed_base = Some(node);
+                Expression::Index { .. }
+                | Expression::CollectionOp {
+                    op: CollectionOperator::Select,
+                    ..
+                } => {
+                    *operator_base = Some(node);
                     true
                 }
                 _ => false,
@@ -1323,18 +1359,18 @@ impl SemanticModelBuilder {
 
         let mut chain = Vec::new();
         let mut casts = Vec::new();
-        let mut indexed_base = None;
-        if !collect(node, &mut chain, &mut casts, &mut indexed_base) || chain.is_empty() {
+        let mut operator_base = None;
+        if !collect(node, &mut chain, &mut casts, &mut operator_base) || chain.is_empty() {
             return Ok(None);
         }
         // Occurrence endpoint roles need their own indexed-occurrence contract. Do not
         // reinterpret them as expression-result lookups merely because they share this helper.
-        if indexed_base.is_some() && kind != ReferenceKind::MemberAccessOperand {
+        if operator_base.is_some() && kind != ReferenceKind::MemberAccessOperand {
             return Ok(None);
         }
-        // A nested indexed access is its own FeatureChainExpression, even when the caller
+        // A member access after an operator is its own FeatureChainExpression, even when the caller
         // has not yet materialized the enclosing operator's other operands (#337).
-        let source = if indexed_base.is_some()
+        let source = if operator_base.is_some()
             && kind == ReferenceKind::MemberAccessOperand
             && !self
                 .feature_chain_expressions
@@ -1348,8 +1384,8 @@ impl SemanticModelBuilder {
             source
         };
         let parsed = Arc::clone(&self.documents[document.index()].parsed);
-        let mut narrowings = Vec::with_capacity(casts.len() + usize::from(indexed_base.is_some()));
-        if let Some(base) = indexed_base {
+        let mut narrowings = Vec::with_capacity(casts.len() + usize::from(operator_base.is_some()));
+        if let Some(base) = operator_base {
             let (expression, result) = self.mint_value_expression(document, source, None, base)?;
             self.expression_arguments.push(ExpressionArgumentRecord {
                 expression: source,
@@ -1357,7 +1393,7 @@ impl SemanticModelBuilder {
                 result,
                 ordinal: 0,
             });
-            self.lower_indexed_access_argument(document, expression, base)?;
+            self.lower_access_operator_argument(document, expression, base)?;
             narrowings.push(MemberAccessNarrowing {
                 segment_count: 0,
                 target: MemberAccessTarget::ExpressionResult(result),
@@ -1383,7 +1419,7 @@ impl SemanticModelBuilder {
                 target: MemberAccessTarget::Reference(target_reference),
             });
         }
-        let reference_span = if indexed_base.is_some() {
+        let reference_span = if operator_base.is_some() {
             let first = parsed
                 .qualified_reference(chain[0])
                 .ok_or(ConstructionError::InvalidParserReference)?
@@ -2082,6 +2118,7 @@ impl SemanticModelBuilder {
         document: DocumentIdx,
         text: &str,
         span: Span,
+        reference: Option<u32>,
     ) -> Result<(), ConstructionError> {
         let text = self.symbols.intern(text)?;
         let ordinal = self
@@ -2096,6 +2133,7 @@ impl SemanticModelBuilder {
             ordinal: assigned,
             text,
             span,
+            reference,
         });
         Ok(())
     }
@@ -2392,6 +2430,33 @@ impl SemanticModelBuilder {
                 Some(DeclarationId::from_index(index).map(|id| (id, record.span, bounds)))
             })
             .collect::<Result<Vec<_>, _>>()?;
+        if owners.is_empty() {
+            return Ok(());
+        }
+        // Bound syntax is consumed here, before publication discards parser trees. Retain
+        // the normal evaluation input, so a bound's published expression is not reconstructed
+        // later from its text, span, or simplified Integer/Expression classification.
+        use sysml_v2_parser::ast::visit::{self, Visitor};
+        #[derive(Default)]
+        struct BoundExpressions(BTreeMap<(usize, usize), Node<Expression>>);
+        impl Visitor for BoundExpressions {
+            fn visit_multiplicity(&mut self, node: &Node<sysml_v2_parser::ast::Multiplicity>) {
+                for bound in node
+                    .value
+                    .lower
+                    .iter()
+                    .map(|bound| bound.as_ref())
+                    .chain(std::iter::once(node.value.upper.as_ref()))
+                {
+                    self.0
+                        .insert((bound.span.offset, bound.span.len), bound.clone());
+                }
+                visit::walk_multiplicity(self, node);
+            }
+        }
+        let parsed = Arc::clone(&self.documents[document.index()].parsed);
+        let mut bound_expressions = BoundExpressions::default();
+        bound_expressions.visit_root_namespace(&parsed.root);
         for (owner, span, bounds) in owners {
             let range = self.push_typed_declaration(
                 document,
@@ -2419,6 +2484,14 @@ impl SemanticModelBuilder {
                         operand,
                         crate::lower::facts::ExpressionOperandRole::FeatureReference,
                     )?;
+                }
+                if let Some(bound) = bound_expressions.0.get(&(site.span.offset, site.span.len)) {
+                    if !matches!(bound.value, Expression::LiteralInfinity) {
+                        self.push_evaluation_fact(
+                            expression,
+                            self.calc_expression_site(document, &bound.value),
+                        );
+                    }
                 }
             }
         }
@@ -2461,8 +2534,11 @@ impl SemanticModelBuilder {
         self.push_membership(
             declaration,
             MembershipKind::Owning,
-            Visibility::Default,
-            node.span,
+            self.member_visibility(
+                &node.value.membership,
+                ParserMembershipKind::OwningMembership,
+            )?,
+            node.value.membership.span,
         )?;
         self.lower_package_body(document, Some(declaration), &node.value.body)
     }
@@ -2493,8 +2569,11 @@ impl SemanticModelBuilder {
         self.push_membership(
             declaration,
             MembershipKind::Owning,
-            Visibility::Default,
-            node.span,
+            self.member_visibility(
+                &node.value.membership,
+                ParserMembershipKind::OwningMembership,
+            )?,
+            node.value.membership.span,
         )?;
         self.lower_package_body(document, Some(declaration), &node.value.body)
     }
@@ -2864,18 +2943,22 @@ impl SemanticModelBuilder {
             // recursive/wildcard/filter facts belong to the authored import reference below.
             DeclarationFacts::none(),
         )?;
-        let membership = &node.value.membership;
-        self.push_membership(
-            declaration,
-            MembershipKind::Import,
-            self.member_visibility(membership, ParserMembershipKind::Import)?,
-            membership.span,
-        )?;
+        let (visibility, span) = match node.value.visibility {
+            ImportVisibility::Authored { visibility, span } => (Self::visibility(visibility), span),
+            // The grammar requires the prefix. Keeping the import lets its names resolve;
+            // the parser already reports the missing keyword.
+            ImportVisibility::Missing {
+                import_keyword_span,
+            } => (Visibility::Default, import_keyword_span),
+        };
+        self.push_membership(declaration, MembershipKind::Import, visibility, span)?;
+        let import_all = node.value.target.all_span.is_some();
         let (kind, flags) = match &node.value.target.shape {
             ImportShape::Membership { recursive_suffix } => (
                 ReferenceKind::MembershipImport,
                 RelationshipFlags {
                     recursive: recursive_suffix.is_some(),
+                    import_all,
                     ..RelationshipFlags::default()
                 },
             ),
@@ -2885,6 +2968,7 @@ impl SemanticModelBuilder {
                 ReferenceKind::NamespaceImport,
                 RelationshipFlags {
                     recursive: recursive_suffix.is_some(),
+                    import_all,
                     wildcard: true,
                     ..RelationshipFlags::default()
                 },
@@ -2895,6 +2979,7 @@ impl SemanticModelBuilder {
                 ReferenceKind::FilterImport,
                 RelationshipFlags {
                     recursive: recursive_suffix.is_some(),
+                    import_all,
                     ..RelationshipFlags::default()
                 },
             ),
@@ -2916,7 +3001,7 @@ impl SemanticModelBuilder {
             span: node.value.target.span,
             import,
         })?;
-        if let Some(elements) = &node.value.body_elements {
+        if let sysml_v2_parser::ast::Body::Brace { elements, .. } = &node.value.body {
             self.lower_relationship_body_elements(document, Some(declaration), elements)?;
         }
         Ok(())

@@ -45,10 +45,132 @@ fn cli_model_export_serializes_complete_connector_paths() {
     });
 }
 
+#[test]
+fn cli_model_export_distinguishes_connections_between_shared_port_definitions() {
+    with_isolated_data_dir(|| {
+        let directory = tempfile::tempdir().unwrap();
+        let path = directory.path().join("connections.sysml");
+        std::fs::write(
+            &path,
+            "package Repro32 {
+            port def P { out attribute x : ScalarValues::Boolean; }
+            part def S { port p : P; }
+            part def C { port q : ~P; }
+            part def Sys {
+                part a : S; part b : S; part c : C; part d : C;
+                connect c.q to a.p;
+                connect d.q to b.p;
+            }
+        }",
+        )
+        .unwrap();
+        let output = run_spec42_json(&["model-export", path.to_str().unwrap(), "--format", "json"]);
+        let connectors = output["projection"]["connectors"].as_array().unwrap();
+        assert_eq!(connectors.len(), 2);
+        for (connector, names) in connectors.iter().zip([["c", "a"], ["d", "b"]]) {
+            let ends = connector["ends"].as_array().unwrap();
+            assert_eq!(ends.len(), 2);
+            for (end, name) in ends.iter().zip(names) {
+                let endpoint = &end["endpoint"];
+                assert_eq!(endpoint["kind"], "feature-chain");
+                assert_eq!(
+                    endpoint["root"]["qualified_name"],
+                    format!("Repro32::Sys::{name}")
+                );
+                let hops = endpoint["path"].as_array().unwrap();
+                assert_eq!(hops.len(), 2);
+                assert_eq!(hops.first().unwrap(), &endpoint["root"]);
+                assert_eq!(hops.last().unwrap(), &endpoint["terminal"]);
+            }
+        }
+    });
+}
+
+#[test]
+fn cli_diagram_warns_when_a_filter_excludes_the_exposed_root() {
+    with_isolated_data_dir(|| {
+        let directory = tempfile::tempdir().unwrap();
+        let path = directory.path().join("empty.sysml");
+        for (filter, empty) in [("PartUsage", true), ("PartDefinition", false)] {
+            std::fs::write(
+                &path,
+                format!(
+                    "package Repro17 {{
+                private import StandardViewDefinitions::*;
+                part def Sys;
+                view empty : InterconnectionView {{
+                    expose Sys;
+                    filter @SysML::{filter};
+                }}
+            }}"
+                ),
+            )
+            .unwrap();
+            let output = Command::new(spec42_bin())
+                .args([
+                    "diagram",
+                    path.to_str().unwrap(),
+                    "--view",
+                    "Repro17::empty",
+                    "--format",
+                    "json",
+                ])
+                .output()
+                .unwrap();
+            assert!(
+                output.status.success(),
+                "{}",
+                String::from_utf8_lossy(&output.stderr)
+            );
+            let product: Value = serde_json::from_slice(&output.stdout).unwrap();
+            assert_eq!(product["completeness"]["status"], "complete");
+            assert_eq!(
+                product["projection"]["nodes"]
+                    .as_array()
+                    .unwrap()
+                    .is_empty(),
+                empty
+            );
+            let stderr = String::from_utf8(output.stderr).unwrap();
+            assert_eq!(stderr.contains("warning[empty_diagram]"), empty);
+        }
+    });
+}
+
 fn spec42_bin() -> PathBuf {
     std::env::var_os("CARGO_BIN_EXE_spec42")
         .map(PathBuf::from)
         .expect("CARGO_BIN_EXE_spec42 (run via cargo test)")
+}
+
+#[test]
+fn cli_model_export_serializes_state_membership_and_trigger_kind() {
+    with_isolated_data_dir(|| {
+        let directory = tempfile::tempdir().unwrap();
+        let path = directory.path().join("state.sysml");
+        // Semantic ownership and expression trees are pinned in state_ports_and_trigger_exports.md.
+        // This check protects the JSON boundary's additional optional vocabulary fields.
+        std::fs::write(&path, "package P { state def Controller { attribute enabled : ScalarValues::Boolean; entry; then idle; state idle { entry action start; do action run; exit action stop; } state active; transition change first idle accept when enabled then active; } }").unwrap();
+        let output = run_spec42_json(&["model-export", path.to_str().unwrap(), "--format", "json"]);
+        let elements = output["projection"]["elements"].as_array().unwrap();
+        for (name, role) in [("start", "entry"), ("run", "do"), ("stop", "exit")] {
+            let element = elements
+                .iter()
+                .find(|element| element["name"] == name)
+                .unwrap();
+            assert_eq!(element["membership"]["role"], role);
+            assert_eq!(element["kind"], "PerformActionUsage");
+        }
+        let trigger = elements
+            .iter()
+            .find(|element| element["trigger_kind"] == "when")
+            .unwrap();
+        assert_eq!(trigger["expression"]["outcome"], "resolved");
+        assert!(!trigger["expression"]["nodes"]
+            .as_array()
+            .unwrap()
+            .is_empty());
+    });
 }
 
 fn run_spec42_json(args: &[&str]) -> Value {
@@ -89,6 +211,34 @@ fn cli_explain_diagnostic_returns_catalog_entry() {
 }
 
 #[test]
+fn cli_model_export_admits_operator_signatures_without_function_imports() {
+    with_isolated_data_dir(|| {
+        let directory = tempfile::tempdir().unwrap();
+        let path = directory.path().join("operators.sysml");
+        // Scalar value semantics are pinned in static_value_result_types.md. This
+        // artifact test exercises the normal bundled-library admission path and
+        // serialization, where function packages are not explicitly imported.
+        std::fs::write(&path, "package P { private import ScalarValues::*; attribute n : Natural = 11 - 1; attribute valid : Natural = 11 + 1; }").unwrap();
+        let exported =
+            run_spec42_json(&["model-export", path.to_str().unwrap(), "--format", "json"]);
+        // Integer -> Natural is related narrowing that the static checker cannot prove,
+        // so it is reported as a warning; `11 + 1` stays Natural and is clean.
+        assert_eq!(exported["summary"]["error_count"], 0);
+        assert_eq!(exported["summary"]["warning_count"], 1);
+        let elements = exported["projection"]["elements"].as_array().unwrap();
+        let n = elements
+            .iter()
+            .find(|element| element["effective_qualified_name"] == "P::n")
+            .unwrap();
+        assert_eq!(n["expression"]["result_typing"]["status"], "resolved");
+        assert!(!n["expression"]["result_typing"]["types"]
+            .as_array()
+            .unwrap()
+            .is_empty());
+    });
+}
+
+#[test]
 fn cli_model_export_emits_the_typed_projection() {
     with_isolated_data_dir(|| {
         let path = kitchen_timer_path();
@@ -109,7 +259,7 @@ fn cli_model_export_emits_the_typed_projection() {
         let projection = full.get("projection").expect("projection object");
         assert_eq!(
             projection.get("schema_version").and_then(|v| v.as_u64()),
-            Some(1)
+            Some(2)
         );
         let envelope = projection.get("envelope").expect("envelope object");
         assert_eq!(

@@ -4,13 +4,13 @@
 //! distinct type:
 //!
 //! ```text
-//! Lowered ─► Resolved ─► Evaluated ─► Indexed ─► Complete
+//! Lowered â”€â–º Resolved â”€â–º Evaluated â”€â–º Indexed â”€â–º Complete
 //! ```
 //!
 //! Two properties follow by construction rather than by discipline:
 //!
 //! * no phase can write back into an earlier phase's store, because that store has been moved; and
-//! * there is no half-built model to observe — `ResolvedSemanticModel` is reachable only out of
+//! * there is no half-built model to observe â€” `ResolvedSemanticModel` is reachable only out of
 //!   `Complete`, and `Complete` cannot be built without a settled diagnostic product.
 
 use crate::evaluate::compute_evaluation;
@@ -59,6 +59,7 @@ use crate::resolve::names::EffectiveScopeIndex;
 use crate::resolve::names::MembershipIndex;
 use crate::resolve::names::NameIndex;
 use crate::resolve::resolve_dense;
+use crate::resolve::results::FeedbackCycle;
 use crate::resolve::results::ResolutionError;
 use crate::resolve::results::ResolutionResults;
 use crate::resolve::results::ResolutionStatus;
@@ -117,6 +118,621 @@ impl From<(SemanticModelStorage, ParsedSources)> for Lowered {
     }
 }
 
+/// The canonical source-independent resolution phase, shared by publication and import plans.
+pub(crate) struct ResolvedFacts {
+    pub(crate) direct_names: NameIndex,
+    pub(crate) effective_imports: NameIndex,
+    pub(crate) exported_imports: NameIndex,
+    pub(crate) memberships: MembershipIndex,
+    pub(crate) resolution: ResolutionResults,
+}
+
+pub(crate) fn resolve_facts(
+    storage: &SemanticModelStorage,
+    library: Option<&SettledLibrary>,
+    proposed_imports: &[(crate::resolve::names::NameKey, crate::model::DeclarationId)],
+) -> Result<ResolvedFacts, ResolutionError> {
+    let admitted_library = library.filter(|library| library.admits(storage));
+    let seed = admitted_library.map(|library| library.outcomes.as_ref());
+    let library_anchors = library_specialization_anchors(storage);
+    let provisional_library_specializations =
+        crate::resolve::implied::provisional_library_specializations(storage, &library_anchors)?;
+    let shadowed_library_roots = crate::resolve::library_seed::shadowed_library_roots(storage);
+    // Semantic metadata can introduce supertypes whose inherited members are needed by
+    // authored references, including further metadata baseType redefinitions. Feed the
+    // canonical synthesis back into name resolution until the exact relationship set is
+    // stable; no intermediate resolution is published (SysML 7.27.3â€“7.27.4).
+    let feature_type_dependencies =
+        crate::resolve::effective_types::feature_chain_typing_dependencies(storage);
+    let mut provisional_relationships = provisional_library_specializations.to_vec();
+    let mut previous_metadata_relationships = Vec::new();
+    let mut previous_expression_relationships = admitted_library
+        .map(|library| library.expression_relationships.to_vec())
+        .unwrap_or_default();
+    provisional_relationships.extend(previous_expression_relationships.iter().copied());
+    provisional_relationships.sort_by_key(|edge| (edge.kind, edge.source.0, edge.target.0));
+    provisional_relationships.dedup();
+    let has_expression_roots = storage.references.iter().any(|reference| {
+        reference.member_access_narrowings.iter().any(|narrowing| {
+            matches!(
+                narrowing.target,
+                crate::lower::facts::MemberAccessTarget::ExpressionResult(_)
+            )
+        })
+    });
+    // Metadata contributes at most one dependency link per annotation. An expression-result
+    // relationship is sourced at the result of one feature-reference, feature-chain or
+    // operator expression, and a pass can only add one whose prerequisite settled in the
+    // previous pass, so a dependency chain visits each of those expressions at most once.
+    // Two extra passes confirm the fixed point. Both families share this barrier so lookup
+    // never publishes stale result types; exhausting the bound leaves an explicit
+    // nonconverged publication.
+    let expression_links = if has_expression_roots {
+        storage
+            .feature_reference_expressions
+            .len()
+            .saturating_add(storage.feature_chain_expressions.len())
+            .saturating_add(storage.operator_expressions.len())
+    } else {
+        0
+    };
+    let import_slots = storage
+        .references
+        .iter()
+        .enumerate()
+        .filter_map(|(index, reference)| {
+            crate::resolve::supported_import_domain(reference).map(|_| index)
+        })
+        .collect::<Vec<_>>();
+    let mut inherited_import_scopes = None;
+    let mut effective_import_names = None;
+    let mut relationship_passes_remaining = storage
+        .metadata_annotations
+        .len()
+        .saturating_add(expression_links)
+        .saturating_add(import_slots.len())
+        .saturating_add(2);
+    // Import shadowing is not monotone. Detect repeated complete feedback states as well as
+    // retaining a finite dependency budget; a two-state oscillation must not spend that budget.
+    let mut feedback_cycle = FeedbackCycle::default();
+    let (direct_names, effective_imports, exported_imports, memberships, resolution) = loop {
+        let (direct_names, effective_imports, exported_imports, memberships, resolution) =
+            resolve_dense(
+                &storage.declarations,
+                Some(&storage.declaration_facts),
+                &storage.memberships,
+                &storage.paths,
+                &storage.references,
+                crate::resolve::ResolutionStartingState {
+                    provisional_relationships: &provisional_relationships,
+                    settled_outcomes: seed,
+                    settled_ambiguous_candidates: admitted_library
+                        .map(|library| library.ambiguous_candidates.as_ref())
+                        .unwrap_or_default(),
+                    shadowed_library_roots: &shadowed_library_roots,
+                    owned_end_features: &storage.owned_end_features,
+                    feature_type_dependencies: &feature_type_dependencies,
+                    proposed_imports,
+                    inherited_import_scopes: inherited_import_scopes.as_ref(),
+                    effective_import_names: effective_import_names.as_deref(),
+                },
+            )?;
+        let resolution = resolution.follow_aliases(&storage.declarations, &storage.references);
+        let authored_relationships = storage
+            .relationship_declarations
+            .iter()
+            .filter_map(|relationship| {
+                let ResolutionStatus::Resolved(source) = resolution.outcome(relationship.source)?
+                else {
+                    return None;
+                };
+                let ResolutionStatus::Resolved(target) = resolution.outcome(relationship.target)?
+                else {
+                    return None;
+                };
+                Some(crate::resolve::results::AuthoredRelationship {
+                    kind: relationship.kind,
+                    source,
+                    target,
+                    declaration: relationship.source,
+                })
+            })
+            .collect::<Vec<_>>()
+            .into_boxed_slice();
+        let resolution = resolution.settle_authored_relationships(authored_relationships);
+        // `checkPartDefinitionSpecialization` is an implied semantic fact, so its anchor and
+        // relationships are settled here, before every index and diagnostic consumer below. The
+        // lookup is owned by semantic construction: neither a renderer nor a validation rule gets
+        // to rediscover `Parts::Part` from text or a display path.
+        let base_implied =
+            synthesize_implied_relationships(storage, &resolution, &library_anchors)?;
+        // Edges derived without semantic metadata. The previous pass's metadata edges are
+        // only prerequisites for the derivations below and are replaced, not kept, once this
+        // pass's synthesis is known.
+        let mut independent = base_implied.to_vec();
+        independent.extend(previous_expression_relationships.iter().copied());
+        let mut implied = base_implied.to_vec();
+        implied.extend(previous_metadata_relationships.iter().copied());
+        implied.extend(previous_expression_relationships.iter().copied());
+        implied.sort_by_key(|relationship| {
+            (
+                relationship.kind,
+                relationship.source.0,
+                relationship.target.0,
+            )
+        });
+        implied.dedup();
+        let resolution = resolution.settle(implied.into_boxed_slice(), library_anchors.clone());
+        // Owned cross-feature typing depends on the owning end's effective types, including types
+        // inherited through the implied relationships settled above. Consume the canonical type
+        // index at an explicit sub-barrier, then replace the provisional relationship set before
+        // publishing `Resolved`; no reader can observe the intermediate state.
+        let resolution = if storage
+            .declaration_facts
+            .iter()
+            .any(|facts| facts.cross_feature_projection.is_some())
+        {
+            let prerequisite_types = derive_effective_types(storage, &resolution)?;
+            let mut implied = resolution.implied_relationships.to_vec();
+            let cross_feature =
+                synthesize_owned_cross_feature_typings(storage, &prerequisite_types)?
+                    .into_vec()
+                    .into_iter()
+                    .chain(
+                        synthesize_owned_cross_feature_type_featurings(
+                            storage,
+                            &prerequisite_types,
+                        )?
+                        .into_vec(),
+                    )
+                    .collect::<Vec<_>>();
+            independent.extend(cross_feature.iter().copied());
+            implied.extend(cross_feature);
+            implied.sort_by_key(|relationship| {
+                (
+                    relationship.kind,
+                    relationship.source.0,
+                    relationship.target.0,
+                )
+            });
+            implied.dedup();
+            let library_anchors = resolution.library_specialization_anchors.clone();
+            resolution.settle(implied.into_boxed_slice(), library_anchors)
+        } else {
+            resolution
+        };
+        let expression_relationships = if has_expression_roots {
+            crate::resolve::implied::synthesize_access_expression_result_relationships(
+                storage,
+                &resolution,
+            )?
+        } else {
+            Vec::new()
+        };
+        let mut metadata_relationships = Vec::new();
+        let mut resolution = if storage.metadata_annotations.is_empty() {
+            resolution
+        } else {
+            let prerequisite_types = derive_effective_types(storage, &resolution)?;
+            let synthesis = synthesize_semantic_metadata_specializations(
+                storage,
+                &resolution,
+                &prerequisite_types,
+            )?;
+            metadata_relationships = synthesis.implied_relationships.to_vec();
+            // Prior metadata edges are prerequisites, not an accumulating truth store: the
+            // settled set is the independently derived edges plus this pass's canonical
+            // synthesis, so an edge also derived another way survives and the result does
+            // not depend on pass history.
+            let mut implied = independent;
+            implied.extend(synthesis.implied_relationships);
+            implied.sort_by_key(|relationship| {
+                (
+                    relationship.kind,
+                    relationship.source.0,
+                    relationship.target.0,
+                )
+            });
+            implied.dedup();
+            resolution.settle_semantic_metadata(
+                implied.into_boxed_slice(),
+                synthesis.projections,
+                synthesis.status,
+            )
+        };
+        let mut next_relationships = provisional_library_specializations.to_vec();
+        next_relationships.extend(metadata_relationships.iter().copied());
+        next_relationships.extend(expression_relationships.iter().copied());
+        next_relationships.sort_by_key(|relationship| {
+            (
+                relationship.kind,
+                relationship.source.0,
+                relationship.target.0,
+            )
+        });
+        next_relationships.dedup();
+        relationship_passes_remaining -= 1;
+        // Imports include inherited visible memberships. Rebuild against this pass's
+        // settled scopes, then give resolution another pass if imports changed. This
+        // shares the existing bounded construction barrier with expression/metadata edges.
+        let imports_settled = if resolution.solver_status != SolverStatus::Converged {
+            // A failed resolution pass has no settled inherited scope to feed back.
+            // Preserve its explicit failure instead of retrying its partial imports.
+            true
+        } else {
+            let exported_names = crate::resolve::names::build_direct_name_index(
+                &storage.declarations,
+                Some(&storage.declaration_facts),
+                Some(&resolution.effective_names),
+                Some(&memberships),
+                &shadowed_library_roots,
+            )?;
+            let (next_imports, next_exported_imports) =
+                crate::resolve::names::build_effective_import_indexes(
+                    &storage.declarations,
+                    Some(&storage.declaration_facts),
+                    &memberships,
+                    &storage.references,
+                    &import_slots,
+                    crate::resolve::names::ImportNameSources {
+                        direct_names: &direct_names,
+                        exported_names: &exported_names,
+                        effective_imports: &effective_imports,
+                        exported_imports: &exported_imports,
+                        inherited_names: Some(&resolution.inherited_names),
+                    },
+                    &resolution.outcomes,
+                )?;
+            next_imports.with_additional(proposed_imports)? == effective_imports
+                && next_exported_imports == exported_imports
+        };
+        if next_relationships == provisional_relationships && imports_settled {
+            break (
+                direct_names,
+                effective_imports,
+                exported_imports,
+                memberships,
+                resolution,
+            );
+        }
+        let repeated = !import_slots.is_empty()
+            && feedback_cycle.repeats((
+                next_relationships.clone(),
+                // Each family also feeds a different synthesis prerequisite on the next pass;
+                // an equal union must not hide progress in their derivation provenance.
+                metadata_relationships.clone(),
+                expression_relationships.clone(),
+                effective_imports.clone(),
+                exported_imports.clone(),
+                resolution.effective_names.clone(),
+                resolution.inherited_names.clone(),
+                resolution.outcomes.clone(),
+                resolution.ambiguous_candidates.clone(),
+            ));
+        if relationship_passes_remaining == 0 || repeated {
+            resolution.solver_status = SolverStatus::NonConverged;
+            break (
+                direct_names,
+                effective_imports,
+                exported_imports,
+                memberships,
+                resolution,
+            );
+        }
+        provisional_relationships = next_relationships;
+        previous_metadata_relationships = metadata_relationships;
+        previous_expression_relationships = expression_relationships;
+        inherited_import_scopes = Some(resolution.inherited_names);
+        effective_import_names = Some(resolution.effective_names);
+    };
+    let resolution = if storage
+        .declaration_facts
+        .iter()
+        .all(|facts| !facts.is_transition_payload_parameter)
+    {
+        resolution
+    } else {
+        let synthesis = synthesize_transition_payload_subsettings(storage)?;
+        let mut implied = resolution.implied_relationships.to_vec();
+        implied.extend(synthesis.implied_relationships);
+        implied.sort_by_key(|relationship| {
+            (
+                relationship.kind,
+                relationship.source.0,
+                relationship.target.0,
+            )
+        });
+        implied.dedup();
+        resolution.settle_transition_payload_subsettings(
+            implied.into_boxed_slice(),
+            synthesis.projections,
+            synthesis.status,
+        )
+    };
+    let resolution = if storage
+        .declaration_facts
+        .iter()
+        .all(|facts| !facts.is_transition_succession)
+    {
+        resolution
+    } else {
+        let synthesis = synthesize_transition_succession_sources(storage, &resolution)?;
+        resolution.settle_transition_succession_sources(synthesis.projections, synthesis.status)
+    };
+    let resolution = if storage
+        .declaration_facts
+        .iter()
+        .all(|facts| facts.transition_feature_role.is_none())
+    {
+        resolution
+    } else {
+        let synthesis = synthesize_transition_feature_specializations(storage)?;
+        let mut implied = resolution.implied_relationships.to_vec();
+        implied.extend(synthesis.implied_relationships);
+        implied.sort_by_key(|relationship| {
+            (
+                relationship.kind,
+                relationship.source.0,
+                relationship.target.0,
+            )
+        });
+        implied.dedup();
+        resolution.settle_transition_feature_specializations(
+            implied.into_boxed_slice(),
+            synthesis.projections,
+            synthesis.status,
+        )
+    };
+    let resolution = if storage.operator_expressions.is_empty() {
+        resolution
+    } else {
+        let synthesis =
+            synthesize_operator_expression_result_specializations(storage, &resolution)?;
+        let mut implied = resolution.implied_relationships.to_vec();
+        implied.extend(synthesis.implied_relationships);
+        implied.sort_by_key(|relationship| {
+            (
+                relationship.kind,
+                relationship.source.0,
+                relationship.target.0,
+            )
+        });
+        implied.dedup();
+        resolution.settle_expression_arguments(
+            implied.into_boxed_slice(),
+            synthesis.select_status,
+            synthesis.index_status,
+            synthesis.array_anchor,
+        )
+    };
+    let resolution = if storage.constructor_expressions.is_empty() {
+        resolution
+    } else {
+        let synthesis =
+            synthesize_constructor_expression_result_specializations(storage, &resolution)?;
+        let mut implied = resolution.implied_relationships.to_vec();
+        implied.extend(synthesis.implied_relationships);
+        implied.sort_by_key(|relationship| {
+            (
+                relationship.kind,
+                relationship.source.0,
+                relationship.target.0,
+            )
+        });
+        implied.dedup();
+        resolution.settle_constructor_expressions(
+            implied.into_boxed_slice(),
+            synthesis.projections,
+            synthesis.status,
+            synthesis.specialization_status,
+            Some(synthesis.anchor),
+        )
+    };
+    let resolution = if storage.feature_chain_expressions.is_empty() {
+        resolution
+    } else {
+        let synthesis =
+            synthesize_feature_chain_expression_result_specializations(storage, &resolution)?;
+        let mut implied = resolution.implied_relationships.to_vec();
+        implied.extend(synthesis.implied_relationships);
+        implied.sort_by_key(|relationship| {
+            (
+                relationship.kind,
+                relationship.source.0,
+                relationship.target.0,
+            )
+        });
+        implied.dedup();
+        resolution.settle_feature_chain_expressions(
+            implied.into_boxed_slice(),
+            synthesis.projections,
+            synthesis.status,
+        )
+    };
+    let resolution = if storage.feature_reference_expressions.is_empty() {
+        resolution
+    } else {
+        let synthesis =
+            synthesize_feature_reference_expression_result_specializations(storage, &resolution)?;
+        let mut implied = resolution.implied_relationships.to_vec();
+        implied.extend(synthesis.implied_relationships);
+        implied.sort_by_key(|relationship| {
+            (
+                relationship.kind,
+                relationship.source.0,
+                relationship.target.0,
+            )
+        });
+        implied.dedup();
+        resolution.settle_feature_reference_expressions(
+            implied.into_boxed_slice(),
+            synthesis.projections,
+            synthesis.status,
+        )
+    };
+    let resolution = if storage.invocations.is_empty() {
+        resolution
+    } else {
+        let prerequisite_types = derive_effective_types(storage, &resolution)?;
+        let synthesis = synthesize_invocation_expression_specializations(
+            storage,
+            &resolution,
+            &prerequisite_types,
+        )?;
+        let mut implied = resolution.implied_relationships.to_vec();
+        implied.extend(synthesis.implied_relationships);
+        implied.sort_by_key(|relationship| {
+            (
+                relationship.kind,
+                relationship.source.0,
+                relationship.target.0,
+            )
+        });
+        implied.dedup();
+        resolution.settle_invocation_expressions(
+            implied.into_boxed_slice(),
+            synthesis.projections,
+            synthesis.status,
+        )
+    };
+    // `checkFeatureParameterRedefinition` then `checkFeatureResultRedefinition`: a parameter
+    // redefines the parameter at its position, and a result the result, of every Behavior or
+    // Step (Function or Expression) its owner directly specializes. That includes the
+    // FeatureTyping of an invocation by its callee settled just above, so both run once every
+    // specialization of a Behavior or Step is known; a positional parameter redefinition is
+    // itself a specialization of a parameter that may own a result, so results run last.
+    let resolution = if !matches!(resolution.solver_status, SolverStatus::Converged) {
+        resolution
+    } else {
+        let settled = crate::resolve::SettledTypeEdges::collect(
+            &storage.references,
+            &resolution.outcomes,
+            &resolution.implied_relationships,
+        )?;
+        let parameters = crate::resolve::parameter_positions::synthesize_parameter_redefinitions(
+            storage,
+            settled.edges,
+            &settled.authored_redefinitions,
+        )?;
+        let mut with_parameters = resolution.implied_relationships.to_vec();
+        with_parameters.extend(parameters.iter().copied());
+        let settled = crate::resolve::SettledTypeEdges::collect(
+            &storage.references,
+            &resolution.outcomes,
+            &with_parameters,
+        )?;
+        let mut synthesized = parameters;
+        synthesized.extend(
+            crate::resolve::result_parameters::synthesize_result_redefinitions(
+                storage,
+                settled.edges.iter().copied(),
+                &settled.authored_redefinitions,
+            )?,
+        );
+        // `checkConstructorExpressionResultFeatureRedefinition`: a positional constructor
+        // argument redefines the public feature of the instantiated type at its position.
+        // Which features a type has excludes the ones its members redefine, so this reads
+        // every redefinition settled so far, the ones just synthesized included.
+        let mut redefinitions = settled.authored_redefinitions.clone();
+        redefinitions.extend(
+            with_parameters
+                .iter()
+                .chain(synthesized.iter())
+                .filter(|relationship| {
+                    relationship.kind == crate::model::ReferenceKind::Redefinition
+                })
+                .map(|relationship| (relationship.source, relationship.target)),
+        );
+        synthesized.extend(
+            crate::resolve::constructor_features::synthesize_constructor_argument_redefinitions(
+                storage,
+                &resolution.constructor_expression_projections,
+                settled.edges,
+                &redefinitions,
+            )?,
+        );
+        if synthesized.is_empty() {
+            resolution
+        } else {
+            let mut implied = resolution.implied_relationships.to_vec();
+            implied.extend(synthesized);
+            implied.sort_by_key(|relationship| {
+                (
+                    relationship.kind,
+                    relationship.source.0,
+                    relationship.target.0,
+                )
+            });
+            implied.dedup();
+            let library_anchors = resolution.library_specialization_anchors.clone();
+            resolution.settle(implied.into_boxed_slice(), library_anchors)
+        }
+    };
+    let resolution = if storage
+        .declarations
+        .iter()
+        .all(|declaration| declaration.kind != crate::model::DeclarationKind::Succession)
+    {
+        resolution
+    } else {
+        let synthesis = synthesize_succession_endpoint_subsettings(storage, &resolution)?;
+        let mut implied = resolution.implied_relationships.to_vec();
+        implied.extend(synthesis.implied_relationships);
+        implied.sort_by_key(|relationship| {
+            (
+                relationship.kind,
+                relationship.source.0,
+                relationship.target.0,
+            )
+        });
+        implied.dedup();
+        resolution.settle_succession_endpoint_subsettings(
+            implied.into_boxed_slice(),
+            synthesis.projections,
+            synthesis.decision_status,
+            synthesis.merge_status,
+            synthesis.control_node_successions,
+        )
+    };
+    // A Connector with no owning Type is featured by the innermost featuring type its related
+    // features share (`checkConnectorTypeFeaturing`). That reads the settled featuring rows,
+    // end features and specialization closure, so it consumes a prerequisite type index at
+    // this final sub-barrier; nothing else depends on a Connector's own featuring type.
+    let connector_candidates = context_featuring_candidates(storage)?;
+    let resolution = if connector_candidates.is_empty() {
+        resolution
+    } else {
+        let prerequisite_types = TypeIndex::build(storage, &resolution)?;
+        let mut implied = resolution.implied_relationships.to_vec();
+        implied.extend(
+            synthesize_connector_context_featurings(
+                storage,
+                &resolution,
+                &prerequisite_types,
+                &connector_candidates,
+            )?
+            .into_vec(),
+        );
+        implied.sort_by_key(|relationship| {
+            (
+                relationship.kind,
+                relationship.source.0,
+                relationship.target.0,
+            )
+        });
+        implied.dedup();
+        let library_anchors = resolution.library_specialization_anchors.clone();
+        resolution.settle(implied.into_boxed_slice(), library_anchors)
+    };
+    Ok(ResolvedFacts {
+        direct_names,
+        effective_imports,
+        exported_imports,
+        memberships,
+        resolution,
+    })
+}
+
 impl Lowered {
     /// Phases 3 and 4: solve names to convergence, then settle implied relationships.
     ///
@@ -131,536 +747,13 @@ impl Lowered {
         let sources = self.sources;
         let has_recovery = sources.any_parse_errors() || !storage.recovery.is_empty();
         let has_unsupported = !storage.unsupported.is_empty();
-        let admitted_library = library.filter(|library| library.admits(&storage));
-        let seed = admitted_library.map(|library| library.outcomes.as_ref());
-        let library_anchors = library_specialization_anchors(&storage);
-        let provisional_library_specializations =
-            crate::resolve::implied::provisional_library_specializations(
-                &storage,
-                &library_anchors,
-            )?;
-        let shadowed_library_roots = crate::resolve::library_seed::shadowed_library_roots(&storage);
-        // Semantic metadata can introduce supertypes whose inherited members are needed by
-        // authored references, including further metadata baseType redefinitions. Feed the
-        // canonical synthesis back into name resolution until the exact relationship set is
-        // stable; no intermediate resolution is published (SysML 7.27.3–7.27.4).
-        let feature_type_dependencies =
-            crate::resolve::effective_types::feature_chain_typing_dependencies(&storage);
-        let mut provisional_relationships = provisional_library_specializations.to_vec();
-        let mut previous_metadata_relationships = Vec::new();
-        let mut previous_expression_relationships = admitted_library
-            .map(|library| library.expression_relationships.to_vec())
-            .unwrap_or_default();
-        provisional_relationships.extend(previous_expression_relationships.iter().copied());
-        provisional_relationships.sort_by_key(|edge| (edge.kind, edge.source.0, edge.target.0));
-        provisional_relationships.dedup();
-        let has_expression_roots = storage.references.iter().any(|reference| {
-            reference.member_access_narrowings.iter().any(|narrowing| {
-                matches!(
-                    narrowing.target,
-                    crate::lower::facts::MemberAccessTarget::ExpressionResult(_)
-                )
-            })
-        });
-        // Metadata contributes at most one dependency link per annotation. An expression-result
-        // relationship is sourced at the result of one feature-reference, feature-chain or
-        // operator expression, and a pass can only add one whose prerequisite settled in the
-        // previous pass, so a dependency chain visits each of those expressions at most once.
-        // Two extra passes confirm the fixed point. Both families share this barrier so lookup
-        // never publishes stale result types; exhausting the bound leaves an explicit
-        // nonconverged publication.
-        let expression_links = if has_expression_roots {
-            storage
-                .feature_reference_expressions
-                .len()
-                .saturating_add(storage.feature_chain_expressions.len())
-                .saturating_add(storage.operator_expressions.len())
-        } else {
-            0
-        };
-        let mut relationship_passes_remaining = storage
-            .metadata_annotations
-            .len()
-            .saturating_add(expression_links)
-            .saturating_add(2);
-        let (direct_names, effective_imports, exported_imports, memberships, resolution) = loop {
-            let (direct_names, effective_imports, exported_imports, memberships, resolution) =
-                resolve_dense(
-                    &storage.declarations,
-                    Some(&storage.declaration_facts),
-                    &storage.memberships,
-                    &storage.paths,
-                    &storage.references,
-                    crate::resolve::ResolutionStartingState {
-                        provisional_relationships: &provisional_relationships,
-                        settled_outcomes: seed,
-                        shadowed_library_roots: &shadowed_library_roots,
-                        owned_end_features: &storage.owned_end_features,
-                        feature_type_dependencies: &feature_type_dependencies,
-                    },
-                )?;
-            let resolution = resolution.follow_aliases(&storage.declarations, &storage.references);
-            let authored_relationships = storage
-                .relationship_declarations
-                .iter()
-                .filter_map(|relationship| {
-                    let ResolutionStatus::Resolved(source) =
-                        resolution.outcome(relationship.source)?
-                    else {
-                        return None;
-                    };
-                    let ResolutionStatus::Resolved(target) =
-                        resolution.outcome(relationship.target)?
-                    else {
-                        return None;
-                    };
-                    Some(crate::resolve::results::AuthoredRelationship {
-                        kind: relationship.kind,
-                        source,
-                        target,
-                        declaration: relationship.source,
-                    })
-                })
-                .collect::<Vec<_>>()
-                .into_boxed_slice();
-            let resolution = resolution.settle_authored_relationships(authored_relationships);
-            // `checkPartDefinitionSpecialization` is an implied semantic fact, so its anchor and
-            // relationships are settled here, before every index and diagnostic consumer below. The
-            // lookup is owned by semantic construction: neither a renderer nor a validation rule gets
-            // to rediscover `Parts::Part` from text or a display path.
-            let base_implied =
-                synthesize_implied_relationships(&storage, &resolution, &library_anchors)?;
-            // Edges derived without semantic metadata. The previous pass's metadata edges are
-            // only prerequisites for the derivations below and are replaced, not kept, once this
-            // pass's synthesis is known.
-            let mut independent = base_implied.to_vec();
-            independent.extend(previous_expression_relationships.iter().copied());
-            let mut implied = base_implied.to_vec();
-            implied.extend(previous_metadata_relationships.iter().copied());
-            implied.extend(previous_expression_relationships.iter().copied());
-            implied.sort_by_key(|relationship| {
-                (
-                    relationship.kind,
-                    relationship.source.0,
-                    relationship.target.0,
-                )
-            });
-            implied.dedup();
-            let resolution = resolution.settle(implied.into_boxed_slice(), library_anchors.clone());
-            // Owned cross-feature typing depends on the owning end's effective types, including types
-            // inherited through the implied relationships settled above. Consume the canonical type
-            // index at an explicit sub-barrier, then replace the provisional relationship set before
-            // publishing `Resolved`; no reader can observe the intermediate state.
-            let resolution = if storage
-                .declaration_facts
-                .iter()
-                .any(|facts| facts.cross_feature_projection.is_some())
-            {
-                let prerequisite_types = derive_effective_types(&storage, &resolution)?;
-                let mut implied = resolution.implied_relationships.to_vec();
-                let cross_feature =
-                    synthesize_owned_cross_feature_typings(&storage, &prerequisite_types)?
-                        .into_vec()
-                        .into_iter()
-                        .chain(
-                            synthesize_owned_cross_feature_type_featurings(
-                                &storage,
-                                &prerequisite_types,
-                            )?
-                            .into_vec(),
-                        )
-                        .collect::<Vec<_>>();
-                independent.extend(cross_feature.iter().copied());
-                implied.extend(cross_feature);
-                implied.sort_by_key(|relationship| {
-                    (
-                        relationship.kind,
-                        relationship.source.0,
-                        relationship.target.0,
-                    )
-                });
-                implied.dedup();
-                let library_anchors = resolution.library_specialization_anchors.clone();
-                resolution.settle(implied.into_boxed_slice(), library_anchors)
-            } else {
-                resolution
-            };
-            let expression_relationships = if has_expression_roots {
-                crate::resolve::implied::synthesize_access_expression_result_relationships(
-                    &storage,
-                    &resolution,
-                )?
-            } else {
-                Vec::new()
-            };
-            let mut metadata_relationships = Vec::new();
-            let mut resolution = if storage.metadata_annotations.is_empty() {
-                resolution
-            } else {
-                let prerequisite_types = derive_effective_types(&storage, &resolution)?;
-                let synthesis = synthesize_semantic_metadata_specializations(
-                    &storage,
-                    &resolution,
-                    &prerequisite_types,
-                )?;
-                metadata_relationships = synthesis.implied_relationships.to_vec();
-                // Prior metadata edges are prerequisites, not an accumulating truth store: the
-                // settled set is the independently derived edges plus this pass's canonical
-                // synthesis, so an edge also derived another way survives and the result does
-                // not depend on pass history.
-                let mut implied = independent;
-                implied.extend(synthesis.implied_relationships);
-                implied.sort_by_key(|relationship| {
-                    (
-                        relationship.kind,
-                        relationship.source.0,
-                        relationship.target.0,
-                    )
-                });
-                implied.dedup();
-                resolution.settle_semantic_metadata(
-                    implied.into_boxed_slice(),
-                    synthesis.projections,
-                    synthesis.status,
-                )
-            };
-            let mut next_relationships = provisional_library_specializations.to_vec();
-            next_relationships.extend(metadata_relationships.iter().copied());
-            next_relationships.extend(expression_relationships.iter().copied());
-            next_relationships.sort_by_key(|relationship| {
-                (
-                    relationship.kind,
-                    relationship.source.0,
-                    relationship.target.0,
-                )
-            });
-            next_relationships.dedup();
-            relationship_passes_remaining -= 1;
-            if next_relationships == provisional_relationships {
-                break (
-                    direct_names,
-                    effective_imports,
-                    exported_imports,
-                    memberships,
-                    resolution,
-                );
-            }
-            if relationship_passes_remaining == 0 {
-                resolution.solver_status = SolverStatus::NonConverged;
-                break (
-                    direct_names,
-                    effective_imports,
-                    exported_imports,
-                    memberships,
-                    resolution,
-                );
-            }
-            provisional_relationships = next_relationships;
-            previous_metadata_relationships = metadata_relationships;
-            previous_expression_relationships = expression_relationships;
-        };
-        let resolution = if storage
-            .declaration_facts
-            .iter()
-            .all(|facts| !facts.is_transition_payload_parameter)
-        {
-            resolution
-        } else {
-            let synthesis = synthesize_transition_payload_subsettings(&storage)?;
-            let mut implied = resolution.implied_relationships.to_vec();
-            implied.extend(synthesis.implied_relationships);
-            implied.sort_by_key(|relationship| {
-                (
-                    relationship.kind,
-                    relationship.source.0,
-                    relationship.target.0,
-                )
-            });
-            implied.dedup();
-            resolution.settle_transition_payload_subsettings(
-                implied.into_boxed_slice(),
-                synthesis.projections,
-                synthesis.status,
-            )
-        };
-        let resolution = if storage
-            .declaration_facts
-            .iter()
-            .all(|facts| !facts.is_transition_succession)
-        {
-            resolution
-        } else {
-            let synthesis = synthesize_transition_succession_sources(&storage, &resolution)?;
-            resolution.settle_transition_succession_sources(synthesis.projections, synthesis.status)
-        };
-        let resolution = if storage
-            .declaration_facts
-            .iter()
-            .all(|facts| facts.transition_feature_role.is_none())
-        {
-            resolution
-        } else {
-            let synthesis = synthesize_transition_feature_specializations(&storage)?;
-            let mut implied = resolution.implied_relationships.to_vec();
-            implied.extend(synthesis.implied_relationships);
-            implied.sort_by_key(|relationship| {
-                (
-                    relationship.kind,
-                    relationship.source.0,
-                    relationship.target.0,
-                )
-            });
-            implied.dedup();
-            resolution.settle_transition_feature_specializations(
-                implied.into_boxed_slice(),
-                synthesis.projections,
-                synthesis.status,
-            )
-        };
-        let resolution = if storage.operator_expressions.is_empty() {
-            resolution
-        } else {
-            let synthesis =
-                synthesize_operator_expression_result_specializations(&storage, &resolution)?;
-            let mut implied = resolution.implied_relationships.to_vec();
-            implied.extend(synthesis.implied_relationships);
-            implied.sort_by_key(|relationship| {
-                (
-                    relationship.kind,
-                    relationship.source.0,
-                    relationship.target.0,
-                )
-            });
-            implied.dedup();
-            resolution.settle_expression_arguments(
-                implied.into_boxed_slice(),
-                synthesis.select_status,
-                synthesis.index_status,
-                synthesis.array_anchor,
-            )
-        };
-        let resolution = if storage.constructor_expressions.is_empty() {
-            resolution
-        } else {
-            let synthesis =
-                synthesize_constructor_expression_result_specializations(&storage, &resolution)?;
-            let mut implied = resolution.implied_relationships.to_vec();
-            implied.extend(synthesis.implied_relationships);
-            implied.sort_by_key(|relationship| {
-                (
-                    relationship.kind,
-                    relationship.source.0,
-                    relationship.target.0,
-                )
-            });
-            implied.dedup();
-            resolution.settle_constructor_expressions(
-                implied.into_boxed_slice(),
-                synthesis.projections,
-                synthesis.status,
-                synthesis.specialization_status,
-                Some(synthesis.anchor),
-            )
-        };
-        let resolution = if storage.feature_chain_expressions.is_empty() {
-            resolution
-        } else {
-            let synthesis =
-                synthesize_feature_chain_expression_result_specializations(&storage, &resolution)?;
-            let mut implied = resolution.implied_relationships.to_vec();
-            implied.extend(synthesis.implied_relationships);
-            implied.sort_by_key(|relationship| {
-                (
-                    relationship.kind,
-                    relationship.source.0,
-                    relationship.target.0,
-                )
-            });
-            implied.dedup();
-            resolution.settle_feature_chain_expressions(
-                implied.into_boxed_slice(),
-                synthesis.projections,
-                synthesis.status,
-            )
-        };
-        let resolution = if storage.feature_reference_expressions.is_empty() {
-            resolution
-        } else {
-            let synthesis = synthesize_feature_reference_expression_result_specializations(
-                &storage,
-                &resolution,
-            )?;
-            let mut implied = resolution.implied_relationships.to_vec();
-            implied.extend(synthesis.implied_relationships);
-            implied.sort_by_key(|relationship| {
-                (
-                    relationship.kind,
-                    relationship.source.0,
-                    relationship.target.0,
-                )
-            });
-            implied.dedup();
-            resolution.settle_feature_reference_expressions(
-                implied.into_boxed_slice(),
-                synthesis.projections,
-                synthesis.status,
-            )
-        };
-        let resolution = if storage.invocations.is_empty() {
-            resolution
-        } else {
-            let prerequisite_types = derive_effective_types(&storage, &resolution)?;
-            let synthesis = synthesize_invocation_expression_specializations(
-                &storage,
-                &resolution,
-                &prerequisite_types,
-            )?;
-            let mut implied = resolution.implied_relationships.to_vec();
-            implied.extend(synthesis.implied_relationships);
-            implied.sort_by_key(|relationship| {
-                (
-                    relationship.kind,
-                    relationship.source.0,
-                    relationship.target.0,
-                )
-            });
-            implied.dedup();
-            resolution.settle_invocation_expressions(
-                implied.into_boxed_slice(),
-                synthesis.projections,
-                synthesis.status,
-            )
-        };
-        // `checkFeatureParameterRedefinition` then `checkFeatureResultRedefinition`: a parameter
-        // redefines the parameter at its position, and a result the result, of every Behavior or
-        // Step (Function or Expression) its owner directly specializes. That includes the
-        // FeatureTyping of an invocation by its callee settled just above, so both run once every
-        // specialization of a Behavior or Step is known; a positional parameter redefinition is
-        // itself a specialization of a parameter that may own a result, so results run last.
-        let resolution = if !matches!(resolution.solver_status, SolverStatus::Converged) {
-            resolution
-        } else {
-            let settled = crate::resolve::SettledTypeEdges::collect(
-                &storage.references,
-                &resolution.outcomes,
-                &resolution.implied_relationships,
-            )?;
-            let parameters =
-                crate::resolve::parameter_positions::synthesize_parameter_redefinitions(
-                    &storage,
-                    settled.edges,
-                    &settled.authored_redefinitions,
-                )?;
-            let mut with_parameters = resolution.implied_relationships.to_vec();
-            with_parameters.extend(parameters.iter().copied());
-            let settled = crate::resolve::SettledTypeEdges::collect(
-                &storage.references,
-                &resolution.outcomes,
-                &with_parameters,
-            )?;
-            let mut synthesized = parameters;
-            synthesized.extend(
-                crate::resolve::result_parameters::synthesize_result_redefinitions(
-                    &storage,
-                    settled.edges.iter().copied(),
-                    &settled.authored_redefinitions,
-                )?,
-            );
-            // `checkConstructorExpressionResultFeatureRedefinition`: a positional constructor
-            // argument redefines the public feature of the instantiated type at its position.
-            // Which features a type has excludes the ones its members redefine, so this reads
-            // every redefinition settled so far, the ones just synthesized included.
-            let mut redefinitions = settled.authored_redefinitions.clone();
-            redefinitions.extend(
-                with_parameters
-                    .iter()
-                    .chain(synthesized.iter())
-                    .filter(|relationship| {
-                        relationship.kind == crate::model::ReferenceKind::Redefinition
-                    })
-                    .map(|relationship| (relationship.source, relationship.target)),
-            );
-            synthesized.extend(
-                crate::resolve::constructor_features::synthesize_constructor_argument_redefinitions(
-                    &storage,
-                    &resolution.constructor_expression_projections,
-                    settled.edges,
-                    &redefinitions,
-                )?,
-            );
-            if synthesized.is_empty() {
-                resolution
-            } else {
-                let mut implied = resolution.implied_relationships.to_vec();
-                implied.extend(synthesized);
-                implied.sort_by_key(|relationship| {
-                    (
-                        relationship.kind,
-                        relationship.source.0,
-                        relationship.target.0,
-                    )
-                });
-                implied.dedup();
-                let library_anchors = resolution.library_specialization_anchors.clone();
-                resolution.settle(implied.into_boxed_slice(), library_anchors)
-            }
-        };
-        let resolution = if storage
-            .declarations
-            .iter()
-            .all(|declaration| declaration.kind != crate::model::DeclarationKind::Succession)
-        {
-            resolution
-        } else {
-            let synthesis = synthesize_succession_endpoint_subsettings(&storage, &resolution)?;
-            let mut implied = resolution.implied_relationships.to_vec();
-            implied.extend(synthesis.implied_relationships);
-            implied.sort_by_key(|relationship| {
-                (
-                    relationship.kind,
-                    relationship.source.0,
-                    relationship.target.0,
-                )
-            });
-            implied.dedup();
-            resolution.settle_succession_endpoint_subsettings(
-                implied.into_boxed_slice(),
-                synthesis.projections,
-                synthesis.decision_status,
-                synthesis.merge_status,
-                synthesis.control_node_successions,
-            )
-        };
-        // A Connector with no owning Type is featured by the innermost featuring type its related
-        // features share (`checkConnectorTypeFeaturing`). That reads the settled featuring rows,
-        // end features and specialization closure, so it consumes a prerequisite type index at
-        // this final sub-barrier; nothing else depends on a Connector's own featuring type.
-        let connector_candidates = context_featuring_candidates(&storage)?;
-        let resolution = if connector_candidates.is_empty() {
-            resolution
-        } else {
-            let prerequisite_types = TypeIndex::build(&storage, &resolution)?;
-            let mut implied = resolution.implied_relationships.to_vec();
-            implied.extend(
-                synthesize_connector_context_featurings(
-                    &storage,
-                    &resolution,
-                    &prerequisite_types,
-                    &connector_candidates,
-                )?
-                .into_vec(),
-            );
-            implied.sort_by_key(|relationship| {
-                (
-                    relationship.kind,
-                    relationship.source.0,
-                    relationship.target.0,
-                )
-            });
-            implied.dedup();
-            let library_anchors = resolution.library_specialization_anchors.clone();
-            resolution.settle(implied.into_boxed_slice(), library_anchors)
-        };
+        let ResolvedFacts {
+            direct_names,
+            effective_imports,
+            exported_imports,
+            memberships,
+            resolution,
+        } = resolve_facts(&storage, library, &[])?;
         let mut completeness = PublicationCompleteness::Complete;
         if has_recovery {
             completeness = completeness.with(sysml_contract::PublicationObstacle::ParseRecovery);
@@ -751,7 +844,7 @@ impl Evaluated {
             direct_names: &self.direct_names,
             effective_imports: &self.effective_imports,
         })?;
-        let indexed = Indexed {
+        let mut indexed = Indexed {
             storage: self.storage,
             direct_names: self.direct_names,
             effective_imports: self.effective_imports,
@@ -776,6 +869,8 @@ impl Evaluated {
                 has_evaluation,
             },
         };
+        crate::index::expression_typing::settle(&mut indexed);
+        crate::evaluate::contextual::settle(&mut indexed, &self.sources)?;
         Ok((indexed, self.sources))
     }
 }
@@ -918,6 +1013,18 @@ mod failure_tests {
     use super::{resolution_failure, ResolutionError};
     use crate::model::DocumentIdx;
     use crate::{BuildFailure, ConstructionPhase};
+
+    #[test]
+    fn import_feedback_cycles_stop_without_exhausting_a_model_sized_budget() {
+        let mut cycle = super::FeedbackCycle::default();
+        let repeated_at =
+            (0..20).find(|step| cycle.repeats(if *step < 3 { *step } else { 3 + step % 2 }));
+        assert!(repeated_at.is_some_and(|step| step < 10));
+        let mut cycle = super::FeedbackCycle::default();
+        for state in 0..1024 {
+            assert!(!cycle.repeats(state));
+        }
+    }
 
     #[test]
     fn invalid_storage_reports_the_owning_phase_and_failed_document() {

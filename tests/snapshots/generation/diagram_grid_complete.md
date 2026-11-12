@@ -168,8 +168,8 @@ package GridExample {
 ## diagram.json
 ~~~json
 {
-  "schemaVersion": 10,
-  "modelDigest": "blake3:3930a81d88dba8f300241c20ebcaeff6b0c3fa6775a12df2b29377fc7937a724",
+  "schemaVersion": 12,
+  "modelDigest": "blake3:8187a1dadc24a2dadf4090aae616d74c004f746842a4b3177cec8ae9aaccc5aa",
   "documents": [
     {
       "uri": "memory://snapshot/diagram_grid_complete.md",
@@ -243,6 +243,7 @@ package GridExample {
         "name": "TableRoot",
         "notationRole": "definition",
         "owner": null,
+        "presentationKey": "p:e0f0554926e582d2bc5912f3b3c19c3d6df53b5192a97e9683c21eba7a225365",
         "reference": 0,
         "source": 0,
         "stateSubaction": null,

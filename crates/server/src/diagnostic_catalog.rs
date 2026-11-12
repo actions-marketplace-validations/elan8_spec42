@@ -689,8 +689,8 @@ const CATALOG: &[DiagnosticCatalogEntry] = &[
     DiagnosticCatalogEntry {
         code: "unknown_unit_symbol",
         severity: "warning",
-        meaning: "A value unit suffix names no unit in the admitted measurement libraries.",
-        typical_fix: "Use a unit declared by an admitted library, or fix the unit symbol.",
+        meaning: "The name in a quantity's brackets is not a unit, coordinate frame or scale in the admitted libraries.",
+        typical_fix: "Name a measurement reference declared by an admitted library, or fix the name.",
         editor_quick_fixes: None,
     },
     DiagnosticCatalogEntry {
@@ -747,6 +747,13 @@ const CATALOG: &[DiagnosticCatalogEntry] = &[
         severity: "warning",
         meaning: "The same member name is declared more than once in one namespace.",
         typical_fix: "Rename or remove the duplicate member.",
+        editor_quick_fixes: None,
+    },
+    DiagnosticCatalogEntry {
+        code: "duplicate_root_package",
+        severity: "warning",
+        meaning: "Modeling guidance: two root packages in the workspace share a name. KerML permits it, but a reference that reaches both is ambiguous (KerML 8.2.3.5.4).",
+        typical_fix: "Rename one package, or check the projects separately.",
         editor_quick_fixes: None,
     },
     DiagnosticCatalogEntry {
@@ -823,7 +830,7 @@ const CATALOG: &[DiagnosticCatalogEntry] = &[
         code: "transition_endpoint_invalid_context",
         severity: "warning",
         meaning: "Transition endpoints belong to different state definition contexts.",
-        typical_fix: "Keep transition source and target within the same state definition.",
+        typical_fix: "Keep endpoints in the same state machine; cross composite boundaries only through exclusive states.",
         editor_quick_fixes: None,
     },
     DiagnosticCatalogEntry {
@@ -864,8 +871,8 @@ const CATALOG: &[DiagnosticCatalogEntry] = &[
     DiagnosticCatalogEntry {
         code: "multiple_final_states",
         severity: "warning",
-        meaning: "Modeling guidance: a state definition declares more than one explicit `final`/`final state` marker (not counting `then done` transitions per SysML 7.18.3).",
-        typical_fix: "Keep a single explicit `final` marker, or express finality with transitions to `done`.",
+        meaning: "Retired modeling guidance; no longer emitted. The grammar has no `final` state member, so there is nothing to count.",
+        typical_fix: "No change required. Express finality with a transition to `done` (SysML 7.18).",
         editor_quick_fixes: None,
     },
     DiagnosticCatalogEntry {
@@ -894,6 +901,20 @@ const CATALOG: &[DiagnosticCatalogEntry] = &[
         severity: "warning",
         meaning: "A satisfy relationship does not name a requirement usage (for example it names a requirement definition or a part).",
         typical_fix: "Satisfy a requirement usage. For a requirement definition R, write 'satisfy requirement : R by x;'.",
+        editor_quick_fixes: None,
+    },
+    DiagnosticCatalogEntry {
+        code: "satisfy_subject_type_mismatch",
+        severity: "error",
+        meaning: "The satisfying feature does not conform to the effective subject type of the requirement. It is an error when the types provably share no instance (a class and a data type, or disjoint types) and a warning otherwise.",
+        typical_fix: "Satisfy the requirement with a feature of its subject type or a compatible subtype.",
+        editor_quick_fixes: None,
+    },
+    DiagnosticCatalogEntry {
+        code: "reference_value_type_mismatch",
+        severity: "error",
+        meaning: "A reference value does not conform to the receiving feature's effective type. It is an error when the types provably share no instance (a class and a data type, or disjoint types) and a warning otherwise.",
+        typical_fix: "Use a compatible value and qualify a reference if a local declaration shadows its intended target.",
         editor_quick_fixes: None,
     },
     DiagnosticCatalogEntry {
@@ -1123,8 +1144,8 @@ const CATALOG: &[DiagnosticCatalogEntry] = &[
     DiagnosticCatalogEntry {
         code: "view_type_non_standard",
         severity: "warning",
-        meaning: "This view is typed by a definition outside the SysML standard view catalog.",
-        typical_fix: "Follow the diagnostic message; use spec42 check for the exact range and related locations.",
+        meaning: "This view is typed by a library view definition that neither is nor specializes a SysML standard view definition, so no standard view notation draws it.",
+        typical_fix: "Specialize a standard view definition, e.g. `view def ContextView :> GeneralView`, or type the view by one.",
         editor_quick_fixes: None,
     },
     DiagnosticCatalogEntry {
@@ -1239,6 +1260,7 @@ const CATALOG: &[DiagnosticCatalogEntry] = &[
 
 /// Diagnostics that reflect modeling/tooling guidance rather than normative SysML constraints.
 const MODELING_GUIDANCE_CODES: &[&str] = &[
+    "duplicate_root_package",
     "missing_final_state",
     "missing_initial_state",
     "missing_library_context",

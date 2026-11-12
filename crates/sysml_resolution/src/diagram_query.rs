@@ -62,7 +62,9 @@ pub enum DiagramSemanticReference {
 #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord)]
 pub enum DiagramIncompleteReason {
     ParseRecovery,
-    UnsupportedSyntax,
+    UnsupportedSyntax {
+        diagnostics: Box<[crate::UnsupportedConstructId]>,
+    },
     NonConverged,
     ExposureUnresolved {
         exposure: SymbolId,
@@ -140,9 +142,10 @@ pub struct DiagramElement {
     pub state_subaction: Option<StateSubactionKind>,
     /// On a conditional succession: when it is taken. `None` for every other element.
     pub succession_guard: Option<DiagramSuccessionGuard>,
-    /// On a port: the direction its directed features give it as a whole, with a conjugated
-    /// typing applied. Derived from the port's own features and those of its definitions, and
-    /// kept apart from the authored `direction`. `None` when it has no directed feature.
+    /// Effective direction in this occurrence. On a port this aggregates its directed
+    /// features and applies its conjugated typing. On a directed member it starts with the
+    /// authored direction. Both apply enclosing port conjugations along the occurrence path,
+    /// without changing `direction`. `None` when no direction is available.
     pub feature_direction: Option<FeatureDirection>,
     /// In a browser view: how this row is a member of its parent and whether its own members
     /// are in the projection. `None` in every other view kind.
@@ -633,7 +636,7 @@ impl PublishedResolution {
             .completeness()
             .obstacles()
             .filter(|obstacle| matches!(obstacle, crate::PublicationObstacle::NonConverged))
-            .map(publication_obstacle_reason)
+            .map(|_| DiagramIncompleteReason::NonConverged)
             .collect::<BTreeSet<_>>();
         let exposed = match self.view_exposed_elements(view).answer {
             QueryAnswer::Resolved(exposed) => exposed,
@@ -774,9 +777,14 @@ impl PublishedResolution {
             children.sort_by_key(|left| left.identity);
             children.dedup_by(|left, right| left.identity == right.identity);
             // An action flow names nodes its action inherits from the library, the `start`
-            // and `done` of `Actions::Action`, as the ends of its successions. Such a feature
-            // is a node of the flow where a succession of this owner begins or ends at it.
-            let library_ends = if view_entry.kind == DiagramViewKind::ActionFlow {
+            // and `done` of `Actions::Action`, as the ends of its successions, and a state
+            // machine names the `done` of `States::StateAction` as a transition target. Such a
+            // feature is a node of the view where a succession or transition of this owner
+            // begins or ends at it.
+            let library_ends = if matches!(
+                view_entry.kind,
+                DiagramViewKind::ActionFlow | DiagramViewKind::StateTransition
+            ) {
                 self.library_succession_ends(&children, &workspace)
             } else {
                 BTreeSet::new()
@@ -1009,6 +1017,34 @@ impl PublishedResolution {
                         (direction, conjugated && is_port_kind(entry.kind))
                     })
                     .unwrap_or_default();
+                let mut feature_direction = if is_port_kind(entry.kind) {
+                    self.model.port_feature_direction_of(entry.identity)
+                } else {
+                    direction
+                };
+                // One declaration can occur below both P and ~P. Apply conjugation to
+                // the occurrence, preserving the declaration's authored direction.
+                for pair in occurrence_id.semantic_path.windows(2) {
+                    // A conjugated typing reverses inherited members, not features
+                    // authored directly in the port usage's own body.
+                    if all
+                        .get(&pair[1])
+                        .is_some_and(|child| child.owner == Some(pair[0]))
+                    {
+                        continue;
+                    }
+                    if self
+                        .model
+                        .port_direction_and_conjugation(pair[0])
+                        .is_some_and(|(_, conjugated)| conjugated)
+                    {
+                        feature_direction = feature_direction.map(|value| match value {
+                            FeatureDirection::In => FeatureDirection::Out,
+                            FeatureDirection::Out => FeatureDirection::In,
+                            FeatureDirection::InOut => FeatureDirection::InOut,
+                        });
+                    }
+                }
                 DiagramElement {
                     occurrence_id: occurrence_id.clone(),
                     semantic_id: entry.identity,
@@ -1039,11 +1075,7 @@ impl PublishedResolution {
                     conjugated,
                     state_subaction: self.model.state_subaction_kind(entry.identity),
                     succession_guard: self.model.succession_guard(entry.identity),
-                    feature_direction: if is_port_kind(entry.kind) {
-                        self.model.port_feature_direction_of(entry.identity)
-                    } else {
-                        None
-                    },
+                    feature_direction,
                     browser_row: (view_entry.kind == DiagramViewKind::Browser).then(|| {
                         DiagramBrowserRow {
                             membership: browser_membership
@@ -1130,11 +1162,16 @@ impl PublishedResolution {
         for element in &elements {
             if let Some(inspection) = usable_value(self.inspect(element.semantic_id)) {
                 for (index, relationship) in inspection.relationships.iter().enumerate() {
-                    // Every name the authority publishes is one of the canonical reference
-                    // kinds, which is exactly the enum's variant set.
-                    let kind = relationship_kind_from_name(relationship.kind).expect(
-                        "a published relationship names one of the canonical reference kinds",
-                    );
+                    // A reference kind no diagram has a notation for, such as the unit of a
+                    // quantity in a transition's effect, is not a diagram relationship.
+                    let Some(kind) = relationship_kind_from_name(relationship.kind) else {
+                        debug_assert!(
+                            UNDRAWN_REFERENCE_KINDS.contains(&relationship.kind),
+                            "reference kind `{}` is neither a diagram relationship nor undrawn",
+                            relationship.kind
+                        );
+                        continue;
+                    };
                     let target = match &relationship.target {
                         RelationshipTarget::Resolved(target) => {
                             let endpoint = contextual_endpoint(
@@ -1310,41 +1347,6 @@ impl PublishedResolution {
             ) {
                 edges.push(edge);
                 continue;
-            }
-            // An end of a transition written as a feature chain (`first on.ready`) is published
-            // as a `memberAccessOperand`, not as `transitionSource` / `transitionTarget`. The
-            // operands are the ends that are missing, in the order they are written.
-            if element.kind == ElementKind::TransitionUsage {
-                let named = |wanted: DiagramRelationshipKind| {
-                    outgoing
-                        .iter()
-                        .find(|relationship| relationship.kind == wanted)
-                        .and_then(|relationship| resolved_target(&relationship.target))
-                };
-                let mut operands = outgoing
-                    .iter()
-                    .filter(|relationship| {
-                        relationship.kind == DiagramRelationshipKind::MemberAccessOperand
-                    })
-                    .filter_map(|relationship| resolved_target(&relationship.target));
-                let source = named(DiagramRelationshipKind::TransitionSource);
-                let target = named(DiagramRelationshipKind::TransitionTarget);
-                let (source, target) = match (source, target) {
-                    (None, Some(target)) => (operands.next(), Some(target)),
-                    (Some(source), None) => (Some(source), operands.next()),
-                    (None, None) => (operands.next(), operands.next()),
-                    both => both,
-                };
-                if let (Some(source), Some(target), None) = (source, target, operands.next()) {
-                    edges.push(edge_from_relationships(
-                        origin as u32,
-                        source,
-                        target,
-                        DiagramEdgeKind::Transition,
-                        &outgoing,
-                    ));
-                    continue;
-                }
             }
             if let Some(edge) = composed_edge(
                 origin as u32,
@@ -1632,13 +1634,27 @@ impl PublishedResolution {
             .chain(elements.iter().map(|element| element.source.document))
             .collect::<BTreeSet<_>>();
         for document in documents {
-            reasons.extend(
-                self.model
-                    .document_obstacles(document)
-                    .map(publication_obstacle_reason),
-            );
+            for obstacle in self.model.document_obstacles(document) {
+                reasons.insert(match obstacle {
+                    crate::PublicationObstacle::ParseRecovery => {
+                        DiagramIncompleteReason::ParseRecovery
+                    }
+                    crate::PublicationObstacle::UnsupportedSyntax => {
+                        DiagramIncompleteReason::UnsupportedSyntax {
+                            diagnostics: self
+                                .model
+                                .document_unsupported_constructs(document)
+                                .collect(),
+                        }
+                    }
+                    crate::PublicationObstacle::NonConverged => {
+                        DiagramIncompleteReason::NonConverged
+                    }
+                });
+            }
         }
         let scene = diagram_scene(
+            self,
             view_entry.kind,
             &projected_roots,
             &elements,
@@ -1903,8 +1919,8 @@ impl PublishedResolution {
         entries
     }
 
-    /// The features outside the workspace that successions among `members` begin or end at:
-    /// the resolved ends of each succession, the feature a `then` names, and the source the
+    /// The features outside the workspace that successions and transitions among `members`
+    /// begin or end at: the resolved ends of each, the feature a `then` names, and the source the
     /// lowering settled for a `then`.
     fn library_succession_ends(
         &self,
@@ -1917,7 +1933,10 @@ impl PublishedResolution {
             .filter(|member| workspace.contains(&member.identity))
         {
             ends.extend(self.model.then_source(member.identity));
-            if member.kind != ElementKind::SuccessionAsUsage {
+            if !matches!(
+                member.kind,
+                ElementKind::SuccessionAsUsage | ElementKind::TransitionUsage
+            ) {
                 continue;
             }
             let Some(inspection) = usable_value(self.inspect(member.identity)) else {
@@ -1926,7 +1945,12 @@ impl PublishedResolution {
             for relationship in inspection.relationships.iter() {
                 let is_end = matches!(
                     relationship_kind_from_name(relationship.kind),
-                    Some(DiagramRelationshipKind::Succession | DiagramRelationshipKind::ThenTarget)
+                    Some(
+                        DiagramRelationshipKind::Succession
+                            | DiagramRelationshipKind::ThenTarget
+                            | DiagramRelationshipKind::TransitionSource
+                            | DiagramRelationshipKind::TransitionTarget
+                    )
                 );
                 if let (true, RelationshipTarget::Resolved(target)) = (is_end, &relationship.target)
                 {
@@ -1992,16 +2016,6 @@ fn relationship_is_required(view: DiagramViewKind, kind: DiagramRelationshipKind
                 | DiagramRelationshipKind::BindTarget
         ),
         DiagramViewKind::Browser | DiagramViewKind::Geometry => false,
-    }
-}
-
-/// The boundary form of one element reference.
-///
-fn publication_obstacle_reason(obstacle: crate::PublicationObstacle) -> DiagramIncompleteReason {
-    match obstacle {
-        crate::PublicationObstacle::ParseRecovery => DiagramIncompleteReason::ParseRecovery,
-        crate::PublicationObstacle::UnsupportedSyntax => DiagramIncompleteReason::UnsupportedSyntax,
-        crate::PublicationObstacle::NonConverged => DiagramIncompleteReason::NonConverged,
     }
 }
 
@@ -2204,9 +2218,7 @@ fn compartment_kind(kind: ElementKind) -> Option<DiagramCompartmentKind> {
         | ElementKind::IfActionUsage
         | ElementKind::WhileLoopActionUsage
         | ElementKind::ForLoopActionUsage => Compartment::Actions,
-        ElementKind::StateUsage | ElementKind::ExhibitStateUsage | ElementKind::FinalState => {
-            Compartment::States
-        }
+        ElementKind::StateUsage | ElementKind::ExhibitStateUsage => Compartment::States,
         ElementKind::CalculationUsage => Compartment::Calculations,
         ElementKind::ConnectionUsage
         | ElementKind::FlowConnectionUsage
@@ -2220,7 +2232,9 @@ fn compartment_kind(kind: ElementKind) -> Option<DiagramCompartmentKind> {
     })
 }
 
+#[allow(clippy::too_many_arguments)]
 fn diagram_scene(
+    resolution: &PublishedResolution,
     kind: DiagramViewKind,
     roots: &BTreeSet<SymbolId>,
     elements: &[DiagramElement],
@@ -2257,10 +2271,15 @@ fn diagram_scene(
                         DiagramStateVertexKind::Initial
                     } else {
                         match element.kind {
+                            // SysML 7.18: a transition to `done` makes its source the final state.
+                            ElementKind::StateUsage | ElementKind::ExhibitStateUsage
+                                if is_library_done(element.semantic_id, entries) =>
+                            {
+                                DiagramStateVertexKind::Final
+                            }
                             ElementKind::StateUsage | ElementKind::ExhibitStateUsage => {
                                 DiagramStateVertexKind::State
                             }
-                            ElementKind::FinalState => DiagramStateVertexKind::Final,
                             _ => return None,
                         }
                     };
@@ -2297,7 +2316,12 @@ fn diagram_scene(
                         trigger: if edge.kind == DiagramEdgeKind::InitialState {
                             DiagramTransitionFeature::Absent
                         } else {
-                            feature(DiagramRelationshipKind::TransitionTrigger)
+                            match feature(DiagramRelationshipKind::TransitionTrigger) {
+                                DiagramTransitionFeature::Absent => resolution
+                                    .model
+                                    .owned_transition_trigger(origin.semantic_id),
+                                trigger => trigger,
+                            }
                         },
                         // A guard is an expression, not a reference: its text as written, with
                         // the transition as its navigation target (SysML 8.2.3.18).
@@ -2331,6 +2355,25 @@ fn diagram_scene(
             })
         }
     }
+}
+
+/// Whether `symbol` is the `done` that every state and action inherits from the library.
+fn is_library_done(symbol: SymbolId, entries: &BTreeMap<SymbolId, SymbolEntry>) -> bool {
+    let owner_of = |entry: &SymbolEntry| entry.owner.and_then(|owner| entries.get(&owner));
+    let Some(done) = entries.get(&symbol) else {
+        return false;
+    };
+    let Some(owner) = owner_of(done) else {
+        return false;
+    };
+    let Some(package) = owner_of(owner) else {
+        return false;
+    };
+    done.name.as_deref() == Some("done")
+        && matches!(
+            (owner.name.as_deref(), package.name.as_deref()),
+            (Some("StateAction"), Some("States")) | (Some("Action"), Some("Actions"))
+        )
 }
 
 fn sequence_scene(
@@ -2963,6 +3006,18 @@ fn usable_value<T>(outcome: QueryOutcome<T>) -> Option<T> {
 
 /// The canonical reference-kind name the inspection publishes, as the diagram vocabulary variant.
 /// The kind one canonical name states, or `None` where the name is not one of them.
+/// The reference kinds element inspection publishes that no diagram draws: they have no
+/// [`DiagramRelationshipKind`]. Together with `DiagramRelationshipKind::ALL` they cover every
+/// reference kind (`every_reference_kind_is_drawn_or_undrawn`), so a new kind is classified when
+/// it is added.
+const UNDRAWN_REFERENCE_KINDS: [&str; 5] = [
+    "annotation",
+    "explicitRelationshipEndpoint",
+    "featureInverting",
+    "metadataAnnotationAbout",
+    "quantityUnit",
+];
+
 fn relationship_kind_from_name(name: &str) -> Option<DiagramRelationshipKind> {
     DiagramRelationshipKind::ALL
         .iter()
@@ -3101,6 +3156,19 @@ mod tests {
     use crate::{
         ElementKind, PublicationCompleteness, PublicationObstacle, QueryAnswer, QueryOutcome,
     };
+
+    #[test]
+    fn every_reference_kind_is_drawn_or_undrawn() {
+        for kind in crate::model::ReferenceKind::ALL {
+            let name = crate::model::render::reference_kind(*kind);
+            let drawn = super::relationship_kind_from_name(name).is_some();
+            let undrawn = super::UNDRAWN_REFERENCE_KINDS.contains(&name);
+            assert!(
+                drawn != undrawn,
+                "`{name}` must be exactly one of a diagram relationship and an undrawn kind"
+            );
+        }
+    }
 
     #[test]
     fn unsupported_outcomes_retain_their_usable_payload() {

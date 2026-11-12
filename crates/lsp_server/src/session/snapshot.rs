@@ -23,6 +23,15 @@ impl<'a> ServerStateSnapshot<'a> {
 }
 
 impl WorkspaceSnapshot for ServerStateSnapshot<'_> {
+    fn line_ending(&self, uri: &Url) -> sysml_query::source::LineEnding {
+        let uri = util::normalize_file_uri(uri);
+        self.state
+            .index
+            .get(&uri)
+            .or_else(|| self.state.published_index.get(&uri))
+            .map(|entry| entry.document.line_ending())
+            .unwrap_or_default()
+    }
     fn resolve_uri_for_path(&self, path: &str) -> Option<Url> {
         if let Ok(uri) = Url::parse(path) {
             let normalized = util::normalize_file_uri(&uri);
@@ -51,6 +60,15 @@ impl WorkspaceSnapshot for ServerStateSnapshot<'_> {
         self.state
             .published_index
             .get(&util::normalize_file_uri(uri))
+            .map(|entry| entry.content())
+    }
+
+    fn editor_text(&self, uri: &Url) -> Option<&str> {
+        let uri = util::normalize_file_uri(uri);
+        self.state
+            .index
+            .get(&uri)
+            .or_else(|| self.state.published_index.get(&uri))
             .map(|entry| entry.content())
     }
 

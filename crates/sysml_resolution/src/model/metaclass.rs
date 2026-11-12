@@ -124,7 +124,6 @@ pub(crate) fn classify(kind: DeclarationKind) -> Option<(Family, Role)> {
         | K::DoActionBinding
         | K::ExitActionBinding
         | K::InitialState
-        | K::FinalState
         | K::ParameterUsage
         | K::SubjectUsage
         | K::PerformActionUsage
@@ -190,6 +189,38 @@ pub(crate) fn classify(kind: DeclarationKind) -> Option<(Family, Role)> {
         | K::KermlEnd
         | K::FlowEnd => return None,
     })
+}
+
+/// The definition half of a family: the kind a usage of the family is typed by.
+pub(crate) fn definition_kind(family: Family) -> DeclarationKind {
+    use DeclarationKind as K;
+    use Family as F;
+    match family {
+        F::Part => K::PartDefinition,
+        F::Attribute => K::AttributeDefinition,
+        F::Enumeration => K::EnumerationDefinition,
+        F::Item => K::ItemDefinition,
+        F::Occurrence => K::OccurrenceDefinition,
+        F::Action => K::ActionDefinition,
+        F::State => K::StateDefinition,
+        F::Port => K::PortDefinition,
+        F::Requirement => K::RequirementDefinition,
+        F::Concern => K::ConcernDefinition,
+        F::UseCase => K::UseCaseDefinition,
+        F::Case => K::CaseDefinition,
+        F::AnalysisCase => K::AnalysisCaseDefinition,
+        F::VerificationCase => K::VerificationCaseDefinition,
+        F::View => K::ViewDefinition,
+        F::Viewpoint => K::ViewpointDefinition,
+        F::Rendering => K::RenderingDefinition,
+        F::Metadata => K::MetadataDefinition,
+        F::Connection => K::ConnectionDefinition,
+        F::Interface => K::InterfaceDefinition,
+        F::Flow => K::FlowDefinition,
+        F::Allocation => K::AllocationDefinition,
+        F::Constraint => K::ConstraintDefinition,
+        F::Calc => K::CalcDefinition,
+    }
 }
 
 /// The family a family specialises in the SysML metamodel, or `None` at a root.

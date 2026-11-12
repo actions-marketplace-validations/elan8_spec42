@@ -31,3 +31,7 @@ mod references;
 mod rename;
 mod semantic_tokens;
 mod workspace;
+
+mod workflow_safety;
+
+mod import_actions;

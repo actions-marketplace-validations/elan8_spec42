@@ -20,6 +20,9 @@ pub(crate) struct IndexEntry {
     pub(crate) parsed: Option<ParsedSource>,
     /// When `false`, the file is indexed for `sysml/librarySearch` only and is not admitted.
     pub(crate) admitted_to_publication: bool,
+    /// Selected by the workspace source provider, independently of a configured library role.
+    /// Such authored sources remain closure seeds even when their editor is closed.
+    pub(crate) workspace_source: bool,
     /// Editor membership, version and open-interval identity travel with their source entry.
     /// Opening a library makes it an authoring surface without changing its provenance.
     pub(crate) editor_revision: Option<super::editor_documents::EditorRevision>,
@@ -81,6 +84,7 @@ impl IndexEntry {
             document,
             parsed: Some(parsed),
             admitted_to_publication: true,
+            workspace_source: true,
             editor_revision: None,
         }
     }
@@ -88,6 +92,8 @@ impl IndexEntry {
 
 #[derive(Debug, Clone, Default)]
 pub(crate) struct RuntimeConfig {
+    pub(crate) versioned_document_changes: bool,
+    pub(crate) completion_import_resolve: bool,
     pub(crate) library_path_base: Option<std::path::PathBuf>,
     pub(crate) startup_trace_id: Option<String>,
     pub(crate) code_lens_enabled: bool,
@@ -111,6 +117,11 @@ pub(crate) struct ServerState {
     pub(crate) library_paths: Vec<Url>,
     pub(crate) standard_library_paths: Vec<Url>,
     pub(crate) standard_library_availability: StandardLibraryAvailability,
+    /// Immutable inventory owned by the closure authority, admitted at the source barrier.
+    pub(crate) library_catalog: Option<sysml_query::library::LibraryCatalog>,
+    pub(crate) library_admission: sysml_query::library::LibraryAdmissionPolicy,
+    /// Manifest-owned bindings change only through project rediscovery, not editor defaults.
+    pub(crate) library_paths_follow_host_defaults: bool,
     /// The one set of services this host publishes through.
     pub(crate) services: Services,
     /// The publication lifecycle and the current immutable publication.
@@ -140,6 +151,15 @@ impl Default for ServerState {
 }
 
 impl ServerState {
+    /// Source discovery failure belongs to its configuration epoch. Editing a buffer cannot
+    /// make those missing inputs ready or discard the retained failure.
+    pub(crate) fn invalidate_inputs(&mut self) {
+        self.session.invalidate_inputs();
+        if self.diagnostic_readiness.source_inputs_pending() && self.publication_failure.is_some() {
+            self.session.finish_preparation_failure();
+        }
+    }
+
     pub(crate) fn new(services: Services) -> Self {
         let session = services.publication.session_empty();
         Self::with_session(services, session)
@@ -151,6 +171,13 @@ impl ServerState {
             library_paths: Vec::new(),
             standard_library_paths: Vec::new(),
             standard_library_availability: StandardLibraryAvailability::Unavailable,
+            library_catalog: None,
+            library_paths_follow_host_defaults: true,
+            library_admission: if crate::common::util::library_full_scan_enabled() {
+                sysml_query::library::LibraryAdmissionPolicy::All
+            } else {
+                sysml_query::library::LibraryAdmissionPolicy::Referenced
+            },
             services,
             session,
             diagnostic_readiness: super::readiness::DiagnosticReadiness::default(),
@@ -215,6 +242,9 @@ pub(crate) trait DocumentStore {
     /// Configured library roots: generic libraries first, then the standard library.
     fn library_roots(&self) -> (&[Url], &[Url]);
     fn standard_library_availability(&self) -> StandardLibraryAvailability;
+    fn has_library_catalog(&self) -> bool {
+        false
+    }
     /// Documents the editor has open, whose diagnostics are reported whatever their provenance.
     fn is_editor_open(&self, uri: &Url) -> bool {
         self.index()
@@ -224,6 +254,9 @@ pub(crate) trait DocumentStore {
 }
 
 impl DocumentStore for ServerState {
+    fn has_library_catalog(&self) -> bool {
+        self.library_catalog.is_some()
+    }
     fn index(&self) -> &std::collections::HashMap<Url, IndexEntry> {
         &self.index
     }
@@ -264,15 +297,22 @@ pub(crate) fn publication_inputs(
     let mut entries = state
         .index()
         .iter()
-        .filter(|(_, entry)| entry.admitted_to_publication)
+        .filter(|(_, entry)| {
+            entry.admitted_to_publication
+                || (state.has_library_catalog()
+                    && (entry.workspace_source || entry.is_editor_open()))
+        })
         .collect::<Vec<_>>();
     // Sorted so the stratum key is a property of the library's content rather than of hash-map
     // iteration order.
     entries.sort_by(|(left, _), (right, _)| left.as_str().cmp(right.as_str()));
     let mut reported: Vec<Box<str>> = Vec::new();
     for (uri, entry) in entries {
-        let standard = crate::common::util::uri_under_any_library(uri, standard_library_paths);
-        let library = standard || crate::common::util::uri_under_any_library(uri, library_paths);
+        let standard = entry.document.kind() == SourceKind::StandardLibrary
+            || crate::common::util::uri_under_any_library(uri, standard_library_paths);
+        let library = standard
+            || entry.document.kind().is_library()
+            || crate::common::util::uri_under_any_library(uri, library_paths);
         // A library file the editor has open is being authored, so its diagnostics are reported
         // even though its provenance keeps it out of the workspace's own set.
         if library && state.is_editor_open(uri) {
@@ -285,6 +325,15 @@ pub(crate) fn publication_inputs(
         } else {
             SourceKind::Workspace
         };
+        // Closed library membership is selected afresh by the canonical closure for each
+        // publication. Only workspace and explicitly authored library buffers seed that query.
+        if state.has_library_catalog()
+            && library
+            && !entry.workspace_source
+            && !state.is_editor_open(uri)
+        {
+            continue;
+        }
         documents.push(entry.document.with_kind(kind));
     }
 
@@ -351,6 +400,39 @@ pub(crate) struct ScanSummary {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn authored_seeds_do_not_depend_on_the_previous_library_selection() {
+        let mut state = ServerState::default();
+        state.library_catalog = Some(state.services.library.catalog_from_documents(Vec::new()));
+        let workspace = Url::parse("memory://seeds/workspace.sysml").unwrap();
+        let opened = Url::parse("memory://seeds/opened.sysml").unwrap();
+        let closed = Url::parse("memory://seeds/closed.sysml").unwrap();
+        let mut workspace_entry = IndexEntry::for_test(&workspace, "package Workspace;");
+        workspace_entry.admitted_to_publication = false;
+        state.index.insert(workspace.clone(), workspace_entry);
+        for (uri, open) in [(&opened, true), (&closed, false)] {
+            let mut entry = IndexEntry::for_test(uri, "package Library;");
+            entry.document = entry
+                .document
+                .with_kind(sysml_query::source::SourceKind::Library);
+            entry.workspace_source = false;
+            entry.admitted_to_publication = !open;
+            if open {
+                entry.open_editor(Some(3));
+            }
+            state.index.insert(uri.clone(), entry);
+        }
+        let (documents, reported, _) = publication_inputs(&state);
+        assert_eq!(
+            documents
+                .iter()
+                .map(|document| document.uri().clone())
+                .collect::<Vec<_>>(),
+            vec![opened.clone(), workspace]
+        );
+        assert_eq!(reported, vec![Box::<str>::from(opened.as_str())]);
+    }
 
     #[test]
     fn server_state_is_clone() {

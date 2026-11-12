@@ -3,7 +3,7 @@ use std::time::{Duration, Instant};
 
 use tower_lsp::lsp_types::{notification::Notification, *};
 use tower_lsp::Client;
-use tracing::{info, warn};
+use tracing::info;
 
 use crate::common::util;
 use crate::host::config::Spec42Config;
@@ -13,7 +13,7 @@ use crate::views::dto::SemanticIndexReadyNotificationDto;
 
 use super::capabilities::server_capabilities;
 use super::diagnostics::{publish_document_diagnostics, publish_workspace_diagnostics};
-use super::lifecycle::{project_boundary_for_uri, scan_roots, workspace_roots_from_initialize};
+use super::lifecycle::{project_boundary_for_uri, workspace_roots_from_initialize};
 use super::project_registry::ProjectRegistry;
 
 /// Ordered source ingestion schedules one bounded worker; delivery has its own per-owner loop.
@@ -34,7 +34,7 @@ impl Notification for AnalysisStatusChanged {
     const METHOD: &'static str = crate::views::dto::ANALYSIS_STATUS_CHANGED_METHOD;
 }
 
-fn ensure_analysis_notifications(
+pub(super) fn ensure_analysis_notifications(
     client: &Client,
     handle: &WorkspaceHandle,
     runtime_config: &Arc<std::sync::OnceLock<RuntimeConfig>>,
@@ -50,6 +50,27 @@ fn ensure_analysis_notifications(
         use crate::session::handle::AnalysisEvent;
         loop {
             let event = events.borrow_and_update().clone();
+            // Complete the owner's readiness transition before waking semantic consumers.
+            // A diagram must not depend on the later, potentially slow diagnostic fanout.
+            if let AnalysisEvent::Completed {
+                inputs,
+                result: Ok(report),
+            } = &event
+            {
+                if handle.snapshot().session.is_input_current(inputs)
+                    && report.outcome == sysml_query::publication::PublicationOutcome::Published
+                {
+                    let snapshot = handle.snapshot();
+                    let readiness = snapshot
+                        .diagnostic_readiness
+                        .needs_publication_notification()
+                        .then(|| snapshot.diagnostic_readiness.token());
+                    drop(snapshot);
+                    if let Some(readiness) = readiness {
+                        send_semantic_ready_notification(&client, &handle, readiness).await;
+                    }
+                }
+            }
             // A wake-up only: the client reads the current registry's canonical status.
             client.send_notification::<AnalysisStatusChanged>(()).await;
             if let AnalysisEvent::Closed = event {
@@ -138,6 +159,7 @@ fn ensure_analysis_notifications(
                                         ("admissionWallMs", ms(report.admission)),
                                         ("diagnosticFanoutMs", ms(diagnostic_fanout)),
                                         ("sourceParseMs", ms(report.source_parsing)),
+                                        ("libraryClosureMs", ms(report.library_selection)),
                                     ];
                                     if let Some(phases) = report.phases {
                                         fields.extend([
@@ -240,7 +262,7 @@ pub(crate) fn semantic_index_ready_notification(
 }
 
 /// Sends the `spec42/semanticIndexReady` LSP notification to the client.
-/// The session must already be in `Ready` state before calling this.
+/// The project owner checks lifecycle, source admission and notification epoch when claiming it.
 ///
 /// Diagnostics stay deferred until this send completes and the actor accepts its epoch.
 /// Semantic edits do not reset this host-only barrier; startup and library replacement do.
@@ -249,6 +271,14 @@ async fn send_semantic_ready_notification(
     handle: &WorkspaceHandle,
     token: crate::session::ReadinessToken,
 ) {
+    // The actor owns the transition checks; the transport does not mirror readiness rules.
+    if !handle
+        .begin_readiness_notification(token.clone())
+        .await
+        .unwrap_or(false)
+    {
+        return;
+    }
     let snapshot = handle.snapshot();
     if !snapshot.diagnostic_readiness.is_current(&token) {
         return;
@@ -280,7 +310,8 @@ mod startup;
 mod sync;
 pub(crate) use startup::{initialize, initialized};
 pub(crate) use sync::{
-    did_change, did_change_configuration, did_change_watched_files, did_close, did_open,
+    configured_library_paths, did_change, did_change_configuration, did_change_watched_files,
+    did_close, did_open,
 };
 
 #[cfg(test)]

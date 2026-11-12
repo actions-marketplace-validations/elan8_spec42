@@ -1125,6 +1125,23 @@ pub(crate) fn synthesize_implied_relationships(
         return Ok(resolution.implied_relationships.clone());
     }
     let mut implied = resolution.implied_relationships.to_vec();
+    // EnumeratedValue is an EnumerationUsage of its owning EnumerationDefinition
+    // (SysML 8.3.8.2-3). Preserve that typing as implied, rather than teaching
+    // expression consumers a special case for enumeration literals.
+    for (index, declaration) in storage.declarations.iter().enumerate() {
+        if declaration.kind == DeclarationKind::EnumerationLiteral {
+            if let Some(owner) = declaration.owner.filter(|owner| {
+                storage.declarations[owner.index()].kind == DeclarationKind::EnumerationDefinition
+            }) {
+                implied.push(ImpliedRelationship {
+                    kind: ReferenceKind::FeatureTyping,
+                    source: DeclarationId::from_index(index)
+                        .map_err(|_| ResolutionError::Capacity)?,
+                    target: owner,
+                });
+            }
+        }
+    }
     implied.extend(
         synthesize_generated_library_specializations(
             storage,
@@ -1229,6 +1246,37 @@ pub(crate) fn synthesize_implied_relationships(
         )?,
     );
     implied.extend(synthesize_port_conjugations(storage, &resolution.outcomes)?);
+    implied.extend(synthesize_then_successions(storage, resolution)?);
+    for (index, facts) in storage.declaration_facts.iter().enumerate() {
+        let member = DeclarationId::from_index(index).map_err(|_| ResolutionError::Capacity)?;
+        if let Some(source) = facts.implicit_transition_source {
+            implied.push(ImpliedRelationship {
+                kind: ReferenceKind::TransitionSource,
+                source: member,
+                target: source,
+            });
+        }
+        if facts.is_transition_succession {
+            if let Some(source) = storage.declarations[index].owner.and_then(|transition| {
+                storage.declaration_facts[transition.index()].implicit_transition_source
+            }) {
+                implied.push(ImpliedRelationship {
+                    kind: ReferenceKind::Succession,
+                    source: member,
+                    target: source,
+                });
+            }
+        }
+        if facts.transition_feature_role == Some(TransitionFeatureRole::Effect) {
+            if let Some(transition) = storage.declarations[index].owner {
+                implied.push(ImpliedRelationship {
+                    kind: ReferenceKind::TransitionEffect,
+                    source: transition,
+                    target: member,
+                });
+            }
+        }
+    }
     implied.sort_by_key(|relationship| {
         (
             relationship.kind,
@@ -1238,6 +1286,58 @@ pub(crate) fn synthesize_implied_relationships(
     });
     implied.dedup();
     Ok(implied.into_boxed_slice())
+}
+
+/// The succession a `then` member declares (SysML 7.17.4).
+///
+/// Lowering records the predecessor on the member as [`crate::lower::facts::ThenSource`]. This
+/// publishes that fact as an implied `succession` whose target is the predecessor: the member is
+/// the succession's target end, and the relationship target is its source end. An initial-node
+/// marker contributes the succession only when the node it names resolved.
+fn synthesize_then_successions(
+    storage: &SemanticModelStorage,
+    resolution: &ResolutionResults,
+) -> Result<Vec<ImpliedRelationship>, ResolutionError> {
+    use crate::lower::facts::ThenSource;
+    let mut implied = Vec::new();
+    for index in 0..storage.declarations.len() {
+        let source = DeclarationId::from_index(index).map_err(|_| ResolutionError::Capacity)?;
+        let Some(then_source) = storage
+            .declaration_facts(source)
+            .and_then(|facts| facts.then_source)
+        else {
+            continue;
+        };
+        let predecessor = match then_source {
+            ThenSource::Declaration(predecessor) => predecessor,
+            ThenSource::InitialNode(marker) => {
+                let mut resolved = None;
+                for (reference_index, reference) in storage.references.iter().enumerate() {
+                    if reference.source != marker || reference.kind != ReferenceKind::Succession {
+                        continue;
+                    }
+                    let reference_id = AuthoredReferenceId::from_index(reference_index)
+                        .map_err(|_| ResolutionError::Capacity)?;
+                    if let Some(ResolutionStatus::Resolved(target)) =
+                        resolution.outcome(reference_id)
+                    {
+                        resolved = Some(target);
+                        break;
+                    }
+                }
+                let Some(predecessor) = resolved else {
+                    continue;
+                };
+                predecessor
+            }
+        };
+        implied.push(ImpliedRelationship {
+            kind: ReferenceKind::Succession,
+            source,
+            target: predecessor,
+        });
+    }
+    Ok(implied)
 }
 
 /// Publishes the `PortConjugation` of every minted `ConjugatedPortDefinition` and the
@@ -1895,6 +1995,14 @@ pub(crate) fn synthesize_transition_succession_sources(
             status = TransitionSuccessionSourceStatus::Unresolved;
             continue;
         };
+        if let Some(source) =
+            storage.declaration_facts[transition.index()].implicit_transition_source
+        {
+            transition_source[transition.index()] = Some(source);
+            succession_source[succession.index()] = Some(source);
+            transition_has_source[transition.index()] = true;
+            succession_has_source[succession.index()] = true;
+        }
         let slot = succession_by_transition
             .get_mut(transition.index())
             .ok_or(ResolutionError::InvalidStorage)?;

@@ -87,7 +87,7 @@ pub(crate) const STANDARD_VIEW_DEFINITIONS: &[&str] = &[
 /// Whether a declaration kind states a state, either half of the family.
 ///
 /// The two authored halves only. A final pseudo-state is a state a transition may name but not a
-/// context that owns one, which is why the endpoint rules use [`is_state_endpoint_kind`] instead.
+/// context that owns one, which is why the endpoint rules use [`is_state_kind`] instead.
 pub(crate) fn is_state_kind(kind: DeclarationKind) -> bool {
     matches!(
         kind,
@@ -95,14 +95,6 @@ pub(crate) fn is_state_kind(kind: DeclarationKind) -> bool {
             | DeclarationKind::StateUsage
             | DeclarationKind::ExhibitStateUsage
     )
-}
-
-/// Whether a declaration kind is something a transition or initial marker may name.
-///
-/// A `final <name>;` declares a final pseudo-state, so a transition into it is the authored way to
-/// terminate a machine.
-pub(crate) fn is_state_endpoint_kind(kind: DeclarationKind) -> bool {
-    is_state_kind(kind) || kind == DeclarationKind::FinalState
 }
 
 /// Whether a declaration kind states behavior a `perform` or a succession can name.
@@ -248,7 +240,7 @@ impl<D> SemanticModel<D> {
         diagnostics: &mut Vec<Diagnostic>,
     ) -> Result<(), ResolutionError> {
         self.collect_connection_structure(declared, diagnostics)?;
-        self.collect_behavior_structure(document, declared, diagnostics)?;
+        self.collect_behavior_structure(declared, diagnostics)?;
         self.collect_requirement_case_structure(declared, diagnostics)?;
         self.collect_view_structure(document, declared, diagnostics)?;
         self.collect_declaration_rules(document, declared, diagnostics)?;
@@ -538,6 +530,50 @@ impl<D> SemanticModel<D> {
                     .find(|earlier| self.first_collision(&[**earlier, *member]).is_some())
                     .map(|earlier| (*earlier, *member))
             })
+    }
+
+    /// Each workspace root package whose name an earlier one already has, with that earlier one.
+    ///
+    /// The root namespace admits this (KerML 8.2.3.5.4 allows a name several global resolutions),
+    /// so it is advice about the model, and says nothing about which package a name resolves to.
+    /// Library roots are left out: a workspace package may shadow one on purpose.
+    pub(crate) fn duplicate_root_packages(
+        &self,
+    ) -> Result<BTreeMap<DeclarationId, DeclarationId>, ResolutionError> {
+        let mut by_name: BTreeMap<_, Vec<DeclarationId>> = BTreeMap::new();
+        for (index, declaration) in self.storage.declarations.iter().enumerate() {
+            let is_package = crate::model::element_kind::element_kind(declaration.kind)
+                .conforms_to(sysml_contract::ElementKind::Package);
+            let in_workspace = self
+                .storage
+                .documents
+                .get(declaration.document.index())
+                .ok_or(ResolutionError::InvalidStorage)?
+                .role
+                == source_identity::SourceRole::Workspace;
+            if declaration.owner.is_some() || !is_package || !in_workspace {
+                continue;
+            }
+            if let Some(name) = declaration.name.resolved() {
+                let id = DeclarationId::from_index(index).map_err(|_| ResolutionError::Capacity)?;
+                by_name.entry(name).or_default().push(id);
+            }
+        }
+        let mut duplicates = BTreeMap::new();
+        for mut roots in by_name.into_values() {
+            roots.sort_by_key(|root| {
+                (
+                    self.storage
+                        .declaration(*root)
+                        .map(|declaration| writer::document_identity(self, declaration.document)),
+                    self.declaration_range(*root),
+                )
+            });
+            if let Some((first, later)) = roots.split_first() {
+                duplicates.extend(later.iter().map(|root| (*root, *first)));
+            }
+        }
+        Ok(duplicates)
     }
 
     /// The first pair of same-named members whose kinds must be distinguishable.
@@ -969,15 +1005,14 @@ impl<D> SemanticModel<D> {
 
     pub(crate) fn collect_behavior_structure(
         &self,
-        document: DocumentIdx,
         declared: &[DeclarationId],
         diagnostics: &mut Vec<Diagnostic>,
     ) -> Result<(), ResolutionError> {
         let mut initial_by_context: BTreeMap<DeclarationId, Vec<DeclarationId>> = BTreeMap::new();
-        let mut final_by_context: BTreeMap<DeclarationId, Vec<DeclarationId>> = BTreeMap::new();
 
         for id in declared.iter().copied() {
             let kind = self.kind_of(id).ok_or(ResolutionError::InvalidStorage)?;
+            self.collect_succession_guard(id, diagnostics)?;
             match kind {
                 DeclarationKind::PerformActionUsage => {
                     for (reference_id, reference) in self.authored_references(
@@ -1025,7 +1060,7 @@ impl<D> SemanticModel<D> {
                         let Some(target_kind) = self.kind_of(target) else {
                             continue;
                         };
-                        if is_state_endpoint_kind(target_kind) {
+                        if is_state_kind(target_kind) {
                             continue;
                         }
                         diagnostics.push(self.reference_message_diagnostic(
@@ -1041,11 +1076,6 @@ impl<D> SemanticModel<D> {
                     }
                     if let Some(context) = self.enclosing(id, is_state_kind) {
                         initial_by_context.entry(context).or_default().push(id);
-                    }
-                }
-                DeclarationKind::FinalState => {
-                    if let Some(context) = self.enclosing(id, is_state_kind) {
-                        final_by_context.entry(context).or_default().push(id);
                     }
                 }
                 DeclarationKind::Succession => {
@@ -1117,13 +1147,31 @@ impl<D> SemanticModel<D> {
             }
         }
 
-        self.collect_state_machine_shape(
-            document,
-            declared,
-            &initial_by_context,
-            &final_by_context,
-            diagnostics,
-        )?;
+        self.collect_state_machine_shape(declared, &initial_by_context, diagnostics)?;
+        Ok(())
+    }
+
+    /// SysML 8.3.18.8 `validateTransitionFeatureMembershipGuardExpression` for a conditional
+    /// succession, which is a `TransitionUsage` that lowering keeps on the declaration the
+    /// succession is written with: a `Succession`, or whatever an inline `if ... then` declares.
+    fn collect_succession_guard(
+        &self,
+        id: DeclarationId,
+        diagnostics: &mut Vec<Diagnostic>,
+    ) -> Result<(), ResolutionError> {
+        for guard in self.child_declarations(id).iter().copied().filter(|child| {
+            self.storage
+                .declaration_facts(*child)
+                .is_some_and(|facts| facts.is_succession_guard)
+        }) {
+            if self.condition_is_non_boolean(guard) {
+                diagnostics.push(self.declaration_diagnostic(
+                    guard,
+                    DiagnosticCode::TransitionGuardNonBoolean,
+                    DiagnosticSeverity::Warning,
+                )?);
+            }
+        }
         Ok(())
     }
 
@@ -1133,25 +1181,30 @@ impl<D> SemanticModel<D> {
         id: DeclarationId,
         diagnostics: &mut Vec<Diagnostic>,
     ) -> Result<(), ResolutionError> {
-        let source = self.settled_targets(id, &[ReferenceKind::TransitionSource]);
+        let mut source = self.settled_targets(id, &[ReferenceKind::TransitionSource]);
+        if let Some(implicit) = self
+            .storage
+            .declaration_facts(id)
+            .and_then(|facts| facts.implicit_transition_source)
+        {
+            source.push(implicit);
+        }
         let target = self.settled_targets(id, &[ReferenceKind::TransitionTarget]);
         // SysML 8.3.18.8 `validateTransitionFeatureMembershipGuardExpression`: the guard is the
         // transition's owned guard-role Boolean expression, and it settles through the same
-        // expression pipeline every other condition does, so a non-Boolean constant is the same
+        // expression pipeline every other condition does, so a non-Boolean guard is the same
         // fact a non-Boolean constraint is.
         for guard in self.child_declarations(id).iter().copied().filter(|child| {
             self.storage.declaration_facts(*child).is_some_and(|facts| {
                 facts.transition_feature_role == Some(TransitionFeatureRole::Guard)
             })
         }) {
-            if let Some(value) = self.evaluation_for(guard).value() {
-                if !matches!(value, EvaluatedScalar::Boolean(_)) {
-                    diagnostics.push(self.declaration_diagnostic(
-                        id,
-                        DiagnosticCode::TransitionGuardNonBoolean,
-                        DiagnosticSeverity::Warning,
-                    )?);
-                }
+            if self.condition_is_non_boolean(guard) {
+                diagnostics.push(self.declaration_diagnostic(
+                    id,
+                    DiagnosticCode::TransitionGuardNonBoolean,
+                    DiagnosticSeverity::Warning,
+                )?);
             }
         }
         let (Some(source), Some(target)) = (source.first(), target.first()) else {
@@ -1173,7 +1226,14 @@ impl<D> SemanticModel<D> {
         else {
             return Ok(());
         };
-        if !is_state_endpoint_kind(source_kind) || !is_state_endpoint_kind(target_kind) {
+        // The entry action is a valid implicit source of TargetTransitionUsage (SysML 7.18.3).
+        let entry_source = self.memberships.get(*source).is_some_and(|membership| {
+            membership.role
+                == Some(crate::MembershipRole::StateSubaction(
+                    crate::StateSubactionKind::Entry,
+                ))
+        });
+        if !(is_state_kind(source_kind) || entry_source) || !is_state_kind(target_kind) {
             let mut diagnostic = self.declaration_message_diagnostic(
                 id,
                 DiagnosticCode::TransitionEndpointInvalidState,
@@ -1194,7 +1254,51 @@ impl<D> SemanticModel<D> {
         let source_context = self.enclosing(*source, is_state_kind);
         let target_context = self.enclosing(*target, is_state_kind);
         if let (Some(source_context), Some(target_context)) = (source_context, target_context) {
-            if source_context != target_context {
+            // An inherited state is a member of the machine too, as is the `done` every state
+            // inherits from `States::StateAction`: a transition to it is how a machine finishes.
+            let specialization = self.types.specialization();
+            let related = |specific, general| {
+                specialization.reaches(
+                    specific,
+                    general,
+                    crate::index::types::ScopeBits::AnySpecialization,
+                )
+            };
+            // SysML 7.18.3 permits transitions across exclusive composite states. Compare
+            // their enclosing state contexts as well as their immediate owners; separate
+            // state definitions still have no common context. Inherited contexts retain
+            // the same specialization compatibility as direct endpoints.
+            let contexts = |start| {
+                let mut contexts = vec![start];
+                let mut current = start;
+                while self.kind_of(current) != Some(DeclarationKind::StateDefinition) {
+                    let Some(parent) = self.enclosing(current, is_state_kind) else {
+                        break;
+                    };
+                    contexts.push(parent);
+                    current = parent;
+                }
+                contexts
+            };
+            let source_contexts = contexts(source_context);
+            let target_contexts = contexts(target_context);
+            let exclusive = |contexts: &[DeclarationId]| {
+                contexts.iter().all(|context| {
+                    !self
+                        .storage
+                        .declaration_facts(*context)
+                        .is_some_and(|facts| facts.modifiers.parallel)
+                })
+            };
+            let same_machine = source_context == target_context
+                || source_contexts.iter().enumerate().any(|(i, source)| {
+                    target_contexts.iter().enumerate().any(|(j, target)| {
+                        (source == target || related(*source, *target) || related(*target, *source))
+                            && exclusive(&source_contexts[..=i])
+                            && exclusive(&target_contexts[..=j])
+                    })
+                });
+            if !same_machine {
                 let mut diagnostic = self.declaration_diagnostic(
                     id,
                     DiagnosticCode::TransitionEndpointInvalidContext,
@@ -1213,10 +1317,8 @@ impl<D> SemanticModel<D> {
     /// The cardinality and completeness rules of each state definition in `document`.
     pub(crate) fn collect_state_machine_shape(
         &self,
-        document: DocumentIdx,
         declared: &[DeclarationId],
         initial_by_context: &BTreeMap<DeclarationId, Vec<DeclarationId>>,
-        final_by_context: &BTreeMap<DeclarationId, Vec<DeclarationId>>,
         diagnostics: &mut Vec<Diagnostic>,
     ) -> Result<(), ResolutionError> {
         // The cardinality of initial transitions is deliberately not reported. The pinned parser
@@ -1224,29 +1326,6 @@ impl<D> SemanticModel<D> {
         // nested state the same shape, so both lower as an initial-state declaration, and counting
         // them would report an ordinary continuation as a second initial transition. Distinguishing
         // them needs a parser fact this publication does not have.
-        for (context, markers) in final_by_context {
-            if markers.len() < 2
-                || self
-                    .storage
-                    .declaration(*context)
-                    .ok_or(ResolutionError::InvalidStorage)?
-                    .document
-                    != document
-            {
-                continue;
-            }
-            diagnostics.push(self.declaration_message_diagnostic(
-                *context,
-                DiagnosticCode::MultipleFinalStates,
-                DiagnosticSeverity::Warning,
-                Some(format!(
-                    "State definition '{}' declares {} final states; one is expected.",
-                    self.display_name(*context),
-                    markers.len()
-                )),
-            )?);
-        }
-
         for id in declared.iter().copied() {
             if self.kind_of(id) != Some(DeclarationKind::StateDefinition) {
                 continue;
@@ -1508,16 +1587,61 @@ impl<D> SemanticModel<D> {
             // SysML 8.3.21.10 `validateSatisfyRequirementUsageReference`: the satisfied feature
             // is a RequirementUsage. A requirement definition is not one, so `satisfy ReqDef by
             // x;` is reported; a viewpoint or concern usage is a RequirementUsage.
-            (false, false) => self.collect_target_kind(
-                id,
-                &[ReferenceKind::SatisfySource],
-                |kind| {
-                    crate::model::element_kind::element_kind(kind)
-                        .conforms_to(sysml_contract::ElementKind::RequirementUsage)
-                },
-                DiagnosticCode::SatisfyInvalidEndpointKind,
-                diagnostics,
-            ),
+            (false, false) => {
+                self.collect_target_kind(
+                    id,
+                    &[ReferenceKind::SatisfySource],
+                    |kind| {
+                        crate::model::element_kind::element_kind(kind)
+                            .conforms_to(sysml_contract::ElementKind::RequirementUsage)
+                    },
+                    DiagnosticCode::SatisfyInvalidEndpointKind,
+                    diagnostics,
+                )?;
+                let sources = self.settled_targets(id, &[ReferenceKind::SatisfySource]);
+                let requirement = match sources.as_slice() {
+                    [requirement] => *requirement,
+                    [] if self
+                        .authored_references(id, &[ReferenceKind::SatisfySource])
+                        .is_empty() =>
+                    {
+                        id
+                    }
+                    _ => return Ok(()),
+                };
+                let Some(subject) = self.subject_parameter(requirement) else {
+                    return Ok(());
+                };
+                for (reference_id, reference) in
+                    self.authored_references(id, &[ReferenceKind::SatisfyTarget])
+                {
+                    let Some(target) = self.settled_target(reference_id) else {
+                        continue;
+                    };
+                    // The by operand is a subject FeatureValue evaluated in the satisfy
+                    // occurrence, so `that` denotes the occurrence featuring that check.
+                    if let Some(severity) = self.reference_value_type_conflict(
+                        target,
+                        subject,
+                        crate::index::expression_typing::ReferenceContext::Effective(id),
+                        Some(reference_id),
+                    ) {
+                        let mut diagnostic = self.reference_diagnostic(
+                            reference,
+                            DiagnosticCode::SatisfySubjectTypeIncompatible,
+                            severity,
+                            Some(subject),
+                        )?;
+                        diagnostic.related =
+                            Box::from([self.related_declaration(
+                                subject,
+                                "Required subject declared here.",
+                            )?]);
+                        diagnostics.push(diagnostic);
+                    }
+                }
+                Ok(())
+            }
         }
     }
 
@@ -1550,8 +1674,8 @@ impl<D> SemanticModel<D> {
                             DiagnosticCode::ViewTypeNonStandard,
                             DiagnosticSeverity::Warning,
                             format!(
-                                "View type '{}' is not one of the SysML v2 standard view \
-                                 definitions (§9.2.20 Table 34).",
+                                "View type '{}' neither is nor specializes one of the SysML v2 \
+                                 standard view definitions (§9.2.20 Table 34).",
                                 self.display_name(target)
                             ),
                             Some((target, RELATED_TARGET)),
@@ -1687,8 +1811,46 @@ impl<D> SemanticModel<D> {
         if role == source_identity::SourceRole::Workspace {
             return Ok(false);
         }
-        let name = self.display_name(target);
-        Ok(!STANDARD_VIEW_DEFINITIONS.contains(&name))
+        // A view definition that is, or specializes, a standard view definition is drawn with
+        // that standard view's notation, like `view def ContextView :> GeneralView` in a domain
+        // library. Only one that reaches none of them is outside the standard catalog.
+        let subclassification =
+            crate::model::query::internal_scope(SpecializationScope::Subclassification);
+        let reaches_standard = std::iter::once(target)
+            .chain(
+                self.types
+                    .specialization()
+                    .scoped_ancestors(target)
+                    .filter(|(_, scopes)| scopes.contains(&subclassification))
+                    .map(|(ancestor, _)| ancestor),
+            )
+            .try_fold(false, |found, definition| {
+                Ok::<_, ResolutionError>(found || self.is_standard_view_definition(definition)?)
+            })?;
+        Ok(!reaches_standard)
+    }
+
+    /// Whether `definition` is one of the standard view definitions: a view definition of the
+    /// standard library with a name from `STANDARD_VIEW_DEFINITIONS`. A library outside the
+    /// standard library that declares a view definition with the same name does not make it one.
+    fn is_standard_view_definition(
+        &self,
+        definition: DeclarationId,
+    ) -> Result<bool, ResolutionError> {
+        let declaration = self
+            .storage
+            .declaration(definition)
+            .ok_or(ResolutionError::InvalidStorage)?;
+        if declaration.kind != DeclarationKind::ViewDefinition {
+            return Ok(false);
+        }
+        let role = self
+            .storage
+            .document(declaration.document)
+            .ok_or(ResolutionError::InvalidStorage)?
+            .role;
+        Ok(role == source_identity::SourceRole::StandardLibrary
+            && STANDARD_VIEW_DEFINITIONS.contains(&self.display_name(definition)))
     }
 
     // ------------------------------------------------------------------------------------------
@@ -1889,6 +2051,39 @@ impl<D> SemanticModel<D> {
         if declaration.document != document {
             return Ok(());
         }
+        let Some(value) = self.implicit_value_override(source, target)? else {
+            return Ok(());
+        };
+        let mut diagnostic = self.declaration_message_diagnostic(
+            source,
+            DiagnosticCode::ImplicitRedefinitionWithoutOperator,
+            DiagnosticSeverity::Error,
+            Some(format!(
+                "'{}' overrides inherited member '{}' but is missing the explicit ':>>' \
+                 operator.",
+                self.display_name(source),
+                self.display_name(target)
+            )),
+        )?;
+        diagnostic.related = Box::from([self.related_declaration(target, RELATED_INHERITED)?]);
+        diagnostics.push(diagnostic);
+        self.collect_inherited_enumeration_value(source, target, value, document, diagnostics)
+    }
+
+    /// The value `source` authors that silently overrides `target`, the inherited member its name
+    /// implicitly redefines; `None` when the pair is not such an override.
+    ///
+    /// The one statement of the rule: the diagnostic reports it, and the repair that makes the
+    /// redefinition explicit is offered exactly where it holds.
+    pub(crate) fn implicit_value_override(
+        &self,
+        source: DeclarationId,
+        target: DeclarationId,
+    ) -> Result<Option<&crate::lower::facts::FeatureValueRecord>, ResolutionError> {
+        let declaration = self
+            .storage
+            .declaration(source)
+            .ok_or(ResolutionError::InvalidStorage)?;
         // Only a value that overrides. `default = e` states a value the specialization may
         // replace, which is exactly what redeclaring an inherited parameter to give it a
         // default means, so it is not a silent override.
@@ -1905,7 +2100,7 @@ impl<D> SemanticModel<D> {
                 DeclarationKind::ParameterUsage | DeclarationKind::SubjectUsage
             )
         {
-            return Ok(());
+            return Ok(None);
         }
         let Some(value) = self
             .storage
@@ -1913,13 +2108,13 @@ impl<D> SemanticModel<D> {
             .iter()
             .find(|value| value.declaration == source && !value.is_default)
         else {
-            return Ok(());
+            return Ok(None);
         };
         if !self
             .authored_references(source, &[ReferenceKind::Redefinition])
             .is_empty()
         {
-            return Ok(());
+            return Ok(None);
         }
         // Only a redefinition the *name* implies. The resolver also derives positional
         // redefinitions -- a specializing function's `return u : T = ...` redefines the return
@@ -1936,23 +2131,21 @@ impl<D> SemanticModel<D> {
                     crate::resolve::results::EffectiveNameOutcome::Resolved(_)
                 ) && source.name == target.name
             });
-        if !named_collision {
-            return Ok(());
-        }
-        let mut diagnostic = self.declaration_message_diagnostic(
-            source,
-            DiagnosticCode::ImplicitRedefinitionWithoutOperator,
-            DiagnosticSeverity::Error,
-            Some(format!(
-                "'{}' overrides inherited member '{}' but is missing the explicit ':>>' \
-                 operator.",
-                self.display_name(source),
-                self.display_name(target)
-            )),
-        )?;
-        diagnostic.related = Box::from([self.related_declaration(target, RELATED_INHERITED)?]);
-        diagnostics.push(diagnostic);
+        Ok(named_collision.then_some(value))
+    }
 
+    fn collect_inherited_enumeration_value(
+        &self,
+        source: DeclarationId,
+        target: DeclarationId,
+        value: &crate::lower::facts::FeatureValueRecord,
+        document: DocumentIdx,
+        diagnostics: &mut Vec<Diagnostic>,
+    ) -> Result<(), ResolutionError> {
+        let declaration = self
+            .storage
+            .declaration(source)
+            .ok_or(ResolutionError::InvalidStorage)?;
         // A string bound to a member the inherited declaration types by an enumeration names
         // no enumeration literal. Read from the settled value and the settled type, not from
         // the authored text.
@@ -2009,10 +2202,9 @@ impl<D> SemanticModel<D> {
 
     /// Reports the settled verdict of an authored analysis, and the analyses that could not settle.
     ///
-    /// Only a declaration that authored the analysis is reported. Evaluation facts are broader on
-    /// purpose -- an inherited requirement constraint stays queryable from every usage -- and
-    /// reporting an inherited template's unresolved result on each use would turn reuse into an
-    /// apparent local error.
+    /// Authored failures are reported at their declaration. A concrete false verdict after
+    /// contextual binding is reported at that context with the authored constraint related.
+    /// Unsettled inherited templates remain quiet.
     ///
     /// The unresolved rule fires only on a genuine evaluation failure. An expression that is
     /// correctly not constant, one whose shape this evaluator does not fold, one that depends on
@@ -2053,6 +2245,44 @@ impl<D> SemanticModel<D> {
                     )?);
                 }
                 _ => {}
+            }
+        }
+        let mut reported = std::collections::BTreeSet::new();
+        for context in declared.iter().copied() {
+            for (_, contextual) in self
+                .resolved_expressions
+                .contextual
+                .range((context, DeclarationId(0))..=(context, DeclarationId(u32::MAX)))
+            {
+                if !matches!(
+                    contextual.evaluation,
+                    EvaluationState::Literal(EvaluatedScalar::Boolean(false))
+                        | EvaluationState::Evaluated(EvaluatedScalar::Boolean(false))
+                ) || !self.authors_an_analysis(contextual.authored)
+                    || matches!(
+                        self.evaluation_for(contextual.authored),
+                        EvaluationState::Literal(EvaluatedScalar::Boolean(false))
+                            | EvaluationState::Evaluated(EvaluatedScalar::Boolean(false))
+                    )
+                    || !reported.insert((context, contextual.effective))
+                {
+                    continue;
+                }
+                let mut diagnostic = self.declaration_message_diagnostic(
+                    context,
+                    DiagnosticCode::AnalysisConstraintFailed,
+                    DiagnosticSeverity::Warning,
+                    Some(format!(
+                        "Constraint '{}' evaluated to false in '{}'.",
+                        self.display_name(contextual.authored),
+                        self.display_name(context)
+                    )),
+                )?;
+                diagnostic.related = Box::from([self.related_declaration(
+                    contextual.authored,
+                    "Constraint evaluated in this context.",
+                )?]);
+                diagnostics.push(diagnostic);
             }
         }
         Ok(())

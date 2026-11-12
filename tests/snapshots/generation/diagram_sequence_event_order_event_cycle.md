@@ -172,6 +172,7 @@ package Seq {
     (relationship (kind typeFeaturing) (source (node (document "memory://snapshot/diagram_sequence_event_order_event_cycle.md") (qualified-name "Seq::Scenario::p"))) (target (node (document "memory://snapshot/diagram_sequence_event_order_event_cycle.md") (qualified-name "Seq::Scenario"))) (provenance implied))
     (relationship (kind subsetting) (source (node (document "memory://snapshot/diagram_sequence_event_order_event_cycle.md") (qualified-name "Seq::Scenario::p::r3"))) (target (node (document "memory://snapshot/sysml.library/occurrences.md") (qualified-name "Occurrences::occurrences"))) (provenance implied))
     (relationship (kind typeFeaturing) (source (node (document "memory://snapshot/diagram_sequence_event_order_event_cycle.md") (qualified-name "Seq::Scenario::p::r3"))) (target (node (document "memory://snapshot/diagram_sequence_event_order_event_cycle.md") (qualified-name "Seq::Scenario::p"))) (provenance implied))
+    (relationship (kind succession) (source (node (document "memory://snapshot/diagram_sequence_event_order_event_cycle.md") (qualified-name "Seq::Scenario::p::r3"))) (target (node (document "memory://snapshot/diagram_sequence_event_order_event_cycle.md") (qualified-name "Seq::Scenario::p::s1"))) (provenance implied))
     (relationship (kind subsetting) (source (node (document "memory://snapshot/diagram_sequence_event_order_event_cycle.md") (qualified-name "Seq::Scenario::p::s1"))) (target (node (document "memory://snapshot/sysml.library/occurrences.md") (qualified-name "Occurrences::occurrences"))) (provenance implied))
     (relationship (kind typeFeaturing) (source (node (document "memory://snapshot/diagram_sequence_event_order_event_cycle.md") (qualified-name "Seq::Scenario::p::s1"))) (target (node (document "memory://snapshot/diagram_sequence_event_order_event_cycle.md") (qualified-name "Seq::Scenario::p"))) (provenance implied))
     (relationship (kind subsetting) (source (node (document "memory://snapshot/diagram_sequence_event_order_event_cycle.md") (qualified-name "Seq::Scenario::pressMsg"))) (target (node (document "memory://snapshot/sysml.library/flows.md") (qualified-name "Flows::flows"))) (provenance implied))
@@ -195,8 +196,10 @@ package Seq {
     (relationship (kind typeFeaturing) (source (node (document "memory://snapshot/diagram_sequence_event_order_event_cycle.md") (qualified-name "Seq::Scenario::q::r1"))) (target (node (document "memory://snapshot/diagram_sequence_event_order_event_cycle.md") (qualified-name "Seq::Scenario::q"))) (provenance implied))
     (relationship (kind subsetting) (source (node (document "memory://snapshot/diagram_sequence_event_order_event_cycle.md") (qualified-name "Seq::Scenario::q::s2"))) (target (node (document "memory://snapshot/sysml.library/occurrences.md") (qualified-name "Occurrences::occurrences"))) (provenance implied))
     (relationship (kind typeFeaturing) (source (node (document "memory://snapshot/diagram_sequence_event_order_event_cycle.md") (qualified-name "Seq::Scenario::q::s2"))) (target (node (document "memory://snapshot/diagram_sequence_event_order_event_cycle.md") (qualified-name "Seq::Scenario::q"))) (provenance implied))
+    (relationship (kind succession) (source (node (document "memory://snapshot/diagram_sequence_event_order_event_cycle.md") (qualified-name "Seq::Scenario::q::s2"))) (target (node (document "memory://snapshot/diagram_sequence_event_order_event_cycle.md") (qualified-name "Seq::Scenario::q::r1"))) (provenance implied))
     (relationship (kind subsetting) (source (node (document "memory://snapshot/diagram_sequence_event_order_event_cycle.md") (qualified-name "Seq::Scenario::q::s3"))) (target (node (document "memory://snapshot/sysml.library/occurrences.md") (qualified-name "Occurrences::occurrences"))) (provenance implied))
     (relationship (kind typeFeaturing) (source (node (document "memory://snapshot/diagram_sequence_event_order_event_cycle.md") (qualified-name "Seq::Scenario::q::s3"))) (target (node (document "memory://snapshot/diagram_sequence_event_order_event_cycle.md") (qualified-name "Seq::Scenario::q"))) (provenance implied))
+    (relationship (kind succession) (source (node (document "memory://snapshot/diagram_sequence_event_order_event_cycle.md") (qualified-name "Seq::Scenario::q::s3"))) (target (node (document "memory://snapshot/diagram_sequence_event_order_event_cycle.md") (qualified-name "Seq::Scenario::q::s2"))) (provenance implied))
     (relationship (kind subsetting) (source (node (document "memory://snapshot/diagram_sequence_event_order_event_cycle.md") (qualified-name "Seq::Scenario::r"))) (target (node (document "memory://snapshot/sysml.library/occurrences.md") (qualified-name "Occurrences::Occurrence::suboccurrences"))) (provenance implied))
     (relationship (kind subsetting) (source (node (document "memory://snapshot/diagram_sequence_event_order_event_cycle.md") (qualified-name "Seq::Scenario::r"))) (target (node (document "memory://snapshot/sysml.library/parts.md") (qualified-name "Parts::parts"))) (provenance implied))
     (relationship (kind typeFeaturing) (source (node (document "memory://snapshot/diagram_sequence_event_order_event_cycle.md") (qualified-name "Seq::Scenario::r"))) (target (node (document "memory://snapshot/diagram_sequence_event_order_event_cycle.md") (qualified-name "Seq::Scenario"))) (provenance implied))
@@ -706,8 +709,8 @@ package Seq {
 ## diagram.json
 ~~~json
 {
-  "schemaVersion": 10,
-  "modelDigest": "blake3:bbe1eab96ea6d190864d0ad813a207d7625dbbd3da54229ee996a7a6b5973af4",
+  "schemaVersion": 12,
+  "modelDigest": "blake3:2ef1300cb4328b4de47c2d9f3b196b1c9fcd3342727211139d3cb63db697d7eb",
   "documents": [
     {
       "uri": "memory://snapshot/diagram_sequence_event_order_event_cycle.md",
@@ -1233,13 +1236,13 @@ package Seq {
     },
     {
       "kind": "relationship",
-      "ordinal": 26,
+      "ordinal": 29,
       "relationshipKind": "succession",
       "source": 7
     },
     {
       "kind": "relationship",
-      "ordinal": 27,
+      "ordinal": 30,
       "relationshipKind": "succession",
       "source": 7
     },
@@ -1257,19 +1260,19 @@ package Seq {
     },
     {
       "kind": "relationship",
-      "ordinal": 29,
+      "ordinal": 32,
       "relationshipKind": "flowPayloadType",
       "source": 8
     },
     {
       "kind": "relationship",
-      "ordinal": 30,
+      "ordinal": 33,
       "relationshipKind": "flowSource",
       "source": 8
     },
     {
       "kind": "relationship",
-      "ordinal": 31,
+      "ordinal": 34,
       "relationshipKind": "flowTarget",
       "source": 8
     },
@@ -1329,19 +1332,19 @@ package Seq {
     },
     {
       "kind": "relationship",
-      "ordinal": 46,
+      "ordinal": 49,
       "relationshipKind": "flowPayloadType",
       "source": 13
     },
     {
       "kind": "relationship",
-      "ordinal": 47,
+      "ordinal": 50,
       "relationshipKind": "flowSource",
       "source": 13
     },
     {
       "kind": "relationship",
-      "ordinal": 48,
+      "ordinal": 51,
       "relationshipKind": "flowTarget",
       "source": 13
     },
@@ -1377,7 +1380,7 @@ package Seq {
     },
     {
       "kind": "relationship",
-      "ordinal": 9,
+      "ordinal": 10,
       "relationshipKind": "typing",
       "source": 15
     },
@@ -1419,7 +1422,7 @@ package Seq {
     },
     {
       "kind": "relationship",
-      "ordinal": 19,
+      "ordinal": 22,
       "relationshipKind": "typing",
       "source": 19
     },
@@ -1437,19 +1440,19 @@ package Seq {
     },
     {
       "kind": "relationship",
-      "ordinal": 63,
+      "ordinal": 66,
       "relationshipKind": "flowPayloadType",
       "source": 21
     },
     {
       "kind": "relationship",
-      "ordinal": 64,
+      "ordinal": 67,
       "relationshipKind": "flowSource",
       "source": 21
     },
     {
       "kind": "relationship",
-      "ordinal": 65,
+      "ordinal": 68,
       "relationshipKind": "flowTarget",
       "source": 21
     },
@@ -1844,6 +1847,7 @@ package Seq {
         "name": "Scenario",
         "notationRole": "definition",
         "owner": null,
+        "presentationKey": "p:bd89a0e8a9482d207fdb6eeab2512d61e012226cd9b2984c6ab1c5f97b91f521",
         "reference": 6,
         "source": 0,
         "stateSubaction": null,
@@ -1862,6 +1866,7 @@ package Seq {
         "name": null,
         "notationRole": "unsupported",
         "owner": 0,
+        "presentationKey": "p:2bd50e1e9cf9e28acabc8d329c102e6c0032a788f729b30eda22dfe11b1dc331",
         "reference": 24,
         "source": 25,
         "stateSubaction": null,
@@ -1880,6 +1885,7 @@ package Seq {
         "name": "telemetryMsg",
         "notationRole": "usage",
         "owner": 0,
+        "presentationKey": "p:88ba6dd301189fbdee50464d0f0b60bb19800da277fdab91f062be78a8dc833a",
         "reference": 21,
         "source": 21,
         "stateSubaction": null,
@@ -1898,6 +1904,7 @@ package Seq {
         "name": null,
         "notationRole": "unsupported",
         "owner": 2,
+        "presentationKey": "p:06b4be6c280ea54a0336569f17c09947dc2263a660166c37261c8c549522fa8d",
         "reference": 33,
         "source": 23,
         "stateSubaction": null,
@@ -1916,6 +1923,7 @@ package Seq {
         "name": null,
         "notationRole": "unsupported",
         "owner": 3,
+        "presentationKey": "p:7ee67e0b3b1c52cd2fe1ebfe97ce70c1ac9a9ddead46fb054a4d388ced50026f",
         "reference": 35,
         "source": 23,
         "stateSubaction": null,
@@ -1934,6 +1942,7 @@ package Seq {
         "name": null,
         "notationRole": "unsupported",
         "owner": 2,
+        "presentationKey": "p:dec796974bb6a0c74730ce1799574ebd704656a0fac6fc724d86ce4c51b25e69",
         "reference": 34,
         "source": 24,
         "stateSubaction": null,
@@ -1952,6 +1961,7 @@ package Seq {
         "name": null,
         "notationRole": "unsupported",
         "owner": 5,
+        "presentationKey": "p:b3d9893f2a8a297e5ec05d6f187c6e21847e38fd54b09f669162988e6eccac19",
         "reference": 36,
         "source": 24,
         "stateSubaction": null,
@@ -1970,6 +1980,7 @@ package Seq {
         "name": "ackMsg",
         "notationRole": "usage",
         "owner": 0,
+        "presentationKey": "p:8314271aceea9c2d7568deb13f8e1d023befefec2c560b59df5a9a3e1ae42f29",
         "reference": 8,
         "source": 13,
         "stateSubaction": null,
@@ -1988,6 +1999,7 @@ package Seq {
         "name": null,
         "notationRole": "unsupported",
         "owner": 7,
+        "presentationKey": "p:fda665bb5dcf757d289d6c30f80e2839afb996c176ed4ac55c7b7bbb110de506",
         "reference": 25,
         "source": 15,
         "stateSubaction": null,
@@ -2006,6 +2018,7 @@ package Seq {
         "name": null,
         "notationRole": "unsupported",
         "owner": 8,
+        "presentationKey": "p:53c30f3463ee7129675c3b3badde9fa0749284abb4039774756cc566e6ecb81a",
         "reference": 27,
         "source": 15,
         "stateSubaction": null,
@@ -2024,6 +2037,7 @@ package Seq {
         "name": null,
         "notationRole": "unsupported",
         "owner": 7,
+        "presentationKey": "p:e38f905e91ed9cecfe7f5a778ff4e2aa84a6e069d966105d926dd5d870b9b66b",
         "reference": 26,
         "source": 16,
         "stateSubaction": null,
@@ -2042,6 +2056,7 @@ package Seq {
         "name": null,
         "notationRole": "unsupported",
         "owner": 10,
+        "presentationKey": "p:2a8a15c82ee0d2674074534cd6423983fdb028827ea474e1270ab9b0bc95dceb",
         "reference": 28,
         "source": 16,
         "stateSubaction": null,
@@ -2060,6 +2075,7 @@ package Seq {
         "name": "pressMsg",
         "notationRole": "usage",
         "owner": 0,
+        "presentationKey": "p:d23c2d51f4e88a9134e376c21c691308cb25d780588dc025dc8affd2dd2e99bd",
         "reference": 13,
         "source": 17,
         "stateSubaction": null,
@@ -2078,6 +2094,7 @@ package Seq {
         "name": null,
         "notationRole": "unsupported",
         "owner": 12,
+        "presentationKey": "p:7d0058319dcce299444347caff7b56d2e53808da6a3796b7e6f5705bd85c45c4",
         "reference": 29,
         "source": 19,
         "stateSubaction": null,
@@ -2096,6 +2113,7 @@ package Seq {
         "name": null,
         "notationRole": "unsupported",
         "owner": 13,
+        "presentationKey": "p:f7b6836d6b9efd237371985d7f053c606095e87bdaa9168c791b0e2227af4ec0",
         "reference": 31,
         "source": 19,
         "stateSubaction": null,
@@ -2114,6 +2132,7 @@ package Seq {
         "name": null,
         "notationRole": "unsupported",
         "owner": 12,
+        "presentationKey": "p:6d9a167c970502fca14d91018654498cceafa6face77b956d4cb76e0bffcd375",
         "reference": 30,
         "source": 20,
         "stateSubaction": null,
@@ -2132,6 +2151,7 @@ package Seq {
         "name": null,
         "notationRole": "unsupported",
         "owner": 15,
+        "presentationKey": "p:a68aa004a66de7ed35d2a6ed34adc10d192ced7bdf5ba1d0d09e3839d99531f3",
         "reference": 32,
         "source": 20,
         "stateSubaction": null,
@@ -2159,6 +2179,7 @@ package Seq {
         "name": "p",
         "notationRole": "usage",
         "owner": 0,
+        "presentationKey": "p:48bbfe44cd9001b42a0423f2af7356174a8e42a8b00d437cfb5bb0b38214f7ef",
         "reference": 10,
         "source": 1,
         "stateSubaction": null,
@@ -2183,6 +2204,7 @@ package Seq {
         "name": "r3",
         "notationRole": "usage",
         "owner": 17,
+        "presentationKey": "p:7f8397881a228e59ed8b5472d57708f39588d5ad6766761839bbb7ba45c82c88",
         "reference": 11,
         "source": 4,
         "stateSubaction": null,
@@ -2201,6 +2223,7 @@ package Seq {
         "name": "s1",
         "notationRole": "usage",
         "owner": 17,
+        "presentationKey": "p:15ca8876178d30574c062dfb7265909bc18e5e7d4fae667c0861e1b141e3d6cd",
         "reference": 12,
         "source": 3,
         "stateSubaction": null,
@@ -2229,6 +2252,7 @@ package Seq {
         "name": "q",
         "notationRole": "usage",
         "owner": 0,
+        "presentationKey": "p:0ee158d53b160a7ca1af8da9c86c0731dfaa32d0ed973ef92d43154af1208924",
         "reference": 15,
         "source": 5,
         "stateSubaction": null,
@@ -2253,6 +2277,7 @@ package Seq {
         "name": "r1",
         "notationRole": "usage",
         "owner": 20,
+        "presentationKey": "p:731824dbc7f4258056b0e719e12d77272852c7550045eae76955d180e08d74e1",
         "reference": 16,
         "source": 7,
         "stateSubaction": null,
@@ -2271,6 +2296,7 @@ package Seq {
         "name": "s2",
         "notationRole": "usage",
         "owner": 20,
+        "presentationKey": "p:0e271bd1a054f097abdad59f7135d40e40ec719c842c1ba11f441852c04b1e4d",
         "reference": 17,
         "source": 8,
         "stateSubaction": null,
@@ -2289,6 +2315,7 @@ package Seq {
         "name": "s3",
         "notationRole": "usage",
         "owner": 20,
+        "presentationKey": "p:77e77647e69a08d3773022d5233463767d627e466a9d52a15c6ba5b5e1a5e17a",
         "reference": 18,
         "source": 9,
         "stateSubaction": null,
@@ -2315,6 +2342,7 @@ package Seq {
         "name": "r",
         "notationRole": "usage",
         "owner": 0,
+        "presentationKey": "p:f7eb7048882c5f4211f49bf0784d426f867fb9915026e0eb600bb85612bb5406",
         "reference": 19,
         "source": 10,
         "stateSubaction": null,
@@ -2339,6 +2367,7 @@ package Seq {
         "name": "r2",
         "notationRole": "usage",
         "owner": 24,
+        "presentationKey": "p:defac9c141933e8af9d43dc03c17437b668fa9b483ed87b51725ba34133d4827",
         "reference": 20,
         "source": 12,
         "stateSubaction": null,

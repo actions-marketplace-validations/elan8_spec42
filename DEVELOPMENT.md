@@ -244,6 +244,18 @@ Spec42 uses two Rust integration layers in CI:
 
 ### Rust (core, fast path)
 
+Run the local pre-push checks with `bash scripts/minici.sh`, or select a suite such as
+`bash scripts/minici.sh tests-server`. On native Windows, miniCI explicitly skips the libfuzzer
+seed-corpus step because its `no_main` binaries fail to link with MSVC (`LNK1561`). Server tests,
+standard-library ratchets, and the remaining suites still run. Linux CI retains the fuzz check;
+WSL with a Linux Rust toolchain runs it too.
+
+The default run and the `lint` suite omit the full Rustdoc build. Run
+`bash scripts/minici.sh docs` explicitly to check workspace API documentation with warnings denied.
+This suite uses one build job to avoid parallel Rustdoc output contention. CI runs it as a separate
+required job through the `Rust core checks` aggregator. Generated-document freshness checks remain
+part of `lint` and the default local run.
+
 ```bash
 cargo test --workspace --exclude server
 cargo test -p server --lib
@@ -251,7 +263,7 @@ cargo test -p server --test integration multi_file_check
 cargo clippy --workspace --all-targets -- -D warnings
 ```
 
-Full workspace including agent surfaces (local pre-push equivalent of CI):
+All default workspace tests:
 
 ```bash
 cargo test --workspace
@@ -308,6 +320,16 @@ If `SYSML_V2_RELEASE_DIR` is not set or does not contain the expected validation
 
 ### VS Code
 
+Use Node.js 22.12 or newer (CI uses Node.js 24). Regenerate npm lockfiles with npm 11;
+npm 10 can fail while resolving Vitest's optional peer dependencies. Install the resulting
+lockfiles with `npm ci` in both `vscode/diagram-renderer` and `vscode` before compiling.
+
+The extension's `glob` and `minimatch` overrides select patched releases while upstream
+dependency ranges still require vulnerable major versions. Keep the packaging and test tools
+on versions using the named-export APIs; the language client uses the `Minimatch` constructor.
+Remove these overrides when upstream ranges admit patched versions. Verify editor workflows,
+test discovery, coverage and VSIX packaging when changing this dependency group.
+
 ```bash
 cd vscode
 npm install
@@ -321,7 +343,7 @@ Useful focused suites:
 
 ```bash
 npm run test:multi-file          # multi-file workspace smoke
-npm run test:ux-unit             # status bar, snippets, and examples provider
+npm run test:ux-unit             # status bar and examples provider
 npm run test:library-unit        # library status view model
 ```
 
@@ -386,15 +408,77 @@ resolve/evaluate/index/check subphases; do not add it to those subphases. `names
 measured inside `checksMs`; do not add it to the containing check duration. Missing phase records
 remain explicit `null` values.
 
+`libraryClosureMs` measures canonical source selection against the immutable admitted library
+inventory, including open-library overlays. It is within `preparationMs`, separately from
+`sourceParseMs`. Library filesystem inventory preparation belongs to source discovery, not each
+editor revision. Restart parity tests compare complete model digests and workspace diagnostic
+publications after configuration, import, cross-file and library-file changes.
+
+`backend:startupScanPhases` and `backend:didChangeConfigurationReindex` measure source discovery,
+syntax preparation and source admission. `analysisScheduled: true` means that semantic work was
+scheduled; it is not a semantic-completion barrier. Use `backend:publication` and exact editor
+versions for construction and diagnostic completion. Library-search source preparation runs off
+the actor and is guarded by both the configuration epoch and the observed filesystem revision.
+
 On Windows the runner records cumulative process user/kernel CPU time, working set, commit charge
 and process-lifetime peaks after receiving each completion. The resource observation has its own
 timestamp; it is not synchronized with a semantic phase. Unsupported platforms or counter errors
 stay explicit as unavailable. Compare CPU deltas with `resources_before_edits`, rather than treating
 the cumulative counters as per-edit CPU time.
 
-Representative version-correlated diagnostic measurements and VS Code view-refresh costs remain
-release acceptance work. Failed or timed-out runs retain a failed report and stderr; timings from debug runs are
+Windows can change a background process's execution QoS during a run. If both retained baseline
+and candidate binaries slow down under system-managed scheduling, keep those reports and isolate
+the effect before attributing it to a code change. `--windows-high-qos` is an explicit measurement
+control: it disables execution-speed throttling for the disposable measured child, preserves other
+power-policy flags, and records the requested policy's readback. An API failure fails the run;
+there is no silent fallback. It changes neither global Windows settings nor normal editor policy.
+Compare both binaries under the same explicit policy and retain the system-managed controls.
+These controlled diagnostic timings do not establish background-editor performance. Confirm
+normal-policy editor behavior separately with the focused native view benchmark below. See
+[Windows QoS](https://learn.microsoft.com/en-us/windows/win32/procthread/quality-of-service) and
+[the process power-throttling contract](https://learn.microsoft.com/en-us/windows/win32/api/processthreadsapi/ns-processthreadsapi-process_power_throttling_state).
+
+Failed or timed-out runs retain a failed report and stderr; timings from debug runs are
 smoke-test evidence only.
+
+### VS Code view refresh
+
+After building the optimized host, run `npm ci` in `vscode/diagram-renderer` and `vscode`, then
+`npm run compile` in `vscode`. Use an existing VS Code installation and a workspace with an authored
+native view. No benchmark command downloads VS Code or model libraries. For example, from `vscode`:
+
+```powershell
+node scripts/benchmark-view-refresh.mjs --code C:/tools/VSCode/Code.exe --server ../target/release/spec42.exe --workspace ../../sysml-robot-vacuum-cleaner --document ../../sysml-robot-vacuum-cleaner/model/Root.sysml --library-input ../.cache/sysml-stdlib-kpar-2026-04 --library-input ../../sysml-domain-libraries/model --output ../target/editor-view-robot.json
+```
+
+Supply every admitted external source/archive root with `--library-input`, and the same pinned bundle
+environment as the host build. Verify `sysml/libraryStatus` with the normal host and these library
+settings before collecting representative measurements. The runner rejects missing-library-context
+diagnostics and records byte hashes of the declared inputs, binaries and compiled runner before/after.
+Library-input arguments identify evidence; they do not configure server admissions.
+
+Each invocation creates a new isolated profile next to its report, disables auto-save, and leaves
+the real model files unchanged. It measures single edits and bursts with the view closed, visible,
+then hidden. Defaults collect 20 single edits and 20 bursts of 10 while visible; closed and hidden
+states each exercise one single edit and one burst to check that no refresh occurs. Use
+`--inactive-iterations 20` for equal workload counts when comparing resource use across states.
+The native SysML output log correlates the final editor version's publication digest
+with generation, drawing and the current view's render acknowledgement. Closed/hidden views must
+perform no refresh for the measured digest. Their latency remains absent. Intermediate burst
+versions are not assigned the final version's latency.
+
+A frame observation means a mounted SVG followed by two visible browser animation-frame callbacks
+and an ExtensionHost acknowledgement. It is not a GPU/compositor timestamp. Reported webview/draw
+spans are nested and must not be added together. `editToFrameAckMs` uses one ExtensionHost monotonic
+clock; persisted-log polling delays the next edit but does not enter that span. CPU/memory counters
+cover only the ExtensionHost including the benchmark driver, excluding the server, renderer and GPU. Viewport/disclosure reuse
+flags describe the renderer's actual state; they do not establish preservation of non-default state.
+
+The launcher requests hidden startup by default. Use `--visible` for an explicitly requested visible
+run and keep its window focused throughout. Reports without a focused window for every visible sample
+are labelled `background-probe-only`; they cannot establish a representative visible-view baseline.
+Keep raw reports, profiles/logs, build identity and launch options. Repeat controlled runs before
+choosing release thresholds; shared CI hardware does not enforce timing gates.
 
 ### Query benchmarks
 

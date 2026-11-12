@@ -15,6 +15,10 @@ pub struct SemanticResultStatus {
     pub available: bool,
     /// Every obstacle reported by the publication, in canonical order when available.
     pub obstacles: Vec<SemanticObstacleDto>,
+    /// True when the publication predates the editor text the request was answered for: the
+    /// syntax context is current, the semantic facts come from the older publication.
+    #[serde(default)]
+    pub predates_source: bool,
 }
 
 impl SemanticResultStatus {
@@ -34,11 +38,12 @@ impl SemanticResultStatus {
                     PublicationObstacle::NonConverged => SemanticObstacleDto::NonConverged,
                 })
                 .collect(),
+            predates_source: false,
         }
     }
 
     pub fn is_complete(&self) -> bool {
-        self.available && self.obstacles.is_empty()
+        self.available && self.obstacles.is_empty() && !self.predates_source
     }
 }
 
@@ -102,6 +107,12 @@ pub struct CompletionTextEditDto {
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct ImportCompletionDto {
+    pub target_token: String,
+    pub position: sysml_query::resolved_slice::TextPosition,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct CompletionItemDto {
     pub label: String,
     pub kind: Option<CompletionItemKindDto>,
@@ -117,6 +128,8 @@ pub struct CompletionItemDto {
     pub deprecated: bool,
     pub resolve_detail: Option<String>,
     pub resolve_documentation: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub import: Option<ImportCompletionDto>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]

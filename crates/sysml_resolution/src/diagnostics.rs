@@ -42,6 +42,24 @@ use crate::{PublicationCompleteness, SymbolId, TextRange};
 
 pub use sysml_contract::{DiagnosticCategory, DiagnosticOrigin, DiagnosticSeverity};
 
+/// Opaque handle to an unsupported construct in one publication. Never reuse it across publications.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
+pub struct UnsupportedConstructId(pub(crate) usize);
+
+/// The canonical unsupported-construct diagnostic, also available for unreported library sources.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct UnsupportedConstruct {
+    pub document: crate::DocumentId,
+    pub range: TextRange,
+    pub code: DiagnosticCode,
+}
+
+impl UnsupportedConstruct {
+    pub fn message(&self) -> &str {
+        self.code.describe()
+    }
+}
+
 /// The resolution-owned diagnostics of one publication, with the phase that produced them.
 ///
 /// `completeness` travels with the diagnostics rather than being a separate lookup because the two
@@ -594,12 +612,14 @@ semantic_diagnostic_codes! {
     SingleTypeRelationshipOperand => "single_type_relationship_operand",
         "A union, intersection or difference needs zero or at least two operands.";
 
-    /// A feature's authored value has a type unrelated to the feature's own.
+    /// A feature value has an incompatible static result or literal type.
     AttributeValueTypeIncompatible => "attribute_value_type_mismatch",
-        "This value's type is unrelated to the feature it is bound to.";
-    /// An assignment's value has a type unrelated to the feature it assigns to.
+        "This expression's result type is incompatible with the feature it is bound to.";
+    ReferenceValueTypeIncompatible => "reference_value_type_mismatch",
+        "This reference value's type is incompatible with the feature it is bound to.";
+    /// An assignment value has an incompatible static result or literal type.
     AssignmentValueIncompatible => "assignment_value_incompatible",
-        "This value's type is unrelated to the feature it is assigned to.";
+        "This expression's result type is incompatible with the feature it is assigned to.";
     /// SysML 8.3.17.5 `validateAssignmentActionUsage`: the assigned feature is not variable.
     AssignmentTargetNotTimeVarying => "assignment_target_not_time_varying",
         "An assignment's target feature must be able to have time-varying values.";
@@ -632,7 +652,7 @@ semantic_diagnostic_codes! {
         "An individual occurrence usage must be typed by an individual occurrence definition.";
     /// A unit token names no unit in the admitted measurement catalog.
     UnknownUnitSymbol => "unknown_unit_symbol",
-        "This unit token names no unit in the admitted measurement catalog.";
+        "This name is not a measurement reference in the admitted libraries.";
     /// A unit token names several admitted units, so it identifies none of them.
     AmbiguousUnitSymbol => "ambiguous_unit_symbol",
         "This unit token names several admitted units, so it identifies none of them.";
@@ -660,6 +680,10 @@ semantic_diagnostic_codes! {
     /// A namespace declares two members whose names resolution cannot tell apart.
     DuplicateNamespaceMember => "duplicate_namespace_member",
         "A namespace must not declare two members resolution cannot tell apart.";
+    /// Two root packages in the workspace share a name. KerML permits it, but a name that reaches
+    /// both is ambiguous.
+    DuplicateRootPackage => "duplicate_root_package",
+        "Another root package in the workspace has this name, so a reference to it is ambiguous.";
 
     // --- Connection conformance ---------------------------------------------------------------
     /// A connector end resolves to something that is not a port.
@@ -700,7 +724,7 @@ semantic_diagnostic_codes! {
         "A transition endpoint must resolve to a state.";
     /// A transition's ends belong to different state definitions.
     TransitionEndpointInvalidContext => "transition_endpoint_invalid_context",
-        "A transition's source and target must belong to the same state definition.";
+        "Transition endpoints must share a state-machine context without crossing parallel-state boundaries.";
     /// An initial-state marker names something that is not a state.
     InitialStateInvalidTarget => "initial_state_invalid_target",
         "An initial-state marker must name a state.";
@@ -762,9 +786,9 @@ semantic_diagnostic_codes! {
         "This state definition owns states but declares no finality indicator.";
     }
     Validation {
-    /// A state definition declares more than one explicit final state.
+    /// Retired: the grammar has no final state member, so this is no longer emitted.
     MultipleFinalStates => "multiple_final_states",
-        "A state definition declares more than one explicit final state.";
+        "Retired; no longer emitted.";
     /// An `accept` payload is typed by something that cannot be an action payload.
     AcceptPayloadIncompatible => "accept_payload_incompatible",
         "An accept payload must be typed by an item, part, attribute or occurrence.";
@@ -779,6 +803,8 @@ semantic_diagnostic_codes! {
     /// A satisfy relationship relates endpoints of incompatible kinds.
     SatisfyInvalidEndpointKind => "satisfy_invalid_endpoint_kind",
         "This satisfy relationship relates endpoints of incompatible kinds.";
+    SatisfySubjectTypeIncompatible => "satisfy_subject_type_mismatch",
+        "The satisfying feature's type is incompatible with the requirement subject.";
     /// A `verify` target does not resolve to a requirement.
     VerifiedRequirementInvalidTarget => "verified_requirement_invalid_target",
         "A verify target must resolve to a requirement definition or usage.";
@@ -790,9 +816,10 @@ semantic_diagnostic_codes! {
     /// A view satisfies something that is not a viewpoint.
     ViewpointConformanceInvalidTargetKind => "viewpoint_conformance_invalid_target_kind",
         "A view must satisfy a viewpoint definition or usage.";
-    /// A view usage is typed by a definition outside the SysML standard view catalog.
+    /// A view usage is typed by a library view definition that neither is nor specializes a
+    /// SysML standard view definition.
     ViewTypeNonStandard => "view_type_non_standard",
-        "This view is typed by a definition outside the SysML standard view catalog.";
+        "This view is typed by a library view definition that neither is nor specializes a SysML standard view definition.";
     }
     Unresolved {
     /// A view exposes a target that resolves to nothing.

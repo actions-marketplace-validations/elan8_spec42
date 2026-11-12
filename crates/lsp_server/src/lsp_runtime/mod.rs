@@ -9,6 +9,7 @@ mod hierarchy;
 mod layout;
 mod lifecycle;
 mod navigation;
+mod presentation;
 mod project_registry;
 mod references_resolver;
 mod symbols;
@@ -35,6 +36,10 @@ use generation::{
 };
 use layout::{legacy_engine_requested, LayoutEngine, LayoutParams, LayoutResult};
 use project_registry::ProjectRegistry;
+
+pub(crate) fn diagram_presentation_typescript() -> String {
+    generation::diagram_presentation_typescript()
+}
 
 fn require_current_analysis(state: &ServerState) -> Result<()> {
     use sysml_query::publication::AnalysisStatus;
@@ -101,16 +106,12 @@ impl LanguageServer for Backend {
 
     async fn did_open(&self, params: DidOpenTextDocumentParams) {
         let uri = params.text_document.uri.clone();
-        let mut handles = self.projects.handles_admitting_library_uri(&uri);
+        let handles = self.projects.mutation_handles_for_uri(&uri, true).await;
         if handles.is_empty() {
-            let Some(handle) = self.projects.handle_for_uri(&uri).await else {
-                return;
-            };
             if let Some(error) = self.projects.admission_error_for_uri(&uri) {
                 self.client.log_message(MessageType::ERROR, error).await;
-                return;
             }
-            handles.push(handle);
+            return;
         }
         for handle in handles {
             documents::did_open(
@@ -119,25 +120,17 @@ impl LanguageServer for Backend {
                 &self.config,
                 &self.runtime_config,
                 params.clone(),
+                self.projects.has_workspace_roots(),
             )
             .await;
         }
     }
 
     async fn did_change(&self, params: DidChangeTextDocumentParams) {
-        let mut handles = self
+        let handles = self
             .projects
-            .handles_admitting_library_uri(&params.text_document.uri);
-        if handles.is_empty() {
-            let Some(handle) = self
-                .projects
-                .handle_for_uri(&params.text_document.uri)
-                .await
-            else {
-                return;
-            };
-            handles.push(handle);
-        }
+            .mutation_handles_for_uri(&params.text_document.uri, true)
+            .await;
         for handle in handles {
             documents::did_change(
                 &self.client,
@@ -151,18 +144,10 @@ impl LanguageServer for Backend {
     }
 
     async fn did_close(&self, params: DidCloseTextDocumentParams) {
-        let mut handles = self
+        let handles = self
             .projects
-            .handles_admitting_library_uri(&params.text_document.uri);
-        if handles.is_empty() {
-            let Some(handle) = self
-                .projects
-                .existing_handle_for_uri(&params.text_document.uri)
-            else {
-                return;
-            };
-            handles.push(handle);
-        }
+            .mutation_handles_for_uri(&params.text_document.uri, false)
+            .await;
         for handle in handles {
             documents::did_close(
                 &self.client,
@@ -257,6 +242,12 @@ impl LanguageServer for Backend {
     }
 
     async fn did_change_configuration(&self, params: DidChangeConfigurationParams) {
+        self.projects
+            .set_library_defaults(documents::configured_library_paths(
+                &self.config,
+                &self.runtime_config,
+                &params,
+            ));
         for handle in self.projects.handles() {
             documents::did_change_configuration(
                 &self.client,
@@ -290,22 +281,75 @@ impl LanguageServer for Backend {
     }
 
     async fn completion(&self, params: CompletionParams) -> Result<Option<CompletionResponse>> {
-        let state = self.state_for_uri(&params.text_document_position.text_document.uri)?;
+        // Completion is asked while the user types, which is exactly when analysis is pending.
+        // It answers from the current editor text and the retained publication, and reports
+        // the gap as an incomplete list instead of refusing.
+        let state = self.source_state_for_uri(&params.text_document_position.text_document.uri)?;
         let perf_logging_enabled = self
             .runtime_config
             .get()
             .expect("initialize precedes all other LSP requests")
             .perf_logging_enabled;
-        features::completion(
-            &state,
-            params.text_document_position.text_document.uri,
-            params.text_document_position.position,
-            perf_logging_enabled,
-        )
+        let uri = params.text_document_position.text_document.uri.clone();
+        let captured = Arc::clone(&state);
+        let supported = self
+            .runtime_config
+            .get()
+            .expect("initialized")
+            .completion_import_resolve;
+        let result = tokio::task::spawn_blocking(move || {
+            features::completion(
+                &state,
+                params.text_document_position.text_document.uri,
+                params.text_document_position.position,
+                perf_logging_enabled,
+                supported,
+            )
+        })
+        .await
+        .map_err(|_| tower_lsp::jsonrpc::Error::internal_error())??;
+        let has_imports = result.as_ref().is_some_and(|response| match response {
+            CompletionResponse::List(list) => list
+                .items
+                .iter()
+                .any(|item| item.additional_text_edits.is_some()),
+            CompletionResponse::Array(items) => items
+                .iter()
+                .any(|item| item.additional_text_edits.is_some()),
+        });
+        let current = if has_imports {
+            // A change in another document can invalidate candidates before its replacement
+            // publication is ready, even if this editor revision is unchanged.
+            self.state_for_uri(&uri)?
+        } else {
+            self.source_state_for_uri(&uri)?
+        };
+        // Ordinary completions may use the retained publication while analysis advances.
+        // Imports also require the exact semantic identity that validated their transaction.
+        if !features::same_editor_revision(&captured, &current, &uri)
+            || (has_imports && !features::same_edit_context(&captured, &current, &uri))
+        {
+            return Err(tower_lsp::jsonrpc::Error::content_modified());
+        }
+        Ok(result)
     }
 
     async fn completion_resolve(&self, params: CompletionItem) -> Result<CompletionItem> {
-        features::completion_resolve(params)
+        let Some(uri) = features::completion_import_uri(&params)? else {
+            return features::completion_resolve(params);
+        };
+        let captured = self.state_for_uri(&uri)?;
+        let state = Arc::clone(&captured);
+        let resolved = tokio::task::spawn_blocking(move || {
+            features::completion_resolve_import(&state, params)
+        })
+        .await
+        .map_err(|_| tower_lsp::jsonrpc::Error::internal_error())??;
+        let current = self.state_for_uri(&uri)?;
+        if !features::same_edit_context(&captured, &current, &uri) {
+            return Err(tower_lsp::jsonrpc::Error::content_modified());
+        }
+        Ok(resolved)
     }
 
     async fn signature_help(&self, params: SignatureHelpParams) -> Result<Option<SignatureHelp>> {
@@ -414,6 +458,10 @@ impl LanguageServer for Backend {
             params.text_document_position.position,
             params.new_name,
             perf_logging_enabled,
+            self.runtime_config
+                .get()
+                .expect("initialized")
+                .versioned_document_changes,
         )
     }
 
@@ -469,12 +517,35 @@ impl LanguageServer for Backend {
 
     async fn code_action(&self, params: CodeActionParams) -> Result<Option<CodeActionResponse>> {
         let state = self.state_for_uri(&params.text_document.uri)?;
-        features::code_action(
-            &state,
-            params.text_document.uri,
-            params.range,
-            &params.context.diagnostics,
-        )
+        let perf_logging_enabled = self
+            .runtime_config
+            .get()
+            .expect("initialize precedes all other LSP requests")
+            .perf_logging_enabled;
+        let uri = params.text_document.uri.clone();
+        let captured = Arc::clone(&state);
+        let versioned = self
+            .runtime_config
+            .get()
+            .expect("initialized")
+            .versioned_document_changes;
+        let result = tokio::task::spawn_blocking(move || {
+            features::code_action(
+                &state,
+                params.text_document.uri,
+                &params.context.diagnostics,
+                perf_logging_enabled,
+                versioned,
+                params.context.only.as_deref(),
+            )
+        })
+        .await
+        .map_err(|_| tower_lsp::jsonrpc::Error::internal_error())??;
+        let current = self.state_for_uri(&uri)?;
+        if !features::same_edit_context(&captured, &current, &uri) {
+            return Err(tower_lsp::jsonrpc::Error::content_modified());
+        }
+        Ok(result)
     }
 
     async fn code_lens(&self, params: CodeLensParams) -> Result<Option<Vec<CodeLens>>> {
@@ -586,7 +657,7 @@ impl LanguageServer for Backend {
         params: TypeHierarchySupertypesParams,
     ) -> Result<Option<Vec<TypeHierarchyItem>>> {
         let state = self.state_for_uri(&params.item.uri)?;
-        features::supertypes(&state, params.item.uri.clone(), params.item.selection_range)
+        features::supertypes(&state, params.item)
     }
 
     async fn subtypes(
@@ -594,7 +665,7 @@ impl LanguageServer for Backend {
         params: TypeHierarchySubtypesParams,
     ) -> Result<Option<Vec<TypeHierarchyItem>>> {
         let state = self.state_for_uri(&params.item.uri)?;
-        features::subtypes(&state, params.item.uri.clone(), params.item.selection_range)
+        features::subtypes(&state, params.item)
     }
 }
 
@@ -606,16 +677,19 @@ impl Backend {
     async fn publish_grouped_file_events(&self, changes: Vec<FileEvent>) {
         let mut grouped: Vec<(WorkspaceHandle, Vec<FileEvent>)> = Vec::new();
         for change in changes {
-            let Some(handle) = self.projects.handle_for_uri(&change.uri).await else {
-                continue;
-            };
-            if let Some((_, events)) = grouped
-                .iter_mut()
-                .find(|(candidate, _)| candidate.same_session(&handle))
-            {
-                events.push(change);
-            } else {
-                grouped.push((handle, vec![change]));
+            let handles = self
+                .projects
+                .mutation_handles_for_uri(&change.uri, true)
+                .await;
+            for handle in handles {
+                if let Some((_, events)) = grouped
+                    .iter_mut()
+                    .find(|(candidate, _)| candidate.same_session(&handle))
+                {
+                    events.push(change.clone());
+                } else {
+                    grouped.push((handle, vec![change.clone()]));
+                }
             }
         }
         for (handle, changes) in grouped {
@@ -794,6 +868,13 @@ impl Backend {
                 ))
             })?
             .map_err(tower_lsp::jsonrpc::Error::invalid_params)
+    }
+
+    async fn spec42_diagram_presentation(
+        &self,
+        params: generation::DiagramPresentationParams,
+    ) -> Result<generation::DiagramPresentationResult> {
+        self.diagram_presentation(params).await
     }
 
     async fn spec42_diagram(&self, params: DiagramParams) -> Result<DiagramResult> {
@@ -994,6 +1075,10 @@ pub async fn run(config: Arc<Spec42Config>, server_name: &str) {
     .custom_method("sysml/librarySearch", Backend::sysml_library_search)
     .custom_method("spec42/generate", Backend::spec42_generate)
     .custom_method("spec42/diagramViews", Backend::spec42_diagram_views)
+    .custom_method(
+        generation::DIAGRAM_PRESENTATION_METHOD,
+        Backend::spec42_diagram_presentation,
+    )
     .custom_method("spec42/diagram", Backend::spec42_diagram)
     .custom_method("spec42/layout", Backend::spec42_layout)
     .custom_method("spec42/draw", Backend::spec42_draw)

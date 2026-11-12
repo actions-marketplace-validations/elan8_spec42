@@ -35,6 +35,8 @@ struct WireSchema {
     source_range: SourceRange,
     multiplicity: Multiplicity,
     relationship: Relationship,
+    expression_tree: ExpressionTree,
+    connector_end: ConnectorEnd,
     relationship_target: RelationshipTarget,
     requirement_usage_typing: RequirementUsageTyping,
     satisfy_relationship: SatisfyRelationship,
@@ -865,6 +867,102 @@ pub struct ElementDetail {
     pub evaluated_value: Option<String>,
 }
 
+/// Whether an element has a resolved expression tree.
+///
+/// `NotApplicable` is "this element authored no expression", distinct from `Unsupported`, which
+/// is an authored expression whose shape is outside the published slice.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, Schema)]
+pub enum ExpressionStatus {
+    NotApplicable,
+    Resolved,
+    Unsupported,
+}
+
+/// The resolved expression tree model-export publishes as `expression.root` / `expression.nodes`.
+///
+/// Nodes are a flat arena. `root` indexes [`ExpressionTree::nodes`]. Operand indexes are indexes
+/// into that same arena, in authored order.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, Schema)]
+pub struct ExpressionTree {
+    pub outcome: ExpressionStatus,
+    pub root: Option<u32>,
+    pub nodes: Vec<ExpressionNode>,
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, Schema)]
+pub struct ExpressionNode {
+    pub kind: ExpressionNodeKind,
+    pub range: SourceRange,
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, Schema)]
+pub enum ExpressionNodeKind {
+    /// Typed literal value; strings remain distinct from booleans and numbers.
+    Literal(ExpressionLiteral),
+    /// `target` is absent when the reference did not resolve to one feature.
+    FeatureReference {
+        target: Option<ElementSummary>,
+        authored: String,
+    },
+    Operator {
+        operator: String,
+        operands: Vec<u32>,
+    },
+    Unsupported {
+        children: Vec<u32>,
+    },
+}
+
+/// A literal value with each authored quantity wrapper retained.
+///
+/// `units` is empty for a scalar, otherwise ordered from the innermost quantity to
+/// the outermost. The flat representation preserves nested quantities without a
+/// recursive wire schema.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, Schema)]
+pub struct ExpressionLiteral {
+    pub value: LiteralValue,
+    pub units: Vec<String>,
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, Schema)]
+pub enum LiteralValue {
+    Boolean(bool),
+    Integer(i64),
+    Real(f64),
+    String(String),
+}
+
+/// One end of a workspace `connect` or `interface` connector, in authored order.
+///
+/// `index` is zero-based. For `connect a to b`, end 0 is `a` and end 1 is `b`. A dotted end
+/// (`sensor.reading`) carries every hop in authored order, so two parts of the same type stay
+/// distinguishable. A failed hop stays explicit; later hops are unresolved.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, Schema)]
+pub struct ConnectorEnd {
+    pub index: u32,
+    pub declaration: Option<ElementSummary>,
+    pub endpoint: ConnectorEndEndpoint,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, Schema)]
+pub enum ConnectorEndEndpoint {
+    Feature(EndpointTarget),
+    FeatureChain {
+        path: Vec<EndpointTarget>,
+        authored: String,
+    },
+    Unconnected,
+}
+
+/// One hop of a connector end, with the same outcome vocabulary as a relationship target.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, Schema)]
+pub enum EndpointTarget {
+    Resolved(ElementSummary),
+    Ambiguous(Vec<ElementSummary>),
+    Unresolved,
+    Unsupported,
+}
+
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, Schema)]
 pub struct Relationship {
     pub kind: RelationshipKind,
@@ -906,6 +1004,10 @@ impl RelationshipTarget {
         }
     }
 }
+
+// An implied `succession` on a `then` member names the predecessor that succession starts from
+// (SysML 7.17.4). The member is the succession's target; `target` is its source. Explicit
+// successions keep both ends as authored `succession` relationships on the succession element.
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, Schema)]
 pub enum TypingProvenance {
@@ -1104,7 +1206,9 @@ pub struct DiagramViewSummary {
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, Schema)]
 pub enum DiagramIncompleteReason {
     ParseRecovery,
-    UnsupportedSyntax,
+    UnsupportedSyntax {
+        diagnostics: Vec<DiagramSyntaxDiagnostic>,
+    },
     NonConverged,
     ExposureUnresolved {
         exposure: DiagramSemanticReference,
@@ -1138,6 +1242,13 @@ pub enum DiagramIncompleteReason {
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, Schema)]
+pub struct DiagramSyntaxDiagnostic {
+    pub code: String,
+    pub message: String,
+    pub source: SourceReference,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, Schema)]
 pub struct SequenceCycleStep {
     pub source: DiagramOccurrenceIdentity,
     pub target: DiagramOccurrenceIdentity,
@@ -1147,6 +1258,9 @@ pub struct SequenceCycleStep {
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, Schema)]
 pub struct DiagramElement {
+    /// Opaque contextual presentation identity, stable while the canonical structural
+    /// occurrence identity is unchanged. Consumers compare it; they never decode it.
+    pub presentation_key: String,
     pub occurrence: DiagramOccurrenceIdentity,
     pub reference: DiagramSemanticReference,
     pub metaclass: Metaclass,
@@ -1177,8 +1291,9 @@ pub struct DiagramElement {
     /// On a conditional succession, when it is taken: its guard expression as written, or
     /// `"else"`. `None` for every other element.
     pub succession_guard: Option<String>,
-    /// On a port: the direction (`"in"` / `"out"` / `"inout"`) its directed features give it as
-    /// a whole, with a conjugated typing applied. Derived, unlike the authored `direction`.
+    /// Effective occurrence direction (`"in"` / `"out"` / `"inout"`): aggregate directed
+    /// features for a port, or the member's direction, with enclosing conjugations applied.
+    /// Derived, unlike the authored `direction`.
     pub feature_direction: Option<String>,
 }
 
@@ -1682,7 +1797,7 @@ mod tests {
     #[test]
     fn the_wire_schema_fingerprint_is_pinned() {
         assert_eq!(
-            SCHEMA_FINGERPRINT, 0x1369_aed7_fa4a_ab18,
+            SCHEMA_FINGERPRINT, 0x748412de5667fe3c,
             "the generator wire schema changed; every guest must be rebuilt"
         );
     }
@@ -1690,7 +1805,7 @@ mod tests {
     #[test]
     fn the_compatibility_token_is_pinned() {
         assert_eq!(
-            COMPATIBILITY_TOKEN, 0x1c4b_1324_144f_9b38,
+            COMPATIBILITY_TOKEN, 0x429556ffc491fc61,
             "the generator ABI contract changed; every guest must be rebuilt"
         );
     }

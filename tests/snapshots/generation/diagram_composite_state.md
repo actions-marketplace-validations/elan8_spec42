@@ -52,7 +52,7 @@ package Lamp {
     (declaration (id (node (document "memory://snapshot/model.sysml") (qualified-name "Lamp::Machine"))) (kind state-def) (membership (kind owning) (visibility default)))
     (declaration (id (node (document "memory://snapshot/model.sysml") (path (named (kind package) (name "Lamp")) (named (kind state-def) (name "Machine")) (anonymous (kind entry-action-binding) (ordinal 0))))) (kind entry-action-binding) (membership (kind feature) (visibility default) (role entry)))
     (declaration (id (node (document "memory://snapshot/model.sysml") (path (named (kind package) (name "Lamp")) (named (kind state-def) (name "Machine")) (anonymous (kind initial-state) (ordinal 0))))) (kind initial-state) (membership (kind feature) (visibility default)) (authored (membership (kind feature) (visibility default)) (relationships (initialState (reference "off")))))
-    (declaration (id (node (document "memory://snapshot/model.sysml") (qualified-name "Lamp::Machine::fail"))) (kind transition) (membership (kind feature) (visibility default)) (authored (membership (kind feature) (visibility default)) (relationships (transitionTarget (reference "fault")) (transitionTrigger (reference "Fault")) (memberAccessOperand (reference "on::ready")))))
+    (declaration (id (node (document "memory://snapshot/model.sysml") (qualified-name "Lamp::Machine::fail"))) (kind transition) (membership (kind feature) (visibility default)) (authored (membership (kind feature) (visibility default)) (relationships (transitionSource (reference "on::ready")) (transitionTarget (reference "fault")) (transitionTrigger (reference "Fault")))))
     (declaration (id (node (document "memory://snapshot/model.sysml") (path (named (kind package) (name "Lamp")) (named (kind state-def) (name "Machine")) (named (kind transition) (name "fail")) (anonymous (kind succession) (ordinal 0))))) (kind succession) (membership (kind owning) (visibility default)) (authored (membership (kind owning) (visibility default)) (relationships (succession (reference "on::ready")) (succession (reference "fault")))))
     (declaration (id (node (document "memory://snapshot/model.sysml") (path (named (kind package) (name "Lamp")) (named (kind state-def) (name "Machine")) (named (kind transition) (name "fail")) (anonymous (kind parameter) (ordinal 0))))) (kind parameter) (membership (kind feature) (visibility default)) (facts (direction in)))
     (declaration (id (node (document "memory://snapshot/model.sysml") (path (named (kind package) (name "Lamp")) (named (kind state-def) (name "Machine")) (named (kind transition) (name "fail")) (anonymous (kind ref) (ordinal 0))))) (kind ref) (membership (kind feature) (visibility default)))
@@ -95,15 +95,15 @@ package Lamp {
     (reference (id (source (node (document "memory://snapshot/model.sysml") (path (named (kind package) (name "Lamp")) (named (kind state-def) (name "Machine")) (anonymous (kind initial-state) (ordinal 0))))) (kind initialState) (ordinal 0))
       (authored-target "off")
       (outcome (status resolved) (target (node (document "memory://snapshot/model.sysml") (qualified-name "Lamp::Machine::off")))))
+    (reference (id (source (node (document "memory://snapshot/model.sysml") (qualified-name "Lamp::Machine::fail"))) (kind transitionSource) (ordinal 0))
+      (authored-target "on::ready")
+      (outcome (status resolved) (target (node (document "memory://snapshot/model.sysml") (qualified-name "Lamp::Machine::on::ready")))))
     (reference (id (source (node (document "memory://snapshot/model.sysml") (qualified-name "Lamp::Machine::fail"))) (kind transitionTarget) (ordinal 0))
       (authored-target "fault")
       (outcome (status resolved) (target (node (document "memory://snapshot/model.sysml") (qualified-name "Lamp::Machine::fault")))))
     (reference (id (source (node (document "memory://snapshot/model.sysml") (qualified-name "Lamp::Machine::fail"))) (kind transitionTrigger) (ordinal 0))
       (authored-target "Fault")
       (outcome (status resolved) (target (node (document "memory://snapshot/model.sysml") (qualified-name "Lamp::Fault")))))
-    (reference (id (source (node (document "memory://snapshot/model.sysml") (qualified-name "Lamp::Machine::fail"))) (kind memberAccessOperand) (ordinal 0))
-      (authored-target "on::ready")
-      (outcome (status resolved) (target (node (document "memory://snapshot/model.sysml") (qualified-name "Lamp::Machine::on::ready")))))
     (reference (id (source (node (document "memory://snapshot/model.sysml") (path (named (kind package) (name "Lamp")) (named (kind state-def) (name "Machine")) (named (kind transition) (name "fail")) (anonymous (kind succession) (ordinal 0))))) (kind succession) (ordinal 0))
       (authored-target "on::ready")
       (outcome (status resolved) (target (node (document "memory://snapshot/model.sysml") (qualified-name "Lamp::Machine::on::ready")))))
@@ -164,9 +164,9 @@ package Lamp {
   )
   (relationships
     (relationship (kind initialState) (source (node (document "memory://snapshot/model.sysml") (path (named (kind package) (name "Lamp")) (named (kind state-def) (name "Machine")) (anonymous (kind initial-state) (ordinal 0))))) (target (node (document "memory://snapshot/model.sysml") (qualified-name "Lamp::Machine::off"))) (provenance authored) (authored-reference (source (node (document "memory://snapshot/model.sysml") (path (named (kind package) (name "Lamp")) (named (kind state-def) (name "Machine")) (anonymous (kind initial-state) (ordinal 0))))) (kind initialState) (ordinal 0)))
+    (relationship (kind transitionSource) (source (node (document "memory://snapshot/model.sysml") (qualified-name "Lamp::Machine::fail"))) (target (node (document "memory://snapshot/model.sysml") (qualified-name "Lamp::Machine::on::ready"))) (provenance authored) (authored-reference (source (node (document "memory://snapshot/model.sysml") (qualified-name "Lamp::Machine::fail"))) (kind transitionSource) (ordinal 0)))
     (relationship (kind transitionTarget) (source (node (document "memory://snapshot/model.sysml") (qualified-name "Lamp::Machine::fail"))) (target (node (document "memory://snapshot/model.sysml") (qualified-name "Lamp::Machine::fault"))) (provenance authored) (authored-reference (source (node (document "memory://snapshot/model.sysml") (qualified-name "Lamp::Machine::fail"))) (kind transitionTarget) (ordinal 0)))
     (relationship (kind transitionTrigger) (source (node (document "memory://snapshot/model.sysml") (qualified-name "Lamp::Machine::fail"))) (target (node (document "memory://snapshot/model.sysml") (qualified-name "Lamp::Fault"))) (provenance authored) (authored-reference (source (node (document "memory://snapshot/model.sysml") (qualified-name "Lamp::Machine::fail"))) (kind transitionTrigger) (ordinal 0)))
-    (relationship (kind memberAccessOperand) (source (node (document "memory://snapshot/model.sysml") (qualified-name "Lamp::Machine::fail"))) (target (node (document "memory://snapshot/model.sysml") (qualified-name "Lamp::Machine::on::ready"))) (provenance authored) (authored-reference (source (node (document "memory://snapshot/model.sysml") (qualified-name "Lamp::Machine::fail"))) (kind memberAccessOperand) (ordinal 0)))
     (relationship (kind succession) (source (node (document "memory://snapshot/model.sysml") (path (named (kind package) (name "Lamp")) (named (kind state-def) (name "Machine")) (named (kind transition) (name "fail")) (anonymous (kind succession) (ordinal 0))))) (target (node (document "memory://snapshot/model.sysml") (qualified-name "Lamp::Machine::on::ready"))) (provenance authored) (authored-reference (source (node (document "memory://snapshot/model.sysml") (path (named (kind package) (name "Lamp")) (named (kind state-def) (name "Machine")) (named (kind transition) (name "fail")) (anonymous (kind succession) (ordinal 0))))) (kind succession) (ordinal 0)))
     (relationship (kind succession) (source (node (document "memory://snapshot/model.sysml") (path (named (kind package) (name "Lamp")) (named (kind state-def) (name "Machine")) (named (kind transition) (name "fail")) (anonymous (kind succession) (ordinal 0))))) (target (node (document "memory://snapshot/model.sysml") (qualified-name "Lamp::Machine::fault"))) (provenance authored) (authored-reference (source (node (document "memory://snapshot/model.sysml") (path (named (kind package) (name "Lamp")) (named (kind state-def) (name "Machine")) (named (kind transition) (name "fail")) (anonymous (kind succession) (ordinal 0))))) (kind succession) (ordinal 1)))
     (relationship (kind initialState) (source (node (document "memory://snapshot/model.sysml") (path (named (kind package) (name "Lamp")) (named (kind state-def) (name "Machine")) (named (kind state) (name "on")) (anonymous (kind initial-state) (ordinal 0))))) (target (node (document "memory://snapshot/model.sysml") (qualified-name "Lamp::Machine::on::warming"))) (provenance authored) (authored-reference (source (node (document "memory://snapshot/model.sysml") (path (named (kind package) (name "Lamp")) (named (kind state-def) (name "Machine")) (named (kind state) (name "on")) (anonymous (kind initial-state) (ordinal 0))))) (kind initialState) (ordinal 0)))
@@ -197,6 +197,7 @@ package Lamp {
     (relationship (kind subsetting) (source (node (document "memory://snapshot/model.sysml") (qualified-name "Lamp::Machine::fail"))) (target (node (document "memory://snapshot/sysml.library/actions.md") (qualified-name "Actions::transitionActions"))) (provenance implied))
     (relationship (kind typeFeaturing) (source (node (document "memory://snapshot/model.sysml") (qualified-name "Lamp::Machine::fail"))) (target (node (document "memory://snapshot/model.sysml") (qualified-name "Lamp::Machine"))) (provenance implied))
     (relationship (kind subsetting) (source (node (document "memory://snapshot/model.sysml") (qualified-name "Lamp::Machine::fail"))) (target (node (document "memory://snapshot/sysml.library/occurrences.md") (qualified-name "Occurrences::Occurrence::suboccurrences"))) (provenance implied))
+    (relationship (kind subsetting) (source (node (document "memory://snapshot/model.sysml") (qualified-name "Lamp::Machine::fail"))) (target (node (document "memory://snapshot/sysml.library/states.md") (qualified-name "States::StateAction::stateTransitions"))) (provenance implied))
     (relationship (kind subsetting) (source (node (document "memory://snapshot/model.sysml") (path (named (kind package) (name "Lamp")) (named (kind state-def) (name "Machine")) (named (kind transition) (name "fail")) (anonymous (kind accept-action) (ordinal 0))))) (target (node (document "memory://snapshot/sysml.library/actions.md") (qualified-name "Actions::TransitionAction::accepter"))) (provenance implied))
     (relationship (kind redefinition) (source (node (document "memory://snapshot/model.sysml") (path (named (kind package) (name "Lamp")) (named (kind state-def) (name "Machine")) (named (kind transition) (name "fail")) (anonymous (kind parameter) (ordinal 0))))) (target (node (document "memory://snapshot/sysml.library/actions.md") (qualified-name "Actions::TransitionAction::transitionLinkSource"))) (provenance implied))
     (relationship (kind typeFeaturing) (source (node (document "memory://snapshot/model.sysml") (path (named (kind package) (name "Lamp")) (named (kind state-def) (name "Machine")) (named (kind transition) (name "fail")) (anonymous (kind parameter) (ordinal 0))))) (target (node (document "memory://snapshot/model.sysml") (qualified-name "Lamp::Machine::fail"))) (provenance implied))
@@ -205,6 +206,8 @@ package Lamp {
     (relationship (kind typeFeaturing) (source (node (document "memory://snapshot/model.sysml") (path (named (kind package) (name "Lamp")) (named (kind state-def) (name "Machine")) (named (kind transition) (name "fail")) (anonymous (kind parameter) (ordinal 1))))) (target (node (document "memory://snapshot/model.sysml") (qualified-name "Lamp::Machine::fail"))) (provenance implied))
     (relationship (kind subsetting) (source (node (document "memory://snapshot/model.sysml") (path (named (kind package) (name "Lamp")) (named (kind state-def) (name "Machine")) (named (kind transition) (name "fail")) (anonymous (kind parameter) (ordinal 1))))) (target (node (document "memory://snapshot/model.sysml") (path (named (kind package) (name "Lamp")) (named (kind state-def) (name "Machine")) (named (kind transition) (name "fail")) (anonymous (kind accept-action) (ordinal 0)) (anonymous (kind parameter) (ordinal 0))))) (provenance implied))
     (relationship (kind subsetting) (source (node (document "memory://snapshot/model.sysml") (path (named (kind package) (name "Lamp")) (named (kind state-def) (name "Machine")) (named (kind transition) (name "fail")) (anonymous (kind succession) (ordinal 0))))) (target (node (document "memory://snapshot/sysml.library/occurrences.md") (qualified-name "Occurrences::happensBeforeLinks"))) (provenance implied))
+    (relationship (kind redefinition) (source (node (document "memory://snapshot/model.sysml") (path (named (kind package) (name "Lamp")) (named (kind state-def) (name "Machine")) (named (kind transition) (name "fail")) (anonymous (kind parameter) (ordinal 1))))) (target (node (document "memory://snapshot/sysml.library/states.md") (qualified-name "States::StateTransitionAction::payload"))) (provenance implied))
+    (relationship (kind redefinition) (source (node (document "memory://snapshot/model.sysml") (path (named (kind package) (name "Lamp")) (named (kind state-def) (name "Machine")) (named (kind transition) (name "fail")) (anonymous (kind parameter) (ordinal 0))))) (target (node (document "memory://snapshot/sysml.library/states.md") (qualified-name "States::StateTransitionAction::transitionLinkSource"))) (provenance implied))
     (relationship (kind redefinition) (source (node (document "memory://snapshot/model.sysml") (path (named (kind package) (name "Lamp")) (named (kind state-def) (name "Machine")) (named (kind transition) (name "fail")) (anonymous (kind accept-action) (ordinal 0)) (anonymous (kind parameter) (ordinal 0))))) (target (node (document "memory://snapshot/sysml.library/actions.md") (path (named (kind library-package) (name "Actions")) (named (kind action-def) (name "AcceptMessageAction")) (anonymous (kind parameter) (ordinal 0))))) (provenance implied))
     (relationship (kind typeFeaturing) (source (node (document "memory://snapshot/model.sysml") (path (named (kind package) (name "Lamp")) (named (kind state-def) (name "Machine")) (named (kind transition) (name "fail")) (anonymous (kind accept-action) (ordinal 0)) (anonymous (kind parameter) (ordinal 0))))) (target (node (document "memory://snapshot/model.sysml") (path (named (kind package) (name "Lamp")) (named (kind state-def) (name "Machine")) (named (kind transition) (name "fail")) (anonymous (kind accept-action) (ordinal 0))))) (provenance implied))
     (relationship (kind typeFeaturing) (source (node (document "memory://snapshot/model.sysml") (qualified-name "Lamp::Machine::fault"))) (target (node (document "memory://snapshot/model.sysml") (qualified-name "Lamp::Machine"))) (provenance implied))
@@ -340,13 +343,21 @@ package Lamp {
     )
     (declaration (id (node (document "memory://snapshot/model.sysml") (qualified-name "Lamp::Machine::fail")))
       (featured-by (node (document "memory://snapshot/model.sysml") (qualified-name "Lamp::Machine")))
+      (effective-type (node (document "memory://snapshot/sysml.library/actions.md") (qualified-name "Actions::Action")) (source inherited) (from (node (document "memory://snapshot/sysml.library/actions.md") (qualified-name "Actions::Action::subactions"))))
       (effective-type (node (document "memory://snapshot/sysml.library/actions.md") (qualified-name "Actions::Action")) (source inherited) (from (node (document "memory://snapshot/sysml.library/actions.md") (qualified-name "Actions::actions"))))
+      (effective-type (node (document "memory://snapshot/sysml.library/actions.md") (qualified-name "Actions::TransitionAction")) (source inherited) (from (node (document "memory://snapshot/sysml.library/actions.md") (qualified-name "Actions::Action::transitions"))))
       (effective-type (node (document "memory://snapshot/sysml.library/actions.md") (qualified-name "Actions::TransitionAction")) (source inherited) (from (node (document "memory://snapshot/sysml.library/actions.md") (qualified-name "Actions::transitionActions"))))
       (effective-type (node (document "memory://snapshot/sysml.library/base.md") (qualified-name "Base::Anything")) (source inherited) (from (node (document "memory://snapshot/sysml.library/base.md") (qualified-name "Base::things"))))
       (effective-type (node (document "memory://snapshot/sysml.library/occurrences.md") (qualified-name "Occurrences::Occurrence")) (source inherited) (from (node (document "memory://snapshot/sysml.library/occurrences.md") (qualified-name "Occurrences::Occurrence::suboccurrences"))))
+      (effective-type (node (document "memory://snapshot/sysml.library/occurrences.md") (qualified-name "Occurrences::Occurrence")) (source inherited) (from (node (document "memory://snapshot/sysml.library/occurrences.md") (qualified-name "Occurrences::Occurrence::timeEnclosedOccurrences"))))
       (effective-type (node (document "memory://snapshot/sysml.library/occurrences.md") (qualified-name "Occurrences::Occurrence")) (source inherited) (from (node (document "memory://snapshot/sysml.library/occurrences.md") (qualified-name "Occurrences::occurrences"))))
+      (effective-type (node (document "memory://snapshot/sysml.library/performances.md") (qualified-name "Performances::Performance")) (source inherited) (from (node (document "memory://snapshot/sysml.library/performances.md") (qualified-name "Performances::Performance::enclosedPerformances"))))
+      (effective-type (node (document "memory://snapshot/sysml.library/performances.md") (qualified-name "Performances::Performance")) (source inherited) (from (node (document "memory://snapshot/sysml.library/performances.md") (qualified-name "Performances::Performance::subperformances"))))
       (effective-type (node (document "memory://snapshot/sysml.library/performances.md") (qualified-name "Performances::Performance")) (source inherited) (from (node (document "memory://snapshot/sysml.library/performances.md") (qualified-name "Performances::performances"))))
+      (effective-type (node (document "memory://snapshot/sysml.library/states.md") (qualified-name "States::StateTransitionAction")) (source inherited) (from (node (document "memory://snapshot/sysml.library/states.md") (qualified-name "States::StateAction::stateTransitions"))))
       (supertype (node (document "memory://snapshot/sysml.library/actions.md") (qualified-name "Actions::Action")) (scopes any))
+      (supertype (node (document "memory://snapshot/sysml.library/actions.md") (qualified-name "Actions::Action::subactions")) (scopes any feature))
+      (supertype (node (document "memory://snapshot/sysml.library/actions.md") (qualified-name "Actions::Action::transitions")) (scopes any feature))
       (supertype (node (document "memory://snapshot/sysml.library/actions.md") (qualified-name "Actions::TransitionAction")) (scopes any))
       (supertype (node (document "memory://snapshot/sysml.library/actions.md") (qualified-name "Actions::actions")) (scopes any feature))
       (supertype (node (document "memory://snapshot/sysml.library/actions.md") (qualified-name "Actions::transitionActions")) (scopes any feature))
@@ -354,9 +365,15 @@ package Lamp {
       (supertype (node (document "memory://snapshot/sysml.library/base.md") (qualified-name "Base::things")) (scopes any feature))
       (supertype (node (document "memory://snapshot/sysml.library/occurrences.md") (qualified-name "Occurrences::Occurrence")) (scopes any))
       (supertype (node (document "memory://snapshot/sysml.library/occurrences.md") (qualified-name "Occurrences::Occurrence::suboccurrences")) (scopes any feature))
+      (supertype (node (document "memory://snapshot/sysml.library/occurrences.md") (qualified-name "Occurrences::Occurrence::timeEnclosedOccurrences")) (scopes any feature))
       (supertype (node (document "memory://snapshot/sysml.library/occurrences.md") (qualified-name "Occurrences::occurrences")) (scopes any feature))
       (supertype (node (document "memory://snapshot/sysml.library/performances.md") (qualified-name "Performances::Performance")) (scopes any))
+      (supertype (node (document "memory://snapshot/sysml.library/performances.md") (qualified-name "Performances::Performance::enclosedPerformances")) (scopes any feature))
+      (supertype (node (document "memory://snapshot/sysml.library/performances.md") (qualified-name "Performances::Performance::subperformances")) (scopes any feature))
       (supertype (node (document "memory://snapshot/sysml.library/performances.md") (qualified-name "Performances::performances")) (scopes any feature))
+      (supertype (node (document "memory://snapshot/sysml.library/state_performances.md") (qualified-name "StatePerformances::StateTransitionPerformance")) (scopes any))
+      (supertype (node (document "memory://snapshot/sysml.library/states.md") (qualified-name "States::StateAction::stateTransitions")) (scopes any feature))
+      (supertype (node (document "memory://snapshot/sysml.library/states.md") (qualified-name "States::StateTransitionAction")) (scopes any))
       (supertype (node (document "memory://snapshot/sysml.library/transition_performances.md") (qualified-name "TransitionPerformances::TransitionPerformance")) (scopes any))
     )
     (declaration (id (node (document "memory://snapshot/model.sysml") (path (named (kind package) (name "Lamp")) (named (kind state-def) (name "Machine")) (named (kind transition) (name "fail")) (anonymous (kind succession) (ordinal 0)))))
@@ -381,13 +398,20 @@ package Lamp {
       (effective-type (node (document "memory://snapshot/sysml.library/base.md") (qualified-name "Base::Anything")) (source inherited) (from (node (document "memory://snapshot/sysml.library/base.md") (qualified-name "Base::things"))))
       (effective-type (node (document "memory://snapshot/sysml.library/occurrences.md") (qualified-name "Occurrences::Occurrence")) (source inherited) (from (node (document "memory://snapshot/sysml.library/occurrences.md") (qualified-name "Occurrences::occurrences"))))
       (effective-type (node (document "memory://snapshot/sysml.library/performances.md") (qualified-name "Performances::Performance")) (source inherited) (from (node (document "memory://snapshot/sysml.library/transition_performances.md") (qualified-name "TransitionPerformances::TransitionPerformance::transitionLinkSource"))))
+      (effective-type (node (document "memory://snapshot/sysml.library/state_performances.md") (qualified-name "StatePerformances::StatePerformance")) (source inherited) (from (node (document "memory://snapshot/sysml.library/state_performances.md") (qualified-name "StatePerformances::StateTransitionPerformance::transitionLinkSource"))))
+      (effective-type (node (document "memory://snapshot/sysml.library/states.md") (qualified-name "States::StateAction")) (source inherited) (from (node (document "memory://snapshot/sysml.library/states.md") (qualified-name "States::StateTransitionAction::transitionLinkSource"))))
       (supertype (node (document "memory://snapshot/sysml.library/actions.md") (qualified-name "Actions::Action")) (scopes any))
       (supertype (node (document "memory://snapshot/sysml.library/actions.md") (qualified-name "Actions::TransitionAction::transitionLinkSource")) (scopes any feature))
       (supertype (node (document "memory://snapshot/sysml.library/base.md") (qualified-name "Base::Anything")) (scopes any))
       (supertype (node (document "memory://snapshot/sysml.library/base.md") (qualified-name "Base::things")) (scopes any feature))
+      (supertype (node (document "memory://snapshot/sysml.library/control_performances.md") (qualified-name "ControlPerformances::DecisionPerformance")) (scopes any))
       (supertype (node (document "memory://snapshot/sysml.library/occurrences.md") (qualified-name "Occurrences::Occurrence")) (scopes any))
       (supertype (node (document "memory://snapshot/sysml.library/occurrences.md") (qualified-name "Occurrences::occurrences")) (scopes any feature))
       (supertype (node (document "memory://snapshot/sysml.library/performances.md") (qualified-name "Performances::Performance")) (scopes any))
+      (supertype (node (document "memory://snapshot/sysml.library/state_performances.md") (qualified-name "StatePerformances::StatePerformance")) (scopes any))
+      (supertype (node (document "memory://snapshot/sysml.library/state_performances.md") (qualified-name "StatePerformances::StateTransitionPerformance::transitionLinkSource")) (scopes any feature))
+      (supertype (node (document "memory://snapshot/sysml.library/states.md") (qualified-name "States::StateAction")) (scopes any))
+      (supertype (node (document "memory://snapshot/sysml.library/states.md") (qualified-name "States::StateTransitionAction::transitionLinkSource")) (scopes any feature))
       (supertype (node (document "memory://snapshot/sysml.library/transition_performances.md") (qualified-name "TransitionPerformances::TransitionPerformance::transitionLinkSource")) (scopes any feature))
     )
     (declaration (id (node (document "memory://snapshot/model.sysml") (path (named (kind package) (name "Lamp")) (named (kind state-def) (name "Machine")) (named (kind transition) (name "fail")) (anonymous (kind ref) (ordinal 0)))))
@@ -433,6 +457,7 @@ package Lamp {
       (supertype (node (document "memory://snapshot/sysml.library/actions.md") (path (named (kind library-package) (name "Actions")) (named (kind action-def) (name "AcceptMessageAction")) (anonymous (kind parameter) (ordinal 0)))) (scopes any feature))
       (supertype (node (document "memory://snapshot/sysml.library/base.md") (qualified-name "Base::Anything")) (scopes any))
       (supertype (node (document "memory://snapshot/sysml.library/base.md") (qualified-name "Base::things")) (scopes any feature))
+      (supertype (node (document "memory://snapshot/sysml.library/states.md") (qualified-name "States::StateTransitionAction::payload")) (scopes any feature))
       (supertype (node (document "memory://snapshot/sysml.library/transfers.md") (qualified-name "Transfers::AcceptPerformance::payload")) (scopes any feature))
     )
     (declaration (id (node (document "memory://snapshot/model.sysml") (path (named (kind package) (name "Lamp")) (named (kind state-def) (name "Machine")) (named (kind transition) (name "fail")) (anonymous (kind accept-action) (ordinal 0)) (anonymous (kind parameter) (ordinal 0)))))
@@ -1042,6 +1067,11 @@ package Lamp {
       (outcome (status resolved) (target (node (document "memory://snapshot/model.sysml") (qualified-name "Lamp::Machine::off")))))
     )
   )
+  (query (document "memory://snapshot/model.sysml") (range (start 16 30) (end 16 38)) (probe (position 16 30))
+    (reference (id (source (node (document "memory://snapshot/model.sysml") (qualified-name "Lamp::Machine::fail"))) (kind transitionSource) (ordinal 0) (authored-target "on::ready")
+      (outcome (status resolved) (target (node (document "memory://snapshot/model.sysml") (qualified-name "Lamp::Machine::on::ready")))))
+    )
+  )
   (query (document "memory://snapshot/model.sysml") (range (start 16 57) (end 16 62)) (probe (position 16 57))
     (reference (id (source (node (document "memory://snapshot/model.sysml") (qualified-name "Lamp::Machine::fail"))) (kind transitionTarget) (ordinal 0) (authored-target "fault")
       (outcome (status resolved) (target (node (document "memory://snapshot/model.sysml") (qualified-name "Lamp::Machine::fault")))))
@@ -1050,11 +1080,6 @@ package Lamp {
   (query (document "memory://snapshot/model.sysml") (range (start 16 46) (end 16 51)) (probe (position 16 46))
     (reference (id (source (node (document "memory://snapshot/model.sysml") (qualified-name "Lamp::Machine::fail"))) (kind transitionTrigger) (ordinal 0) (authored-target "Fault")
       (outcome (status resolved) (target (node (document "memory://snapshot/model.sysml") (qualified-name "Lamp::Fault")))))
-    )
-  )
-  (query (document "memory://snapshot/model.sysml") (range (start 16 30) (end 16 38)) (probe (position 16 30))
-    (reference (id (source (node (document "memory://snapshot/model.sysml") (qualified-name "Lamp::Machine::fail"))) (kind memberAccessOperand) (ordinal 0) (authored-target "on::ready")
-      (outcome (status resolved) (target (node (document "memory://snapshot/model.sysml") (qualified-name "Lamp::Machine::on::ready")))))
     )
   )
   (query (document "memory://snapshot/model.sysml") (range (start 16 30) (end 16 38)) (probe (position 16 30))
@@ -1158,8 +1183,8 @@ package Lamp {
 ## diagram.json
 ~~~json
 {
-  "schemaVersion": 10,
-  "modelDigest": "blake3:551bc2f219b6ed5ead76b27b5465cfee14dc3e9b928a6dc3cd4b893d794ae5fd",
+  "schemaVersion": 12,
+  "modelDigest": "blake3:96d4b23c1f2aef3eade35c753a27c13579b238227c92fc2d2fd7f71338a36369",
   "documents": [
     {
       "uri": "memory://snapshot/model.sysml",
@@ -1763,19 +1788,19 @@ package Lamp {
     },
     {
       "kind": "relationship",
-      "ordinal": 44,
-      "relationshipKind": "memberAccessOperand",
-      "source": 3
-    },
-    {
-      "kind": "relationship",
       "ordinal": 47,
-      "relationshipKind": "transitionTarget",
+      "relationshipKind": "transitionSource",
       "source": 3
     },
     {
       "kind": "relationship",
       "ordinal": 48,
+      "relationshipKind": "transitionTarget",
+      "source": 3
+    },
+    {
+      "kind": "relationship",
+      "ordinal": 49,
       "relationshipKind": "transitionTrigger",
       "source": 3
     },
@@ -1787,13 +1812,13 @@ package Lamp {
     },
     {
       "kind": "relationship",
-      "ordinal": 56,
+      "ordinal": 59,
       "relationshipKind": "succession",
       "source": 4
     },
     {
       "kind": "relationship",
-      "ordinal": 57,
+      "ordinal": 60,
       "relationshipKind": "succession",
       "source": 4
     },
@@ -1961,19 +1986,19 @@ package Lamp {
     },
     {
       "kind": "relationship",
-      "ordinal": 86,
+      "ordinal": 89,
       "relationshipKind": "transitionSource",
       "source": 12
     },
     {
       "kind": "relationship",
-      "ordinal": 87,
+      "ordinal": 90,
       "relationshipKind": "transitionTarget",
       "source": 12
     },
     {
       "kind": "relationship",
-      "ordinal": 88,
+      "ordinal": 91,
       "relationshipKind": "transitionTrigger",
       "source": 12
     },
@@ -1985,13 +2010,13 @@ package Lamp {
     },
     {
       "kind": "relationship",
-      "ordinal": 98,
+      "ordinal": 101,
       "relationshipKind": "succession",
       "source": 13
     },
     {
       "kind": "relationship",
-      "ordinal": 99,
+      "ordinal": 102,
       "relationshipKind": "succession",
       "source": 13
     },
@@ -2027,19 +2052,19 @@ package Lamp {
     },
     {
       "kind": "relationship",
-      "ordinal": 65,
+      "ordinal": 68,
       "relationshipKind": "transitionSource",
       "source": 14
     },
     {
       "kind": "relationship",
-      "ordinal": 66,
+      "ordinal": 69,
       "relationshipKind": "transitionTarget",
       "source": 14
     },
     {
       "kind": "relationship",
-      "ordinal": 67,
+      "ordinal": 70,
       "relationshipKind": "transitionTrigger",
       "source": 14
     },
@@ -2051,13 +2076,13 @@ package Lamp {
     },
     {
       "kind": "relationship",
-      "ordinal": 77,
+      "ordinal": 80,
       "relationshipKind": "succession",
       "source": 15
     },
     {
       "kind": "relationship",
-      "ordinal": 78,
+      "ordinal": 81,
       "relationshipKind": "succession",
       "source": 15
     }
@@ -2518,6 +2543,7 @@ package Lamp {
         "name": "Machine",
         "notationRole": "definition",
         "owner": null,
+        "presentationKey": "p:69fd4d439f01c5f9aa858f3328a08087ccc4aecfbd1923873b6c3fe9532ad3f2",
         "reference": 1,
         "source": 0,
         "stateSubaction": null,
@@ -2553,6 +2579,7 @@ package Lamp {
         "name": "fail",
         "notationRole": "usage",
         "owner": 0,
+        "presentationKey": "p:5f591b731cd59e6d1686838f965b3f03fe9ea1d4468c4bdeb603f62e108c3bcd",
         "reference": 3,
         "source": 26,
         "stateSubaction": null,
@@ -2571,6 +2598,7 @@ package Lamp {
         "name": null,
         "notationRole": "unsupported",
         "owner": 1,
+        "presentationKey": "p:237e0a4089d209656f316e33a63f950d6a8cb6fe6ef25cbd49a5805947805268",
         "reference": 22,
         "source": 25,
         "stateSubaction": null,
@@ -2597,6 +2625,7 @@ package Lamp {
         "name": null,
         "notationRole": "usage",
         "owner": 1,
+        "presentationKey": "p:10f1b84f6d9daac2971c3fc64c85ca32eb5708f5134940a1c8cb5bac75d9a3c2",
         "reference": 20,
         "source": 25,
         "stateSubaction": null,
@@ -2609,12 +2638,13 @@ package Lamp {
         "compartments": [],
         "conjugated": false,
         "direction": "inout",
-        "featureDirection": null,
+        "featureDirection": "inout",
         "metaclass": "ReferenceUsage",
         "multiplicity": null,
         "name": null,
         "notationRole": "reference-usage",
         "owner": 3,
+        "presentationKey": "p:69675cb246ef21414d29ab2da36b2f6d375d43bb7f20b8d5404da1fc71e25e1c",
         "reference": 23,
         "source": 25,
         "stateSubaction": null,
@@ -2633,6 +2663,7 @@ package Lamp {
         "name": null,
         "notationRole": "reference-usage",
         "owner": 1,
+        "presentationKey": "p:c1a265a1490c9610ba2ffd0d244900c147e8a4610557d617a5351dfdfcfe5df4",
         "reference": 21,
         "source": 25,
         "stateSubaction": null,
@@ -2645,12 +2676,13 @@ package Lamp {
         "compartments": [],
         "conjugated": false,
         "direction": "in",
-        "featureDirection": null,
+        "featureDirection": "in",
         "metaclass": "ReferenceUsage",
         "multiplicity": null,
         "name": null,
         "notationRole": "reference-usage",
         "owner": 1,
+        "presentationKey": "p:d138969c89a361ade961223f8a38eb5f3777d9074498949a92f8c66e7e953275",
         "reference": 21,
         "source": 25,
         "stateSubaction": null,
@@ -2663,12 +2695,13 @@ package Lamp {
         "compartments": [],
         "conjugated": false,
         "direction": "in",
-        "featureDirection": null,
+        "featureDirection": "in",
         "metaclass": "ReferenceUsage",
         "multiplicity": null,
         "name": null,
         "notationRole": "reference-usage",
         "owner": 1,
+        "presentationKey": "p:593920d96f480b5dd849be092536d7eb970d5f2275abbceef2d75003394917bb",
         "reference": 21,
         "source": 25,
         "stateSubaction": null,
@@ -2704,6 +2737,7 @@ package Lamp {
         "name": "turnOn",
         "notationRole": "usage",
         "owner": 0,
+        "presentationKey": "p:69053245be19feccdc9a7b43bb174f24755b70f39325739cda4bc801a0f0a39a",
         "reference": 14,
         "source": 15,
         "stateSubaction": null,
@@ -2722,6 +2756,7 @@ package Lamp {
         "name": null,
         "notationRole": "unsupported",
         "owner": 8,
+        "presentationKey": "p:7666b2c838789ec20dc12018fe60955500437bc7023f50a1fd4f882877be0274",
         "reference": 35,
         "source": 14,
         "stateSubaction": null,
@@ -2748,6 +2783,7 @@ package Lamp {
         "name": null,
         "notationRole": "usage",
         "owner": 8,
+        "presentationKey": "p:b4cba0353b583f4035b0dce33357a250c9e488062e25ff7838f7ffb3020d91a8",
         "reference": 33,
         "source": 14,
         "stateSubaction": null,
@@ -2760,12 +2796,13 @@ package Lamp {
         "compartments": [],
         "conjugated": false,
         "direction": "inout",
-        "featureDirection": null,
+        "featureDirection": "inout",
         "metaclass": "ReferenceUsage",
         "multiplicity": null,
         "name": null,
         "notationRole": "reference-usage",
         "owner": 10,
+        "presentationKey": "p:96342966d5c8eb52d4d5f1b2cddb6cb5373eb502f83d3a3a57e8915438b86b8f",
         "reference": 36,
         "source": 14,
         "stateSubaction": null,
@@ -2784,6 +2821,7 @@ package Lamp {
         "name": null,
         "notationRole": "reference-usage",
         "owner": 8,
+        "presentationKey": "p:445fc915b96558c1debafe3ea756b28637eac6b5d068848b7a992f54b4c6fb4c",
         "reference": 34,
         "source": 14,
         "stateSubaction": null,
@@ -2796,12 +2834,13 @@ package Lamp {
         "compartments": [],
         "conjugated": false,
         "direction": "in",
-        "featureDirection": null,
+        "featureDirection": "in",
         "metaclass": "ReferenceUsage",
         "multiplicity": null,
         "name": null,
         "notationRole": "reference-usage",
         "owner": 8,
+        "presentationKey": "p:d5aefc8d0e293f73cb45a87fc4f0af12e447c0c04cc1056a98bf184eb9614fda",
         "reference": 34,
         "source": 14,
         "stateSubaction": null,
@@ -2814,12 +2853,13 @@ package Lamp {
         "compartments": [],
         "conjugated": false,
         "direction": "in",
-        "featureDirection": null,
+        "featureDirection": "in",
         "metaclass": "ReferenceUsage",
         "multiplicity": null,
         "name": null,
         "notationRole": "reference-usage",
         "owner": 8,
+        "presentationKey": "p:dc7193dc2b2c6a6b1f26ad8ce4a7eb95d550ef7344ee7d73544406dbd698e182",
         "reference": 34,
         "source": 14,
         "stateSubaction": null,
@@ -2855,6 +2895,7 @@ package Lamp {
         "name": "turnOff",
         "notationRole": "usage",
         "owner": 0,
+        "presentationKey": "p:5f6b11450286aa48dbbc8cc314d4bdcb43aeb0b7a821717254bfb02b43fa0325",
         "reference": 12,
         "source": 20,
         "stateSubaction": null,
@@ -2873,6 +2914,7 @@ package Lamp {
         "name": null,
         "notationRole": "unsupported",
         "owner": 15,
+        "presentationKey": "p:31fba203977d17155c3711dc724b0dd173113d2e734da7c85824b3696567a6c3",
         "reference": 31,
         "source": 19,
         "stateSubaction": null,
@@ -2899,6 +2941,7 @@ package Lamp {
         "name": null,
         "notationRole": "usage",
         "owner": 15,
+        "presentationKey": "p:44dc542e3641fc3cdf3867d363d874fbe721ddb6310154e921a5eb3ec1acc863",
         "reference": 29,
         "source": 19,
         "stateSubaction": null,
@@ -2911,12 +2954,13 @@ package Lamp {
         "compartments": [],
         "conjugated": false,
         "direction": "inout",
-        "featureDirection": null,
+        "featureDirection": "inout",
         "metaclass": "ReferenceUsage",
         "multiplicity": null,
         "name": null,
         "notationRole": "reference-usage",
         "owner": 17,
+        "presentationKey": "p:76127246abd845ee57e126a9ace8b6d4ae49aa09f7ac40e7a10511246f431015",
         "reference": 32,
         "source": 19,
         "stateSubaction": null,
@@ -2935,6 +2979,7 @@ package Lamp {
         "name": null,
         "notationRole": "reference-usage",
         "owner": 15,
+        "presentationKey": "p:0ac1bbb34af08c4990decf1688b7698b248d18f4a636b97cd3b7e88df85b6cce",
         "reference": 30,
         "source": 19,
         "stateSubaction": null,
@@ -2947,12 +2992,13 @@ package Lamp {
         "compartments": [],
         "conjugated": false,
         "direction": "in",
-        "featureDirection": null,
+        "featureDirection": "in",
         "metaclass": "ReferenceUsage",
         "multiplicity": null,
         "name": null,
         "notationRole": "reference-usage",
         "owner": 15,
+        "presentationKey": "p:2b0828a22400b11532d4d63c41025c42aaa75c1e744ccd3952c7bd2615e03fd3",
         "reference": 30,
         "source": 19,
         "stateSubaction": null,
@@ -2965,12 +3011,13 @@ package Lamp {
         "compartments": [],
         "conjugated": false,
         "direction": "in",
-        "featureDirection": null,
+        "featureDirection": "in",
         "metaclass": "ReferenceUsage",
         "multiplicity": null,
         "name": null,
         "notationRole": "reference-usage",
         "owner": 15,
+        "presentationKey": "p:0016ca94e517314cc744570cf662acfad5be01d7106b3bca8a2a06419734f2eb",
         "reference": 30,
         "source": 19,
         "stateSubaction": null,
@@ -2989,6 +3036,7 @@ package Lamp {
         "name": null,
         "notationRole": "unsupported",
         "owner": 0,
+        "presentationKey": "p:440f66d664fa546f62c45a69c6a0dd50a488669a41470709d505d2e3a677c917",
         "reference": 19,
         "source": 2,
         "stateSubaction": null,
@@ -3007,6 +3055,7 @@ package Lamp {
         "name": null,
         "notationRole": "usage",
         "owner": 0,
+        "presentationKey": "p:c417d82f3ea96881e365d5ac417ef8c76544443c7e978e1c664155b24061ad72",
         "reference": 18,
         "source": 1,
         "stateSubaction": "entry",
@@ -3041,6 +3090,7 @@ package Lamp {
         "name": "on",
         "notationRole": "usage",
         "owner": 0,
+        "presentationKey": "p:dd85e75dd9b161f67126215a1716c6765a4a9425f2836dfda96356d7c83a7b40",
         "reference": 7,
         "source": 5,
         "stateSubaction": null,
@@ -3068,6 +3118,7 @@ package Lamp {
         "name": null,
         "notationRole": "usage",
         "owner": 24,
+        "presentationKey": "p:807a1ae4ec8c278661c05172bd0e76308ef5bba3362534ba588ec951b40f2b7c",
         "reference": 26,
         "source": 11,
         "stateSubaction": null,
@@ -3086,6 +3137,7 @@ package Lamp {
         "name": null,
         "notationRole": "unsupported",
         "owner": 25,
+        "presentationKey": "p:50df6bb0821937a8e5dabda9ae28a9ece79d2a41e93ccf26eed7991cbfd38efb",
         "reference": 28,
         "source": 11,
         "stateSubaction": null,
@@ -3104,6 +3156,7 @@ package Lamp {
         "name": null,
         "notationRole": "reference-usage",
         "owner": 25,
+        "presentationKey": "p:51f81e9d8ceaa50fd2c4fdf2d4e4f09f2849cf6f0e6e618a8725de55785b4880",
         "reference": 27,
         "source": 11,
         "stateSubaction": null,
@@ -3116,12 +3169,13 @@ package Lamp {
         "compartments": [],
         "conjugated": false,
         "direction": "in",
-        "featureDirection": null,
+        "featureDirection": "in",
         "metaclass": "ReferenceUsage",
         "multiplicity": null,
         "name": null,
         "notationRole": "reference-usage",
         "owner": 25,
+        "presentationKey": "p:649f9e275cc02b94409d843362bcd3ee9840ab0c0757d712b7e891668f3ecd41",
         "reference": 27,
         "source": 11,
         "stateSubaction": null,
@@ -3140,6 +3194,7 @@ package Lamp {
         "name": null,
         "notationRole": "unsupported",
         "owner": 24,
+        "presentationKey": "p:14fa96880a5d4e577da81e274e431bd0615e2f7c555674b2b67c50bbfc3e4441",
         "reference": 25,
         "source": 7,
         "stateSubaction": null,
@@ -3158,6 +3213,7 @@ package Lamp {
         "name": null,
         "notationRole": "usage",
         "owner": 24,
+        "presentationKey": "p:22110a52cb207f4831029706434db5a30984297d35a350ac41fe84e24fbb8e0f",
         "reference": 24,
         "source": 6,
         "stateSubaction": "entry",
@@ -3176,6 +3232,7 @@ package Lamp {
         "name": "ready",
         "notationRole": "usage",
         "owner": 24,
+        "presentationKey": "p:12755c35884816178334a2f276f5e02f1c5a5a0aa9c3c53c35042d6a21247b6e",
         "reference": 10,
         "source": 10,
         "stateSubaction": null,
@@ -3194,6 +3251,7 @@ package Lamp {
         "name": "warming",
         "notationRole": "usage",
         "owner": 24,
+        "presentationKey": "p:2f311e4f36ee1fc506d9f760027c17bb3b3ccf3575aaa8e6118dc0a3592aa284",
         "reference": 11,
         "source": 9,
         "stateSubaction": null,
@@ -3212,6 +3270,7 @@ package Lamp {
         "name": "off",
         "notationRole": "usage",
         "owner": 0,
+        "presentationKey": "p:91a2c85defe04f9f218ee6d43695222a3b06701c711a485a1f1312ed383f43df",
         "reference": 6,
         "source": 4,
         "stateSubaction": null,
@@ -3230,6 +3289,7 @@ package Lamp {
         "name": "fault",
         "notationRole": "usage",
         "owner": 0,
+        "presentationKey": "p:aafc5b5af391a0ac84b661a574bc54297feabe00bb27ec6601d814c41709912d",
         "reference": 5,
         "source": 24,
         "stateSubaction": null,
@@ -3307,7 +3367,7 @@ package Lamp {
         }
       },
       {
-        "kind": "memberAccessOperand",
+        "kind": "transitionSource",
         "navigation": 27,
         "provenance": "authored",
         "reference": 52,

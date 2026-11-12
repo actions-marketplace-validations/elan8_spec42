@@ -4,7 +4,6 @@ import { describe, it } from "node:test";
 import {
   allDiagramViewOptions,
   authoredDiagramViewOptions,
-  diagramRenderIsStale,
   diagramViewsForDocument,
   diagramViewKindForHandle,
   DIAGRAM_VIEWS,
@@ -16,24 +15,140 @@ import {
   parseLspDiagramResult,
   parseStateTransitionViewCatalog,
   parseSourceNavigation,
-  reconcileDelayMs,
+  productContainsSourceTarget,
   resolveDiagramSelection,
   visibleSourceColumn,
 } from "../../diagram/diagramViewerCore";
-import { isEmptyIncompleteDiagramProduct, sameProjectedNodes } from "../../diagram/diagramProductState";
+import { isEmptyIncompleteDiagramProduct, remapDisclosureState } from "../../diagram/diagramProductState";
+import { diagramLimitations } from "../../diagram/diagramLimitations";
+import { DiagramRefreshQueue } from "../../diagram/diagramRefreshQueue";
+import type { DiagramProduct } from "../../generated/diagram-product/DiagramProduct";
+import { isPresentedFrame, parseRenderMeasurement, RenderMeasurementTracker, type RenderMeasurement } from "../../diagram/diagramPerformance";
+
+describe("diagram request ownership", () => {
+  it("coalesces wakes received during work and rejects the old completion", () => {
+    const queue = new DiagramRefreshQueue();
+    queue.request();
+    const first = queue.begin()!;
+    assert.ok(queue.isCurrent(first));
+    queue.request(); queue.request();
+    assert.equal(queue.begin(), undefined);
+    assert.equal(queue.isCurrent(first), false);
+    queue.finish(first);
+    const next = queue.begin()!;
+    assert.ok(queue.isCurrent(next));
+    queue.finish(first);
+    assert.ok(queue.isCurrent(next), "an obsolete completion cannot release its replacement");
+    queue.finish(next);
+    assert.equal(queue.begin(), undefined, "there is no periodic retry");
+  });
+  it("cancellation fences late completions while a new owner can start immediately", () => {
+    const queue = new DiagramRefreshQueue(); queue.request(); const first = queue.begin()!;
+    queue.cancel(); queue.request(); const next = queue.begin()!;
+    queue.finish(first);
+    assert.equal(queue.isCurrent(first), false);
+    assert.ok(queue.isCurrent(next));
+  });
+});
+
+describe("unsupported syntax provenance", () => {
+  it("admits only exact canonical source targets outside the workspace", () => {
+    const product = { documents: [{ uri: "file:///library/model.sysml" }], sources: [{ document: 0, range: [2, 1, 3, 4] }] } as unknown as DiagramProduct;
+    const target = { uri: "file:///library/model.sysml", startLine: 2, startCharacter: 1, endLine: 3, endCharacter: 4 };
+    assert.ok(productContainsSourceTarget(product, target));
+    assert.equal(productContainsSourceTarget(product, { ...target, uri: "file:///elsewhere/private.sysml" }), false);
+    assert.equal(productContainsSourceTarget(product, { ...target, startLine: 0 }), false);
+  });
+  it("links the compiler diagnostic rather than the selected view definition", () => {
+    const product = {
+      documents: [{ uri: "file:///workspace/model.sysml", sourceDomain: "workspace" }],
+      sources: [{ document: 0, range: [2, 0, 2, 10] }, { document: 0, range: [15, 8, 17, 9] }],
+      selectedView: { source: 0 },
+      completeness: { status: "incomplete", reasons: [{ code: "unsupported-syntax", diagnostics: [{
+        code: "unsupported_state_definition_member", message: "This member is parsed but not modelled by the semantic publication.", source: 1,
+      }] }] },
+    } as unknown as DiagramProduct;
+    const [detail] = diagramLimitations(product);
+    assert.equal(detail.explanation, "unsupported_state_definition_member: This member is parsed but not modelled by the semantic publication.");
+    assert.deepEqual(detail.links, [{
+      label: "unsupported_state_definition_member · model.sysml:16",
+      target: { uri: "file:///workspace/model.sysml", startLine: 15, startCharacter: 8, endLine: 17, endCharacter: 9 },
+    }]);
+  });
+});
+
+describe("diagram performance correlation", () => {
+  const frame = (identity: { renderId: number; modelDigest: string; viewHandle: string }): RenderMeasurement => ({
+    ...identity, type: "renderComplete", outcome: "rendered",
+    webviewTotalMs: 15, webviewPrepareMs: 2, webviewRenderMs: 8, frameWaitMs: 4,
+    framesObserved: 2, visible: true, viewportReused: true, disclosureReused: false,
+  });
+
+  it("accepts one acknowledgement for the exact current render, product and view", () => {
+    const tracker = new RenderMeasurementTracker();
+    const old = tracker.begin("old", "general:one", 10);
+    const current = tracker.begin("current", "general:one", 30);
+    assert.equal(tracker.complete(frame(old), 60), undefined);
+    assert.equal(tracker.complete({ ...frame(current), modelDigest: "other" }, 60), undefined);
+    assert.equal(tracker.complete({ ...frame(current), viewHandle: "other" }, 60), undefined);
+    assert.equal(tracker.complete(frame(current), 20), undefined);
+    const accepted = tracker.complete(frame(current), 60);
+    assert.ok(accepted);
+    assert.equal(accepted.postToAckMs, 30);
+    assert.ok(isPresentedFrame(accepted));
+    assert.equal(tracker.complete(frame(current), 70), undefined);
+  });
+
+  it("drops pending render identity on publication replacement, hide or disposal", () => {
+    const tracker = new RenderMeasurementTracker();
+    const identity = tracker.begin("current", "general:one", 10);
+    tracker.invalidate();
+    assert.equal(tracker.complete(frame(identity), 60), undefined);
+  });
+
+  it("keeps hidden, incomplete and unavailable renders explicit instead of counting a frame", () => {
+    const value = frame({ renderId: 1, modelDigest: "current", viewHandle: "general:one" });
+    for (const outcome of ["empty", "failed", "unavailable"] as const) {
+      assert.equal(isPresentedFrame({ ...value, outcome }), false);
+    }
+    assert.equal(isPresentedFrame({ ...value, visible: false }), false);
+    assert.equal(isPresentedFrame({ ...value, framesObserved: 1 }), false);
+  });
+
+  it("rejects malformed durations and strips fields outside the measurement contract", () => {
+    const value = frame({ renderId: 1, modelDigest: "current", viewHandle: "general:one" });
+    for (const extra of [{ webviewRenderMs: NaN }, { webviewRenderMs: -1 }, { framesObserved: 3 },
+      { renderId: 1.5 }, { visible: "yes" }, { outcome: "success" }, { webviewTotalMs: 1 }]) {
+      assert.equal(parseRenderMeasurement({ ...value, ...extra }), undefined);
+    }
+    assert.equal(parseRenderMeasurement(null), undefined);
+    const accepted = parseRenderMeasurement({ ...value, event: "backend:publication", extensionHostMs: -1 });
+    assert.ok(accepted);
+    assert.equal("event" in accepted, false);
+    assert.equal("extensionHostMs" in accepted, false);
+  });
+});
 
 describe("diagram viewer core", () => {
-  it("reuses disclosure only while a product projects the same nodes", () => {
-    const node = (name: string) => ({ reference: 0, name });
-    const product = (digest: string, names: string[]) => ({
-      modelDigest: digest, references: [{ kind: "qualified-name" }], projection: { nodes: names.map(node) },
+  it("remaps disclosure through inserted/reordered nodes using only opaque occurrence keys", () => {
+    const product = (keys: string[]) => ({ projection: { nodes: keys.map(presentationKey => ({ presentationKey })) } });
+    const state = { expandedNodeIds: ["n:0", "n:2", "n:99"], sectionStates: [
+      { nodeId: "n:0", sectionKey: "parts", expanded: false },
+      { nodeId: "n:1", sectionKey: "attributes", expanded: true },
+    ] };
+    assert.deepEqual(remapDisclosureState(product(["a", "b", "deleted"]), product(["new", "b", "a"]), state), {
+      expandedNodeIds: ["n:2"], sectionStates: [
+        { nodeId: "n:2", sectionKey: "parts", expanded: false },
+        { nodeId: "n:1", sectionKey: "attributes", expanded: true },
+      ],
     });
-    const before = product("blake3:a", ["root", "child"]);
-    assert.equal(sameProjectedNodes(before, product("blake3:a", ["root", "child"])), true);
-    // Loading a browser branch keeps the digest but adds nodes and shifts their indexes.
-    assert.equal(sameProjectedNodes(before, product("blake3:a", ["root", "loaded", "child"])), false);
-    assert.equal(sameProjectedNodes(before, product("blake3:b", ["root", "child"])), false);
-    assert.equal(sameProjectedNodes(undefined, before), false);
+    assert.deepEqual(state.expandedNodeIds, ["n:0", "n:2", "n:99"], "Previous publication state is immutable");
+    assert.equal(remapDisclosureState(undefined, product(["a"]), state), undefined);
+    assert.equal(remapDisclosureState(product(["a"]), product(["a"]), undefined), undefined);
+    for (const [before, after] of [[["a", "a"], ["a"]], [["a"], ["a", "a"]], [["a"], ["other"]], [[""], [""]]]) {
+      assert.deepEqual(remapDisclosureState(product(before), product(after), {expandedNodeIds:["n:0"],sectionStates:[]}),
+        {expandedNodeIds:[],sectionStates:[]});
+    }
   });
 
   it("reuses an already-visible source column and otherwise requests a new one", () => {
@@ -167,6 +282,7 @@ describe("diagram viewer core", () => {
       },
     }), false);
     const node = {
+      presentationKey: "p:root",
       reference: 0,
       metaclass: "PartUsage",
       notationRole: "usage",
@@ -180,6 +296,9 @@ describe("diagram viewer core", () => {
       ...value,
       projection: { ...value.projection, exposedRoots: [0], nodes: [node] },
     })).projection.nodes.length, 1);
+    for (const nodes of [[{...node,presentationKey:""}], [{...node,presentationKey:undefined}], [node,node]]) {
+      assert.throws(() => parseDiagramProduct(JSON.stringify({...value,projection:{...value.projection,nodes}})));
+    }
     const typedNodes = {
       ...value,
       projection: {
@@ -304,22 +423,6 @@ describe("diagram viewer core", () => {
     assert.throws(()=>parseDiagramViewCatalog({...catalog, views:[{...catalog.views[0], source:{uri:"file:///w/views.sysml",range:{startLine:-1}}}]}));
     const multiple = allDiagramViewOptions({...catalog, views:[catalog.views[0], {...catalog.views[0],handle:"h2",kind:"sequence-view"}]});
     assert.deepEqual(multiple.map(view=>view.label),["A::quoted name · General View", "A::quoted name · Sequence View"]);
-  });
-
-  it("backs the reconcile loop off exponentially, then settles slow", () => {
-    assert.equal(reconcileDelayMs(0, false), 600);
-    assert.equal(reconcileDelayMs(1, false), 1_200);
-    assert.equal(reconcileDelayMs(4, false), 9_600);
-    assert.equal(reconcileDelayMs(6, false), 15_000);
-    assert.equal(reconcileDelayMs(20, false), 15_000, "capped");
-    assert.equal(reconcileDelayMs(-3, false), 600, "clamped to attempt 0");
-    assert.equal(reconcileDelayMs(0, true), 45_000, "settled cadence ignores attempt");
-  });
-
-  it("treats a publication digest as stale only against a known rendered digest", () => {
-    assert.equal(diagramRenderIsStale(undefined, "blake3:new"), false);
-    assert.equal(diagramRenderIsStale("blake3:old", "blake3:new"), true);
-    assert.equal(diagramRenderIsStale("blake3:same", "blake3:same"), false);
   });
 
   it("validates bounded source navigation", () => {

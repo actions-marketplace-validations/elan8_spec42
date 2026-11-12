@@ -10,11 +10,11 @@
 use serde::Serialize;
 use serde_json::{json, Value};
 use sysml_query::resolved_slice::{
-    ConnectedElement, ConnectorEndpoint, ElementDetails, EvaluatedScalar, ExpressionNode,
-    ExpressionNodeKind, MetadataAnnotationValue, MultiplicityBound, MultiplicityFacts,
-    ProjectedElement, ProjectionEnvelope, PublishedConnector, PublishedExpression,
-    PublishedMetadataAnnotation, PublishedModel, RelationshipFamily, RelationshipTarget,
-    SourceLocation, SymbolId, SymbolToken,
+    ConnectedElement, ConnectorEndpoint, ElementDetails, ElementSource, EvaluatedScalar,
+    ExpressionNode, ExpressionNodeKind, LibraryElementInclusion, MetadataAnnotationValue,
+    MultiplicityBound, MultiplicityFacts, ProjectedElement, ProjectionEnvelope, PublishedConnector,
+    PublishedExpression, PublishedMetadataAnnotation, PublishedModel, RelationshipFamily,
+    RelationshipTarget, SourceLocation, SymbolId, SymbolToken,
 };
 
 /// The JSON form of one publication's whole-model projection.
@@ -41,6 +41,7 @@ pub struct EnvelopeJson {
 
 #[derive(Debug, Serialize)]
 pub struct AdmittedJson {
+    pub workspace: usize,
     pub standard_library: usize,
     pub library: usize,
     pub external: usize,
@@ -58,9 +59,15 @@ pub struct TruncationJson {
 /// `model_projection` composes [`sysml_query::resolved_slice::QueryAnswer::Resolved`]-only
 /// queries (`all_elements`), so it always resolves; there is no non-`Resolved` answer for this
 /// caller to fall back on.
-pub fn model_projection_json(model: &PublishedModel, max_nodes: usize) -> ModelProjectionJson {
-    let sysml_query::resolved_slice::QueryAnswer::Resolved(projection) =
-        model.projection().model(max_nodes).answer
+pub fn model_projection_json(
+    model: &PublishedModel,
+    max_nodes: usize,
+    inclusion: LibraryElementInclusion,
+) -> ModelProjectionJson {
+    let sysml_query::resolved_slice::QueryAnswer::Resolved(projection) = model
+        .projection()
+        .model_including(max_nodes, inclusion)
+        .answer
     else {
         unreachable!(
             "model_projection composes only Resolved-answer queries (all_elements), so this \
@@ -104,6 +111,7 @@ fn envelope_json(envelope: &ProjectionEnvelope) -> EnvelopeJson {
         source_digest: envelope.source_digest.to_string(),
         model_digest: envelope.model_digest.to_string(),
         admitted: AdmittedJson {
+            workspace: envelope.admitted.workspace,
             standard_library: envelope.admitted.standard_library,
             library: envelope.admitted.library,
             external: envelope.admitted.external,
@@ -229,8 +237,19 @@ fn scalar_json(scalar: &EvaluatedScalar) -> Value {
 }
 
 fn expression_json(model: &PublishedModel, expression: &PublishedExpression) -> Value {
+    use sysml_query::resolved_slice::ExpressionResultTyping;
+    let result_typing = match &expression.result_typing {
+        ExpressionResultTyping::Resolved(types) => {
+            json!({ "status": "resolved", "types": symbol_tokens(model, types.iter().copied()) })
+        }
+        ExpressionResultTyping::Ambiguous(functions) => {
+            json!({ "status": "ambiguous", "functions": symbol_tokens(model, functions.iter().copied()) })
+        }
+        other => json!({ "status": other.as_str() }),
+    };
     json!({
         "outcome": expression.outcome.as_str(),
+        "result_typing": result_typing,
         "root": expression.root,
         "nodes": expression
             .nodes
@@ -242,6 +261,15 @@ fn expression_json(model: &PublishedModel, expression: &PublishedExpression) -> 
 
 fn expression_node_json(model: &PublishedModel, node: &ExpressionNode) -> Value {
     let mut value = match &node.kind {
+        ExpressionNodeKind::Invocation { callee, arguments } => json!({
+            "kind": "invocation", "callee": callee, "arguments": arguments,
+        }),
+        ExpressionNodeKind::Sequence { elements } => json!({
+            "kind": "sequence", "elements": elements,
+        }),
+        ExpressionNodeKind::MetaCast { operand, metaclass } => json!({
+            "kind": "meta-cast", "operand": operand, "metaclass": metaclass,
+        }),
         ExpressionNodeKind::Literal(scalar) => json!({
             "kind": "literal",
             "value": scalar_json(scalar),
@@ -330,20 +358,32 @@ fn connector_json(model: &PublishedModel, connector: &PublishedConnector) -> Val
     })
 }
 
+fn element_source_name(source: ElementSource) -> &'static str {
+    match source {
+        ElementSource::Workspace => "workspace",
+        ElementSource::StandardLibrary => "standard-library",
+        ElementSource::Library => "library",
+        ElementSource::External => "external",
+    }
+}
+
 fn element_json(model: &PublishedModel, element: &ProjectedElement) -> Value {
     let details: &ElementDetails = &element.details;
     let inspection = &details.inspection;
     json!({
         "token": token(model, element.identity),
-        "source": "workspace",
+        "source": element_source_name(element.source),
         "kind": inspection.kind.as_str(),
         "name": inspection.name.as_deref(),
+        "effective_name": element.effective_name.as_deref(),
+        "effective_qualified_name": element.effective_qualified_name.as_deref(),
         "short_name": inspection.short_name.as_deref(),
         "qualified_name": model.qualified_name(element.identity),
         "owner": details.owner.as_ref().and_then(|owner| token(model, owner.identity)),
         "location": location_json(model, &inspection.location),
         "membership": {
             "kind": membership_kind(inspection.membership.kind),
+            "role": inspection.role.map(|role| role.as_str()),
             "visibility": visibility(inspection.membership.visibility),
             "provenance": visibility_provenance(inspection.membership.provenance),
         },
@@ -353,6 +393,31 @@ fn element_json(model: &PublishedModel, element: &ProjectedElement) -> Value {
             .map(|modifier| modifier.as_str())
             .collect::<Vec<_>>(),
         "multiplicity": multiplicity_json(inspection.multiplicity),
+        "multiplicity_expressions": element.multiplicity_expressions.as_ref().map(|bounds| json!({
+            "range": token(model, bounds.range),
+            "lower": bounds.lower.and_then(|bound| token(model, bound)),
+            "upper": bounds.upper.and_then(|bound| token(model, bound)),
+        })),
+        "exposure": element.exposure.map(|exposure| json!({
+            "namespace": exposure.namespace,
+            "recursive": exposure.recursive,
+            "filtered": exposure.filtered,
+        })),
+        "trigger_kind": inspection.trigger_kind.map(|kind| kind.as_str()),
+        "evaluation": {
+            "status": details.evaluation.state.as_str(),
+            "value": details.evaluation.state.value().map(scalar_json),
+        },
+        "contextual_evaluations": element.contextual_evaluations.iter().map(|entry| {
+            use sysml_query::resolved_slice::ContextualEvaluationOutcome;
+            let outcome = match &entry.outcome {
+                ContextualEvaluationOutcome::Resolved(state) => json!({ "status": "resolved", "evaluation": { "status": state.as_str(), "value": state.value().map(scalar_json) } }),
+                ContextualEvaluationOutcome::Unresolved => json!({ "status": "unresolved" }),
+                ContextualEvaluationOutcome::Ambiguous(candidates) => json!({ "status": "ambiguous", "candidates": symbol_tokens(model, candidates.iter().copied()) }),
+            };
+            json!({ "element": token(model, entry.element), "authored_element": token(model, entry.authored_element), "effective_element": token(model, entry.effective_element), "outcome": outcome })
+        }).collect::<Vec<_>>(),
+        "analysis": analysis_json(&details.analysis),
         "direction": inspection.direction.map(direction),
         "documentation": inspection
             .documentation
@@ -389,6 +454,24 @@ fn element_json(model: &PublishedModel, element: &ProjectedElement) -> Value {
             .map(|annotation| annotation_json(model, annotation))
             .collect::<Vec<_>>(),
     })
+}
+
+fn analysis_json(analysis: &sysml_query::resolved_slice::AnalysisEvaluation) -> Value {
+    use sysml_query::resolved_slice::AnalysisEvaluation;
+    match analysis {
+        AnalysisEvaluation::Verdict(passed) => {
+            json!({ "status": analysis.as_str(), "passed": passed })
+        }
+        AnalysisEvaluation::Computed(value) => {
+            json!({ "status": analysis.as_str(), "value": scalar_json(value) })
+        }
+        AnalysisEvaluation::Unsettled(state) => {
+            json!({ "status": analysis.as_str(), "reason": state.as_str() })
+        }
+        AnalysisEvaluation::NotApplicable | AnalysisEvaluation::NotRun => {
+            json!({ "status": analysis.as_str() })
+        }
+    }
 }
 
 fn membership_kind(kind: sysml_query::resolved_slice::MembershipKind) -> &'static str {

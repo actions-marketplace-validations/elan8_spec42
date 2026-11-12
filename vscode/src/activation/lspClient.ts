@@ -1,5 +1,6 @@
 import { ANALYSIS_STATUS_CHANGED_METHOD } from "../generated/editor-status";
 import { analysisRequestMiddleware } from "./pendingAnalysis";
+import { MODEL_DOCUMENT_SELECTOR } from "./lspDocumentSelector";
 import * as fs from "fs";
 import * as path from "path";
 import * as vscode from "vscode";
@@ -377,11 +378,11 @@ export function startLanguageClient(
 
   const clientOptions: LanguageClientOptions = {
     middleware: analysisRequestMiddleware,
-    documentSelector: [{ language: "sysml" }, { language: "kerml" }],
+    documentSelector: MODEL_DOCUMENT_SELECTOR,
     synchronize: {
       fileEvents: [
         vscode.workspace.createFileSystemWatcher("**/*.{sysml,kerml}"),
-        vscode.workspace.createFileSystemWatcher("**/{.project.json,syside.toml,sysand-lock.toml,env.toml}"),
+        vscode.workspace.createFileSystemWatcher("**/{.project.json,spec42.toml,sysand-lock.toml,env.toml}"),
       ],
     },
     initializationOptions: {
@@ -427,6 +428,24 @@ export function startLanguageClient(
     serverOptions,
     clientOptions
   );
+
+  // tower-lsp's current capability type exposes type hierarchy through experimental.
+  // Reuse the language client's standard provider, including its opaque item data handling.
+  const hierarchyClient = client;
+  client.registerFeature({
+    fillClientCapabilities() {},
+    initialize(capabilities, documentSelector) {
+      if (!capabilities.typeHierarchyProvider &&
+          capabilities.experimental?.typeHierarchyProvider === true && documentSelector) {
+        hierarchyClient.getFeature("textDocument/prepareTypeHierarchy").register({
+          id: "spec42.experimental.typeHierarchy",
+          registerOptions: { documentSelector },
+        });
+      }
+    },
+    clear() {},
+    getState: () => ({ kind: "static" as const }),
+  });
 
   context.subscriptions.push(
     client.onDidChangeState(({ newState }) => {

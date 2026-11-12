@@ -133,8 +133,8 @@ package ActionNegative {
 ## diagram.json
 ~~~json
 {
-  "schemaVersion": 10,
-  "modelDigest": "blake3:3b080e216e9b7334b7adc6beb1fc7aaff4a44404df16956831cbd699f53eb60a",
+  "schemaVersion": 12,
+  "modelDigest": "blake3:0d459289a2c6cf4f41ee83ed8044d9d517d90f82f01ea4d03dab2d189c9ae6c7",
   "documents": [
     {
       "uri": "memory://snapshot/diagram_action_flow_unresolved.md",

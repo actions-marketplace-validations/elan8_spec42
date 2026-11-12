@@ -128,8 +128,10 @@ package Nested {
     (relationship (kind typeFeaturing) (source (node (document "memory://snapshot/model.sysml") (qualified-name "Nested::Drive::propel"))) (target (node (document "memory://snapshot/model.sysml") (qualified-name "Nested::Drive"))) (provenance implied))
     (relationship (kind typeFeaturing) (source (node (document "memory://snapshot/model.sysml") (path (named (kind package) (name "Nested")) (named (kind action-def) (name "Drive")) (named (kind action) (name "propel")) (anonymous (kind succession) (ordinal 0))))) (target (node (document "memory://snapshot/model.sysml") (qualified-name "Nested::Drive::propel"))) (provenance implied))
     (relationship (kind typeFeaturing) (source (node (document "memory://snapshot/model.sysml") (path (named (kind package) (name "Nested")) (named (kind action-def) (name "Drive")) (named (kind action) (name "propel")) (anonymous (kind then-continuation) (ordinal 0))))) (target (node (document "memory://snapshot/model.sysml") (qualified-name "Nested::Drive::propel"))) (provenance implied))
+    (relationship (kind succession) (source (node (document "memory://snapshot/model.sysml") (path (named (kind package) (name "Nested")) (named (kind action-def) (name "Drive")) (named (kind action) (name "propel")) (anonymous (kind then-continuation) (ordinal 0))))) (target (node (document "memory://snapshot/model.sysml") (qualified-name "Nested::Drive::propel::burn"))) (provenance implied))
     (relationship (kind subsetting) (source (node (document "memory://snapshot/model.sysml") (path (named (kind package) (name "Nested")) (named (kind action-def) (name "Drive")) (named (kind action) (name "propel")) (anonymous (kind succession) (ordinal 0))))) (target (node (document "memory://snapshot/sysml.library/occurrences.md") (qualified-name "Occurrences::happensBeforeLinks"))) (provenance implied))
     (relationship (kind subsetting) (source (node (document "memory://snapshot/model.sysml") (path (named (kind package) (name "Nested")) (named (kind action-def) (name "Drive")) (named (kind action) (name "propel")) (anonymous (kind then-continuation) (ordinal 0))))) (target (node (document "memory://snapshot/sysml.library/occurrences.md") (qualified-name "Occurrences::happensBeforeLinks"))) (provenance implied))
+    (relationship (kind succession) (source (node (document "memory://snapshot/model.sysml") (qualified-name "Nested::Drive::propel::burn"))) (target (node (document "memory://snapshot/sysml.library/actions.md") (qualified-name "Actions::Action::start"))) (provenance implied))
     (relationship (kind subsetting) (source (node (document "memory://snapshot/model.sysml") (qualified-name "Nested::Drive::propel::burn"))) (target (node (document "memory://snapshot/sysml.library/actions.md") (qualified-name "Actions::Action::subactions"))) (provenance implied))
     (relationship (kind subsetting) (source (node (document "memory://snapshot/model.sysml") (qualified-name "Nested::Drive::propel::burn"))) (target (node (document "memory://snapshot/sysml.library/actions.md") (qualified-name "Actions::actions"))) (provenance implied))
     (relationship (kind typeFeaturing) (source (node (document "memory://snapshot/model.sysml") (qualified-name "Nested::Drive::propel::burn"))) (target (node (document "memory://snapshot/model.sysml") (qualified-name "Nested::Drive::propel"))) (provenance implied))
@@ -436,8 +438,8 @@ package Nested {
 ## diagram.json
 ~~~json
 {
-  "schemaVersion": 10,
-  "modelDigest": "blake3:797c2f51ac1d30130726dee8acaf809946b7423331d328ffe62e58634ce9f32e",
+  "schemaVersion": 12,
+  "modelDigest": "blake3:745c0c7e0f8a9eeee9fa1a5665fdbcc936070e9c8dc60a122381e3c0fd8c2368",
   "documents": [
     {
       "uri": "memory://snapshot/model.sysml",
@@ -916,7 +918,7 @@ package Nested {
     },
     {
       "kind": "relationship",
-      "ordinal": 34,
+      "ordinal": 36,
       "relationshipKind": "thenTarget",
       "source": 4
     },
@@ -940,43 +942,43 @@ package Nested {
     },
     {
       "kind": "relationship",
-      "ordinal": 36,
+      "ordinal": 38,
       "relationshipKind": "typing",
       "source": 6
     },
     {
       "kind": "relationship",
+      "ordinal": 25,
+      "relationshipKind": "redefinition",
+      "source": 10
+    },
+    {
+      "kind": "relationship",
+      "ordinal": 43,
+      "relationshipKind": "redefinition",
+      "source": 10
+    },
+    {
+      "kind": "relationship",
       "ordinal": 24,
-      "relationshipKind": "redefinition",
-      "source": 10
-    },
-    {
-      "kind": "relationship",
-      "ordinal": 41,
-      "relationshipKind": "redefinition",
-      "source": 10
-    },
-    {
-      "kind": "relationship",
-      "ordinal": 23,
       "relationshipKind": "typing",
       "source": 10
     },
     {
       "kind": "relationship",
-      "ordinal": 40,
+      "ordinal": 42,
       "relationshipKind": "typing",
       "source": 10
     },
     {
       "kind": "relationship",
-      "ordinal": 29,
+      "ordinal": 30,
       "relationshipKind": "redefinition",
       "source": 11
     },
     {
       "kind": "relationship",
-      "ordinal": 46,
+      "ordinal": 48,
       "relationshipKind": "redefinition",
       "source": 11
     },
@@ -994,13 +996,13 @@ package Nested {
     },
     {
       "kind": "relationship",
-      "ordinal": 28,
+      "ordinal": 29,
       "relationshipKind": "typing",
       "source": 11
     },
     {
       "kind": "relationship",
-      "ordinal": 45,
+      "ordinal": 47,
       "relationshipKind": "typing",
       "source": 11
     }
@@ -1216,6 +1218,7 @@ package Nested {
         "name": "Drive",
         "notationRole": "definition",
         "owner": null,
+        "presentationKey": "p:87ea6a7fe25c3da5019d3e08f10996ea72347e32e69cdfd5eaa8c534047ed03c",
         "reference": 1,
         "source": 0,
         "stateSubaction": null,
@@ -1234,6 +1237,7 @@ package Nested {
         "name": null,
         "notationRole": "unsupported",
         "owner": 0,
+        "presentationKey": "p:954f49baa17381d6b25772056a373b55210db7934558e237e9ad2c8212b1f9d3",
         "reference": 14,
         "source": 10,
         "stateSubaction": null,
@@ -1252,6 +1256,7 @@ package Nested {
         "name": null,
         "notationRole": "unsupported",
         "owner": 0,
+        "presentationKey": "p:ab505040dd34ca8913bf8758ec36bfda505eee36585ff7f263b638d6fbd359e7",
         "reference": 15,
         "source": 13,
         "stateSubaction": null,
@@ -1270,6 +1275,7 @@ package Nested {
         "name": null,
         "notationRole": "unsupported",
         "owner": 0,
+        "presentationKey": "p:efa85882d2dc690c2765d1e9b2e96fa5064b4c1055a5099804b66e175bca298a",
         "reference": 16,
         "source": 16,
         "stateSubaction": null,
@@ -1304,6 +1310,7 @@ package Nested {
         "name": "propel",
         "notationRole": "usage",
         "owner": 0,
+        "presentationKey": "p:99f276f5eb758fc1478080e836fbe14f4ea6a671209bc0aeb6e9f32f8bf8c956",
         "reference": 3,
         "source": 1,
         "stateSubaction": null,
@@ -1322,6 +1329,7 @@ package Nested {
         "name": null,
         "notationRole": "unsupported",
         "owner": 4,
+        "presentationKey": "p:6e8f7c8972fd33e95e2c6a82813a311300114ecb0502b77a89916eba0388ec81",
         "reference": 17,
         "source": 2,
         "stateSubaction": null,
@@ -1340,6 +1348,7 @@ package Nested {
         "name": null,
         "notationRole": "unsupported",
         "owner": 4,
+        "presentationKey": "p:3807b4f3c6766bb1b081aefcd60fd2caaac5cc00d14ed4e01af1a37eff34c850",
         "reference": 18,
         "source": 6,
         "stateSubaction": null,
@@ -1358,6 +1367,7 @@ package Nested {
         "name": "burn",
         "notationRole": "usage",
         "owner": 4,
+        "presentationKey": "p:ecd91dd0ac6c738c04ffa4f3f70cea8ab167f309e391a0429c8388e2f4ad6bbd",
         "reference": 5,
         "source": 4,
         "stateSubaction": null,
@@ -1382,6 +1392,7 @@ package Nested {
         "name": "done",
         "notationRole": "usage",
         "owner": 4,
+        "presentationKey": "p:c6611ffbd166378137c097581130058dd41cf935d8d21fbc68482bb7b3b8bf8a",
         "reference": 10,
         "source": 23,
         "stateSubaction": null,
@@ -1406,6 +1417,7 @@ package Nested {
         "name": "start",
         "notationRole": "usage",
         "owner": 4,
+        "presentationKey": "p:7258247df34b2f13a58c5a70e1f9bf0ec2d741458e789fd21d75aa4e1b14f2f8",
         "reference": 11,
         "source": 20,
         "stateSubaction": null,
@@ -1430,6 +1442,7 @@ package Nested {
         "name": "transmit",
         "notationRole": "usage",
         "owner": 0,
+        "presentationKey": "p:e7bbf7a984d4bc6349aa76cdcfc8b81af2d415c074a6ce374ef05760dfa6d881",
         "reference": 6,
         "source": 8,
         "stateSubaction": null,
@@ -1454,6 +1467,7 @@ package Nested {
         "name": "done",
         "notationRole": "usage",
         "owner": 0,
+        "presentationKey": "p:a5cc5e33443da51fad18b07fae7fc7045cdf33f818f99a1a9f5acfdbc01eeff0",
         "reference": 10,
         "source": 23,
         "stateSubaction": null,
@@ -1478,6 +1492,7 @@ package Nested {
         "name": "start",
         "notationRole": "usage",
         "owner": 0,
+        "presentationKey": "p:887041b2f627cd74109445e8e7efad94c899ce42c79fedc7ba46697de645cd88",
         "reference": 11,
         "source": 20,
         "stateSubaction": null,

@@ -100,6 +100,7 @@ pub(crate) fn write_expressions(
         write!(output, "  (declaration (id ")?;
         write_node_identity(model, declaration, output)?;
         write!(output, ") (outcome {})", row.outcome.as_str())?;
+        write_result_typing(model, &row.result_typing, output)?;
         if let Some(root) = row.root {
             output.write_char(' ')?;
             write_resolved_expression_node(model, &row.nodes, root, output)?;
@@ -153,6 +154,12 @@ pub(crate) fn write_expressions(
                     output.write_str(") (authored-element ")?;
                     write_node_identity(model, *origin, output)?;
                     write!(output, ") (outcome {})", row.outcome.as_str())?;
+                    write_result_typing(model, &row.result_typing, output)?;
+                    write!(output, " (evaluation {})", contextual.evaluation.as_str())?;
+                    if let Some(value) = contextual.evaluation.value() {
+                        output.write_char(' ')?;
+                        write_evaluated_scalar(value, output)?;
+                    }
                     if let Some(root) = row.root {
                         output.write_char(' ')?;
                         write_resolved_expression_node(model, &row.nodes, root, output)?;
@@ -178,6 +185,31 @@ pub(crate) fn write_expressions(
     writeln!(output, ")")
 }
 
+fn write_result_typing(
+    model: &ResolvedSemanticModel,
+    typing: &crate::index::expression_typing::RawResultTyping,
+    output: &mut dyn fmt::Write,
+) -> fmt::Result {
+    use crate::index::expression_typing::RawResultTyping;
+    let (status, collection, values) = match typing {
+        RawResultTyping::Unsettled => return Err(fmt::Error),
+        RawResultTyping::Resolved(types) => ("resolved", "types", types.as_ref()),
+        RawResultTyping::Ambiguous(functions) => ("ambiguous", "functions", functions.as_ref()),
+        RawResultTyping::Unresolved => ("unresolved", "types", &[][..]),
+        RawResultTyping::Unsupported => ("unsupported", "types", &[][..]),
+    };
+    write!(output, " (result-typing (status {status})")?;
+    if !values.is_empty() {
+        write!(output, " ({collection}")?;
+        for value in values {
+            output.write_char(' ')?;
+            write_node_identity(model, *value, output)?;
+        }
+        output.write_char(')')?;
+    }
+    output.write_char(')')
+}
+
 /// Renders one node of a settled resolved-expression tree. Shared by the `EXPRESSIONS` section
 /// and the metadata-annotation body values, which reuse the same tree.
 pub(crate) fn write_resolved_expression_node(
@@ -192,6 +224,31 @@ pub(crate) fn write_resolved_expression_node(
         return output.write_str("(invalid-node)");
     };
     match &node.kind {
+        RawExpressionNodeKind::Invocation { callee, arguments } => {
+            output.write_str("(invocation (callee ")?;
+            write_resolved_expression_node(model, nodes, *callee, output)?;
+            output.write_str(") (arguments")?;
+            for argument in arguments.iter() {
+                output.write_char(' ')?;
+                write_resolved_expression_node(model, nodes, *argument, output)?;
+            }
+            output.write_str("))")
+        }
+        RawExpressionNodeKind::Sequence { elements } => {
+            output.write_str("(sequence")?;
+            for element in elements.iter() {
+                output.write_char(' ')?;
+                write_resolved_expression_node(model, nodes, *element, output)?;
+            }
+            output.write_char(')')
+        }
+        RawExpressionNodeKind::MetaCast { operand, metaclass } => {
+            output.write_str("(meta-cast ")?;
+            write_resolved_expression_node(model, nodes, *operand, output)?;
+            output.write_char(' ')?;
+            write_resolved_expression_node(model, nodes, *metaclass, output)?;
+            output.write_char(')')
+        }
         RawExpressionNodeKind::Literal(value) => {
             output.write_str("(literal ")?;
             write_evaluated_scalar(value, output)?;
@@ -385,7 +442,12 @@ pub(crate) fn write_projection(
     output: &mut dyn fmt::Write,
 ) -> fmt::Result {
     let projection = match model
-        .model_projection(usize::MAX, *source_digest, *model_digest)
+        .model_projection(
+            usize::MAX,
+            *source_digest,
+            *model_digest,
+            crate::projection::LibraryElementInclusion::None,
+        )
         .answer
     {
         crate::QueryAnswer::Resolved(projection) => projection,
@@ -434,11 +496,100 @@ pub(crate) fn write_projection(
         };
         write!(output, "  (element ")?;
         write_node_identity(model, id, output)?;
+        if let Some(role) = element.details.inspection.role {
+            write!(output, " (membership-role {})", role.as_str())?;
+        }
+        if let Some(kind) = element.details.inspection.trigger_kind {
+            write!(output, " (trigger-kind {})", kind.as_str())?;
+        }
         write!(
             output,
             " (expression {})",
             element.expression.outcome.as_str()
         )?;
+        if let Some(name) = element
+            .effective_name
+            .as_deref()
+            .filter(|name| element.details.inspection.name.as_deref() != Some(*name))
+        {
+            write!(output, " (effective-name ")?;
+            write_quoted(output, name)?;
+            write!(output, ")")?;
+        }
+        if let Some(name) = element
+            .effective_qualified_name
+            .as_deref()
+            .filter(|name| *name != model.qualified_name(id))
+        {
+            write!(output, " (effective-qualified-name ")?;
+            write_quoted(output, name)?;
+            write!(output, ")")?;
+        }
+        if let Some(bounds) = &element.multiplicity_expressions {
+            write!(output, " (multiplicity-expressions")?;
+            for (role, bound) in [
+                ("range", Some(bounds.range)),
+                ("lower", bounds.lower),
+                ("upper", bounds.upper),
+            ] {
+                if let Some(bound) = bound.and_then(|symbol| model.declaration_of(symbol)) {
+                    write!(output, " ({role} ")?;
+                    write_node_identity(model, bound, output)?;
+                    write!(output, ")")?;
+                }
+            }
+            write!(output, ")")?;
+        }
+        if let Some(exposure) = element.exposure {
+            write!(
+                output,
+                " (exposure (namespace {}) (recursive {}) (filtered {}))",
+                exposure.namespace, exposure.recursive, exposure.filtered
+            )?;
+        }
+        if !matches!(
+            element.details.evaluation.state,
+            crate::EvaluationState::NotApplicable
+        ) {
+            write!(
+                output,
+                " (evaluation {})",
+                element.details.evaluation.state.as_str()
+            )?;
+            if let Some(value) = element.details.evaluation.state.value() {
+                write!(output, " ")?;
+                write_evaluated_scalar(value, output)?;
+            }
+        }
+        for contextual in &element.contextual_evaluations {
+            output.write_str(" (contextual-evaluation (element ")?;
+            let requested = model.declaration_of(contextual.element).ok_or(fmt::Error)?;
+            write_node_identity(model, requested, output)?;
+            output.write_str(")")?;
+            match &contextual.outcome {
+                crate::ContextualEvaluationOutcome::Resolved(state) => {
+                    write!(output, " (status {})", state.as_str())?;
+                    if let Some(value) = state.value() {
+                        output.write_char(' ')?;
+                        write_evaluated_scalar(value, output)?;
+                    }
+                }
+                crate::ContextualEvaluationOutcome::Unresolved => {
+                    output.write_str(" (status unresolved)")?
+                }
+                crate::ContextualEvaluationOutcome::Ambiguous(_) => {
+                    output.write_str(" (status ambiguous)")?
+                }
+            }
+            output.write_char(')')?;
+        }
+        match &element.details.analysis {
+            crate::AnalysisEvaluation::NotApplicable => {}
+            crate::AnalysisEvaluation::Verdict(passed) => {
+                write!(output, " (analysis (verdict {passed}))")?
+            }
+            analysis => write!(output, " (analysis {})", analysis.as_str())?,
+        }
         if !element.metadata_annotations.is_empty() {
             write!(
                 output,
@@ -1137,11 +1288,15 @@ pub(crate) fn write_declaration_facts(
         && facts.positional_end.is_none()
         && facts.cross_feature_projection.is_none()
         && facts.expression_result.is_none()
+        && facts.trigger_kind.is_none()
         && !facts.is_individual_multiplicity
     {
         return Ok(());
     }
     output.write_str(" (facts")?;
+    if let Some(kind) = facts.trigger_kind {
+        write!(output, " (trigger-kind {})", kind.as_str())?;
+    }
     match facts.short_name {
         crate::lower::facts::DeclaredName::Absent => {}
         crate::lower::facts::DeclaredName::Malformed => {
@@ -1523,6 +1678,7 @@ pub(crate) fn write_units(
                     }
                 }
                 expression::UnitOutcome::UnknownSymbol => write!(output, "(status unknown)")?,
+                expression::UnitOutcome::Unresolved => write!(output, "(status unresolved)")?,
                 expression::UnitOutcome::Ambiguous(candidates) => {
                     write!(output, "(status ambiguous)")?;
                     for candidate in candidates.iter() {
@@ -2200,7 +2356,6 @@ pub(crate) fn declaration_kind(kind: DeclarationKind) -> &'static str {
         DeclarationKind::DoActionBinding => "do-action-binding",
         DeclarationKind::ExitActionBinding => "exit-action-binding",
         DeclarationKind::InitialState => "initial-state",
-        DeclarationKind::FinalState => "final-state",
         DeclarationKind::ParameterUsage => "parameter",
         DeclarationKind::SubjectUsage => "subject",
         DeclarationKind::PerformActionUsage => "perform-action",
@@ -2327,6 +2482,7 @@ pub(crate) fn reference_kind(kind: ReferenceKind) -> &'static str {
         ReferenceKind::MetadataAnnotationAbout => "metadataAnnotationAbout",
         ReferenceKind::Annotation => "annotation",
         ReferenceKind::FilterMetadataTest => "filterMetadataTest",
+        ReferenceKind::QuantityUnit => "quantityUnit",
         ReferenceKind::SatisfySource => "satisfySource",
         ReferenceKind::SatisfyTarget => "satisfyTarget",
         ReferenceKind::AllocateSource => "allocateSource",
@@ -2362,10 +2518,11 @@ pub(crate) fn reference_kind(kind: ReferenceKind) -> &'static str {
 ///
 /// Distinct from [`reference_kind`], which names the production that wrote it: `featureTyping` is
 /// the reference an author writes and `typing` is the relationship it establishes. `None` for the
-/// import kinds, which bring names into scope rather than relating two elements.
+/// import kinds, which bring names into scope rather than relating two elements, and for a quantity
+/// unit, which the expression facts publish.
 pub(crate) fn relationship_kind(kind: ReferenceKind) -> Option<&'static str> {
     match kind {
-        ReferenceKind::ExplicitRelationshipEndpoint => None,
+        ReferenceKind::ExplicitRelationshipEndpoint | ReferenceKind::QuantityUnit => None,
         ReferenceKind::FeatureTyping => Some("typing"),
         ReferenceKind::TypeFeaturing => Some("typeFeaturing"),
         ReferenceKind::FeatureChaining => Some("featureChaining"),

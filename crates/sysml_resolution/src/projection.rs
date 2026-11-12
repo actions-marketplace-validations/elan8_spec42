@@ -33,9 +33,10 @@ use crate::{ElementSource, PublicationCompleteness, SymbolId};
 
 /// The schema version of [`PublishedModelProjection`] and everything it carries.
 ///
-/// Bumped only when a field is removed or retyped; adding a field is backwards-compatible and
-/// does not bump it. A consumer that pins a major version can refuse an unknown one.
-pub const MODEL_PROJECTION_SCHEMA_VERSION: u32 = 1;
+/// Bumped when a field is removed or retyped, including the closed expression-node vocabulary;
+/// adding optional fields alone does not bump it. Schema 2 adds invocation, sequence and meta-cast
+/// nodes. A consumer that pins a major version can refuse an unknown one.
+pub const MODEL_PROJECTION_SCHEMA_VERSION: u32 = 2;
 
 /// A read-only, deterministic projection of one publication's workspace-authored structure.
 ///
@@ -113,16 +114,33 @@ impl ProjectionPhase {
     }
 }
 
-/// How many non-workspace documents took part in resolution, by provenance.
+/// How many documents took part in resolution, by provenance.
 ///
-/// Their elements are not enumerated in [`PublishedModelProjection::elements`]; a consumer that
-/// needs to know a library participated reads it here rather than inferring it from an opaque
-/// source digest.
+/// The snapshot renderer still reports only the non-workspace counts. JSON export includes
+/// `workspace` as well, so a publication that admitted no workspace documents is visible without
+/// inferring it from an empty element list.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
 pub struct AdmittedSourceCounts {
+    pub workspace: usize,
     pub standard_library: usize,
     pub library: usize,
     pub external: usize,
+}
+
+/// Which non-workspace elements a model projection includes.
+///
+/// The default is the workspace publication. `Referenced` adds elements named by workspace
+/// typing, specialization, subsetting, or redefinition, recursively including relationship
+/// targets and owned members of library and external elements. `All` adds every admitted
+/// library and external element. Standard-library elements stay out of `All`; a standard-library
+/// element appears in `Referenced` only when a selected element's relationship names it, and its
+/// owned members are not pulled in with it.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub enum LibraryElementInclusion {
+    #[default]
+    None,
+    Referenced,
+    All,
 }
 
 /// One workspace element, with everything the publication settled about it.
@@ -131,17 +149,55 @@ pub struct ProjectedElement {
     /// Stable within this publication; materialise a [`crate::SymbolToken`] through
     /// `PublishedModel` to cross a boundary.
     pub identity: SymbolId,
-    /// Always [`ElementSource::Workspace`] in schema version 1; kept explicit so a later version
-    /// can widen the element set without a breaking change.
+    /// [`ElementSource::Workspace`] unless the caller asked for library elements.
     pub source: ElementSource,
     /// The same answer `inspection().element_details()` publishes: kind, name, location,
     /// membership, modifiers, multiplicity, direction, documentation, the four relationship
     /// families, effective typing, inherited features, metadata bindings, and incoming / outgoing
     /// relationships.
     pub details: ElementDetails,
+    /// Settled effective names, separate from the declaration's authored identification.
+    /// An absent value means no complete effective name is available.
+    pub effective_name: Option<Box<str>>,
+    pub effective_qualified_name: Option<Box<str>>,
+    /// Authored bound expressions; a single-bound range has only an upper expression.
+    pub multiplicity_expressions: Option<ProjectedMultiplicity>,
+    pub exposure: Option<ProjectedExposure>,
     /// The element's resolved constraint / calc / value expression, or
     /// [`crate::ExpressionOutcome::NotApplicable`] when it authored none.
     pub expression: PublishedExpression,
+    /// Inherited expressions interpreted with this element's effective bindings.
+    pub contextual_evaluations: Box<[ProjectedContextualEvaluation]>,
     /// Every metadata annotation bound to the element, in canonical order.
     pub metadata_annotations: Box<[PublishedMetadataAnnotation]>,
+}
+
+#[derive(Debug, Clone, PartialEq)]
+pub struct ProjectedContextualEvaluation {
+    pub element: SymbolId,
+    pub authored_element: SymbolId,
+    pub effective_element: SymbolId,
+    pub outcome: ContextualEvaluationOutcome,
+}
+
+#[derive(Debug, Clone, PartialEq)]
+pub enum ContextualEvaluationOutcome {
+    Resolved(crate::EvaluationState),
+    Unresolved,
+    Ambiguous(Box<[SymbolId]>),
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ProjectedMultiplicity {
+    pub range: SymbolId,
+    pub lower: Option<SymbolId>,
+    pub upper: Option<SymbolId>,
+}
+
+/// Authored exposure shape, read from the canonical ViewExpose relationship flags.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct ProjectedExposure {
+    pub namespace: bool,
+    pub recursive: bool,
+    pub filtered: bool,
 }

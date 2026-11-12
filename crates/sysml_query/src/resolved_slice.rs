@@ -12,13 +12,14 @@ pub use sysml_resolution::{
     ActionDerivedFactOutcome, ActionDerivedFactPrerequisite, AdmittedSourceCounts,
     AffectedDocument, AnalysisEvaluation, AnnotationForm, AnonymousElementReference, AuthoredUnit,
     AuthoredValue, BindingConnector, BindingConnectorCheckKind, BindingConnectorValidationOutcome,
-    BindingConnectorValidationPrerequisite, BuildMeasurements, Conformance, ConformanceObstacle,
-    ConnectedElement, ConnectorEndpoint, ConnectorKind, DefinitionUsageDerivedKind,
-    DefinitionUsageDerivedOutcome, DefinitionUsageDerivedPrerequisite, DerivationEndpoint,
-    DerivationRelationship, DerivedElementOwner, Diagnostic, DiagnosticCategory, DiagnosticCode,
-    DiagnosticLocation, DiagnosticOrigin, DiagnosticSeverity, DiagramBrowserMembers,
-    DiagramBrowserRow, DiagramCompartment, DiagramCompartmentKind, DiagramCompartmentProvenance,
-    DiagramEdge, DiagramEdgeKind, DiagramElement, DiagramElementTyping, DiagramEndpointOccurrence,
+    BindingConnectorValidationPrerequisite, BuildMeasurements, CompletionImports, Conformance,
+    ConformanceObstacle, ConnectedElement, ConnectorEndpoint, ConnectorKind,
+    ContextualEvaluationOutcome, DefinitionUsageDerivedKind, DefinitionUsageDerivedOutcome,
+    DefinitionUsageDerivedPrerequisite, DerivationEndpoint, DerivationRelationship,
+    DerivedElementOwner, Diagnostic, DiagnosticCategory, DiagnosticCode, DiagnosticLocation,
+    DiagnosticOrigin, DiagnosticSeverity, DiagramBrowserMembers, DiagramBrowserRow,
+    DiagramCompartment, DiagramCompartmentKind, DiagramCompartmentProvenance, DiagramEdge,
+    DiagramEdgeKind, DiagramElement, DiagramElementTyping, DiagramEndpointOccurrence,
     DiagramIncompleteReason, DiagramMembership, DiagramOccurrenceIdentity, DiagramRelationship,
     DiagramRelationshipEndpoint, DiagramRelationshipKind, DiagramRelationshipTarget, DiagramScene,
     DiagramSemanticReference, DiagramSequenceCycleStep, DiagramSequenceEndpoint,
@@ -31,29 +32,34 @@ pub use sysml_resolution::{
     ElementInspection, ElementInspectionAt, ElementKind, ElementModifier, ElementRelationship,
     ElementSearch, ElementSource, EvaluatedScalar, EvaluationFailure, EvaluationState,
     ExpectedMeasurement, ExpressionNode, ExpressionNodeKind, ExpressionOperator, ExpressionOutcome,
-    FeatureDerivedRelationshipCollection, FeatureDirection, InheritedFeature,
+    ExpressionResultTyping, FeatureDerivedRelationshipCollection, FeatureDirection,
+    ImplicitRedefinitionRepair, ImportCandidate, ImportChoice, ImportPlan, ImportRemainder,
+    ImportRemainderReason, InheritedFeature, LibraryElementInclusion,
     LibrarySpecializationAnchorBranch, MembershipFacts, MembershipId, MembershipKind,
     MembershipRelationship, MembershipRole, MetadataAnnotationForm, MetadataAnnotationValue,
     MultiplicityBound, MultiplicityFacts, NamespaceDerivedElementCollection,
-    NamespaceImportDerivedElement, NavigationTarget, OccurrenceRole, PortionKind, ProjectedElement,
+    NamespaceImportDerivedElement, NavigationTarget, OccurrenceRole, PortionKind,
+    ProjectedContextualEvaluation, ProjectedElement, ProjectedExposure, ProjectedMultiplicity,
     ProjectionEnvelope, ProjectionPhase, ProjectionTruncation, PublicationCompleteness,
     PublicationIdentity, PublicationModelDigest, PublicationObstacle, PublishedConnectionGraph,
     PublishedConnector, PublishedConnectorEnd, PublishedDiagnostics, PublishedElement,
     PublishedExpression, PublishedMetadataAnnotation, PublishedModelProjection,
-    QualifiedElementReference, QualifiedReferenceOutcome, QualifiedReferenceTarget, QueryAnswer,
-    QueryOutcome, RedefinitionCheckKind, RedefinitionCheckOutcome, RedefinitionCheckPrerequisite,
-    ReferenceAt, ReferencedDetails, RelatedLocation, RelationshipFamily, RelationshipOutcome,
-    RelationshipProvenance, RelationshipTarget, RenameOutcome, RequirementConstraintKind,
-    RequirementDerivedFactCollection, RequirementDerivedFactKind, RequirementDerivedFactOutcome,
-    RequirementDerivedFactPrerequisite, RequirementUsageTyping, RequirementVerification,
-    ResolvedUnit, SatisfyEndpoint, SatisfyPolarity, SatisfyRelationship, SourceLocation,
-    SpecializationCheckKind, SpecializationCheckOutcome, SpecializationCheckPrerequisite,
-    SpecializationScope, StateSubactionKind, SubsettingConformance, SymbolEntry, SymbolId,
-    SymbolToken, TextId, TextPosition, TextRange, TypeDerivedElementCollection,
-    TypeDerivedFactCollection, TypeDerivedFactKind, TypeDerivedFactOutcome,
-    TypeDerivedFactPrerequisite, TypeDerivedFactValue, TypeDerivedRelationshipCollection,
-    TypeFeaturingCheckKind, TypeFeaturingCheckOutcome, TypeFeaturingCheckPrerequisite,
-    TypeReference, UnitResolution, ValueKind, VerificationOutcome, VerificationRequirement,
+    QualificationCandidate, QualifiedElementReference, QualifiedReferenceOutcome,
+    QualifiedReferenceTarget, QueryAnswer, QueryOutcome, RedefinitionCheckKind,
+    RedefinitionCheckOutcome, RedefinitionCheckPrerequisite, ReferenceAt, ReferenceRepair,
+    ReferenceRepairOutcome, ReferencedDetails, RelatedLocation, RelationshipFamily,
+    RelationshipOutcome, RelationshipProvenance, RelationshipTarget, RenameOutcome,
+    RepairNamespace, RepairSlot, RequirementConstraintKind, RequirementDerivedFactCollection,
+    RequirementDerivedFactKind, RequirementDerivedFactOutcome, RequirementDerivedFactPrerequisite,
+    RequirementUsageTyping, RequirementVerification, ResolvedUnit, SatisfyEndpoint,
+    SatisfyPolarity, SatisfyRelationship, SourceLocation, SpecializationCheckKind,
+    SpecializationCheckOutcome, SpecializationCheckPrerequisite, SpecializationScope,
+    StateSubactionKind, SubsettingConformance, SymbolEntry, SymbolId, SymbolToken, TextId,
+    TextPosition, TextRange, TriggerKind, TypeDerivedElementCollection, TypeDerivedFactCollection,
+    TypeDerivedFactKind, TypeDerivedFactOutcome, TypeDerivedFactPrerequisite, TypeDerivedFactValue,
+    TypeDerivedRelationshipCollection, TypeFeaturingCheckKind, TypeFeaturingCheckOutcome,
+    TypeFeaturingCheckPrerequisite, TypeReference, UnitResolution, UnsupportedConstruct,
+    UnsupportedConstructId, ValueKind, VerificationOutcome, VerificationRequirement,
     ViewExposedElements, ViewExposureObstacle, Visibility, VisibilityProvenance, VisibleMemberRef,
     VisibleMembers,
 };
@@ -101,6 +107,13 @@ impl PublishedModel {
     /// one. Borrowed, so showing a name costs no allocation.
     pub fn qualified_name(&self, symbol: SymbolId) -> Option<&str> {
         self.inner.qualified_name(symbol)
+    }
+
+    /// The escaped qualified name that names exactly this element in source: KerML
+    /// `deriveElementQualifiedName`. Composed on request, so this allocates; `None` where a
+    /// segment is unnamed or not unique.
+    pub fn element_qualified_name(&self, symbol: SymbolId) -> Option<String> {
+        self.inner.element_qualified_name(symbol)
     }
 
     /// One run of authored text, borrowed from this publication.
@@ -364,6 +377,14 @@ pub struct DiagnosticQueries<'a> {
 }
 
 impl<'a> DiagnosticQueries<'a> {
+    /// Read an unsupported construct independently of its document's diagnostic reporting scope.
+    pub fn unsupported_construct(
+        &self,
+        id: UnsupportedConstructId,
+    ) -> Option<UnsupportedConstruct> {
+        self.model.unsupported_construct(id)
+    }
+
     /// The published diagnostics, canonically ordered, with the completeness of the publication
     /// that produced them. Only workspace-authored documents are reported.
     pub fn published(&self) -> PublishedDiagnostics<'a> {
@@ -420,9 +441,15 @@ impl StructureQueries<'_> {
         self.model.contextual_expression(symbol, context)
     }
     /// The resolved expression tree of one element's authored constraint / calc / value
-    /// expression.
+    /// expression. A feature with no expression of its own answers with its value expression.
     pub fn expression(&self, symbol: SymbolId) -> QueryOutcome<PublishedExpression> {
         self.model.resolved_expression(symbol)
+    }
+
+    /// One workspace connector and its resolved ends, including each hop of a dotted end.
+    /// `None` when `symbol` is not a workspace `connect` / `interface` connector.
+    pub fn connector(&self, symbol: SymbolId) -> QueryOutcome<Option<PublishedConnector>> {
+        self.model.connector(symbol)
     }
 }
 
@@ -440,6 +467,15 @@ impl ProjectionQueries<'_> {
     /// `usize::MAX` for the whole workspace.
     pub fn model(&self, max_nodes: usize) -> QueryOutcome<PublishedModelProjection> {
         self.model.model_projection(max_nodes)
+    }
+
+    /// [`Self::model`] with an explicit library-element scope. `None` is the workspace publication.
+    pub fn model_including(
+        &self,
+        max_nodes: usize,
+        inclusion: LibraryElementInclusion,
+    ) -> QueryOutcome<PublishedModelProjection> {
+        self.model.model_projection_including(max_nodes, inclusion)
     }
 }
 
@@ -639,6 +675,50 @@ impl EditQueries<'_> {
     ) -> RenameOutcome {
         self.model.prepare_rename(document, position, new_name)
     }
+
+    /// What an editor may offer to repair the unresolved or ambiguous reference at `position`.
+    pub fn reference_repair(
+        &self,
+        document: &str,
+        position: TextPosition,
+    ) -> QueryOutcome<ReferenceRepair> {
+        self.model.reference_repair(document, position)
+    }
+
+    /// Canonical escaped membership spelling, including public alias memberships.
+    pub fn import_path(&self, target: SymbolId) -> Option<String> {
+        self.model.import_path(target)
+    }
+
+    /// Materialize the escaped unqualified membership spelling only when emitting an edit.
+    pub fn import_reference_spelling(&self, target: SymbolId) -> Option<String> {
+        self.model.import_reference_spelling(target)
+    }
+
+    /// A safe, deduplicated import transaction for all unambiguous references in this document.
+    pub fn missing_import_plan(&self, document: &str) -> QueryOutcome<ImportPlan> {
+        self.model.missing_import_plan(document)
+    }
+
+    /// Revalidate the selected completion using the canonical resolver with its private import.
+    pub fn validate_completion_import(
+        &self,
+        document: &str,
+        position: TextPosition,
+        target: SymbolId,
+    ) -> QueryOutcome<ImportChoice> {
+        self.model
+            .validate_completion_import(document, position, target)
+    }
+
+    /// The explicit `:>>` repair for the declaration at `position`.
+    pub fn implicit_redefinition_repair(
+        &self,
+        document: &str,
+        position: TextPosition,
+    ) -> QueryOutcome<ImplicitRedefinitionRepair> {
+        self.model.implicit_redefinition_repair(document, position)
+    }
 }
 
 pub struct CompletionQueries<'a> {
@@ -646,6 +726,17 @@ pub struct CompletionQueries<'a> {
 }
 
 impl<'a> CompletionQueries<'a> {
+    pub fn import_candidates(
+        &self,
+        document: &str,
+        position: TextPosition,
+        prefix: &str,
+        expected: &[ElementKind],
+    ) -> QueryOutcome<CompletionImports> {
+        self.model
+            .completion_imports(document, position, prefix, expected)
+    }
+
     /// The members visible at a position, as a borrowed view over the publication.
     ///
     /// The view outlives this query handle: it borrows the publication, not the handle, so a
@@ -950,6 +1041,10 @@ pub struct EditorProbe {
     pub rename_to: Option<String>,
     /// Include ordered feature collections and effective identification in the projection.
     pub features: bool,
+    /// Include the reference and declaration repairs an editor may offer at the position.
+    pub repairs: bool,
+    pub import_prefix: Option<String>,
+    pub fix_imports: bool,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -1048,6 +1143,62 @@ impl DebugQueries<'_> {
                         write_feature_queries(model, output, element.inspection.identity)?;
                     }
                 }
+            }
+            if probe.repairs {
+                write_repairs(
+                    model,
+                    output,
+                    &self.model.reference_repair(&probe.document, probe.position),
+                    &self
+                        .model
+                        .implicit_redefinition_repair(&probe.document, probe.position),
+                )?;
+            }
+            if let Some(prefix) = &probe.import_prefix {
+                let candidates =
+                    model.completion_imports(&probe.document, probe.position, prefix, &[]);
+                write!(output, "    (completion-imports ")?;
+                write_answer_status(output, &candidates.answer)?;
+                if let QueryAnswer::Resolved(choices) = candidates.answer {
+                    for choice in choices.choices.iter() {
+                        let valid = matches!(
+                            model
+                                .validate_completion_import(
+                                    &probe.document,
+                                    probe.position,
+                                    choice.candidate.target
+                                )
+                                .answer,
+                            QueryAnswer::Resolved(_)
+                        );
+                        write_import_choice(model, output, choice)?;
+                        write!(output, " (safe {valid})")?;
+                    }
+                }
+                writeln!(output, ")")?;
+            }
+            if probe.fix_imports {
+                let plan = model.missing_import_plan(&probe.document);
+                write!(output, "    (missing-imports ")?;
+                write_answer_status(output, &plan.answer)?;
+                if let QueryAnswer::Resolved(plan) = plan.answer {
+                    for choice in plan.imports.iter() {
+                        write_import_choice(model, output, choice)?;
+                    }
+                    write!(output, " (repaired")?;
+                    for range in plan.repaired.iter() {
+                        write!(output, " ")?;
+                        write_range(output, *range)?;
+                    }
+                    write!(output, ") (remaining")?;
+                    for remaining in plan.remaining.iter() {
+                        write!(output, " ({:?} ", remaining.reason)?;
+                        write_range(output, remaining.range)?;
+                        write!(output, ")")?;
+                    }
+                    write!(output, ")")?;
+                }
+                writeln!(output, ")")?;
             }
             writeln!(output, "  )")?;
         }
@@ -1324,6 +1475,131 @@ fn write_rename_outcome(
         RenameOutcome::Incomplete => write!(output, "(status incomplete)")?,
     }
     writeln!(output, ")")
+}
+
+fn write_answer_status<T>(output: &mut dyn fmt::Write, answer: &QueryAnswer<T>) -> fmt::Result {
+    let status = match answer {
+        QueryAnswer::Resolved(_) => "resolved",
+        QueryAnswer::Unresolved => "unresolved",
+        QueryAnswer::Ambiguous(_) => "ambiguous",
+        QueryAnswer::Unsupported => "unsupported",
+        QueryAnswer::Recovery => "recovery",
+        QueryAnswer::Incomplete => "incomplete",
+    };
+    write!(output, "(status {status})")
+}
+
+fn write_import_choice(
+    model: &sysml_resolution::PublishedResolution,
+    output: &mut dyn fmt::Write,
+    choice: &ImportChoice,
+) -> fmt::Result {
+    write!(
+        output,
+        " (import (target {:?}) (referent {:?}) (spelling {:?}) (namespace {:?}) ",
+        model
+            .import_path(choice.candidate.target)
+            .unwrap_or_default(),
+        model
+            .qualified_name(choice.candidate.referent)
+            .unwrap_or_default(),
+        model
+            .import_reference_spelling(choice.candidate.target)
+            .unwrap_or_default(),
+        choice
+            .namespace
+            .and_then(|n| model.qualified_name(n.symbol))
+            .unwrap_or_default()
+    )?;
+    write_range(output, choice.range)?;
+    write!(output, ")")
+}
+
+fn write_repairs(
+    model: &sysml_resolution::PublishedResolution,
+    output: &mut dyn fmt::Write,
+    reference: &QueryOutcome<ReferenceRepair>,
+    redefinition: &QueryOutcome<ImplicitRedefinitionRepair>,
+) -> fmt::Result {
+    let name = |symbol: SymbolId| model.qualified_name(symbol).unwrap_or_default();
+    writeln!(output, "    (repairs")?;
+    write!(output, "      (reference ")?;
+    write_answer_status(output, &reference.answer)?;
+    if let QueryAnswer::Resolved(repair) = &reference.answer {
+        let slot = match repair.slot {
+            RepairSlot::Typing => "typing",
+            RepairSlot::Specialization => "specialization",
+            RepairSlot::Other => "other",
+        };
+        write!(output, " ")?;
+        write_range(output, repair.range)?;
+        write!(output, " (slot {slot})")?;
+        match &repair.outcome {
+            ReferenceRepairOutcome::Unresolved {
+                name: authored,
+                imports,
+                namespace,
+                expected_definition,
+            } => {
+                write!(output, "\n        (unresolved")?;
+                if let Some(authored) = authored {
+                    write!(
+                        output,
+                        " (name {:?})",
+                        model.text(*authored).unwrap_or_default()
+                    )?;
+                }
+                match namespace {
+                    Some(namespace) => {
+                        write!(output, " (namespace {:?} ", name(namespace.symbol))?;
+                        write_range(output, namespace.identifier)?;
+                        write!(output, ")")?;
+                    }
+                    None => write!(output, " (namespace root)")?,
+                }
+                if let Some(kind) = expected_definition {
+                    write!(output, " (expected-definition {kind:?})")?;
+                }
+                for import in imports.iter() {
+                    write!(
+                        output,
+                        "\n          (import (path {:?}) (target {:?}) (kind {:?}) (library {}))",
+                        model
+                            .element_qualified_name(import.target)
+                            .unwrap_or_default(),
+                        name(import.target),
+                        import.kind,
+                        import.library
+                    )?;
+                }
+                write!(output, ")")?;
+            }
+            ReferenceRepairOutcome::Ambiguous { candidates } => {
+                write!(output, "\n        (ambiguous")?;
+                for candidate in candidates.iter() {
+                    write!(
+                        output,
+                        "\n          (qualify (name {:?}) (target {:?}) (kind {:?}))",
+                        model
+                            .element_qualified_name(candidate.target)
+                            .unwrap_or_default(),
+                        name(candidate.target),
+                        candidate.kind
+                    )?;
+                }
+                write!(output, ")")?;
+            }
+        }
+    }
+    writeln!(output, ")")?;
+    write!(output, "      (implicit-redefinition ")?;
+    write_answer_status(output, &redefinition.answer)?;
+    if let QueryAnswer::Resolved(repair) = &redefinition.answer {
+        write!(output, " (declaration {:?}) ", name(repair.declaration))?;
+        write_range(output, repair.identifier)?;
+        write!(output, " (redefined {:?})", name(repair.redefined))?;
+    }
+    writeln!(output, "))")
 }
 
 fn write_members_outcome(

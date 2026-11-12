@@ -32,6 +32,7 @@ mod metadata_query;
 mod model;
 mod namespace_query;
 mod pipeline;
+mod positions;
 mod projection;
 pub mod publication;
 mod qualified_reference;
@@ -58,7 +59,7 @@ pub use sysml_contract::{
     PublicationCompleteness, PublicationEvaluationPolicy, PublicationModelDigest,
     PublicationObstacle, QueryAnswer, QueryOutcome, RequirementConstraintKind,
     StandardLibraryAvailability, StateSubactionKind, SymbolId, SymbolToken, TextId, TextPosition,
-    TextRange,
+    TextRange, TriggerKind,
 };
 
 pub use sysml_source as source;
@@ -86,7 +87,8 @@ pub use details::{
 };
 pub use diagnostics::{
     Diagnostic, DiagnosticCategory, DiagnosticCode, DiagnosticLocation, DiagnosticOrigin,
-    DiagnosticSeverity, PublishedDiagnostics, RelatedLocation,
+    DiagnosticSeverity, PublishedDiagnostics, RelatedLocation, UnsupportedConstruct,
+    UnsupportedConstructId,
 };
 pub use diagram_query::{
     DiagramBrowserMembers, DiagramBrowserRow, DiagramCompartment, DiagramCompartmentKind,
@@ -106,7 +108,7 @@ pub use evaluation::{
 };
 pub use expression::{
     ContextualExpressionOutcome, ExpressionNode, ExpressionNodeKind, ExpressionOperator,
-    ExpressionOutcome, PublishedContextualExpression, PublishedExpression,
+    ExpressionOutcome, ExpressionResultTyping, PublishedContextualExpression, PublishedExpression,
 };
 pub use feature_query::FeatureDerivedRelationshipCollection;
 pub use inspection::{
@@ -124,10 +126,17 @@ pub use metadata_query::{
 pub use model::published_relationship_kinds;
 pub use model::query::VisibleMemberRef;
 pub use model::query::VisibleMembers;
+pub use model::query::{
+    CompletionImports, ImplicitRedefinitionRepair, ImportCandidate, ImportChoice, ImportPlan,
+    ImportRemainder, ImportRemainderReason, QualificationCandidate, ReferenceRepair,
+    ReferenceRepairOutcome, RepairNamespace, RepairSlot,
+};
 pub use namespace_query::{NamespaceDerivedElementCollection, NamespaceImportDerivedElement};
 pub use projection::{
-    AdmittedSourceCounts, ProjectedElement, ProjectionEnvelope, ProjectionPhase,
-    ProjectionTruncation, PublishedModelProjection, MODEL_PROJECTION_SCHEMA_VERSION,
+    AdmittedSourceCounts, ContextualEvaluationOutcome, LibraryElementInclusion,
+    ProjectedContextualEvaluation, ProjectedElement, ProjectedExposure, ProjectedMultiplicity,
+    ProjectionEnvelope, ProjectionPhase, ProjectionTruncation, PublishedModelProjection,
+    MODEL_PROJECTION_SCHEMA_VERSION,
 };
 pub use qualified_reference::{
     AnonymousElementReference, QualifiedElementReference, QualifiedReferenceOutcome,
@@ -903,6 +912,14 @@ impl PublishedResolution {
         self.model.published_diagnostics()
     }
 
+    /// Read the canonical unsupported diagnostic, independently of a source's reporting scope.
+    pub fn unsupported_construct(
+        &self,
+        id: UnsupportedConstructId,
+    ) -> Option<UnsupportedConstruct> {
+        self.model.unsupported_construct(id)
+    }
+
     /// The diagnostics of one admitted document, read from the publication's own index.
     ///
     /// A slice of the settled sequence, so the cost is proportional to what is returned rather
@@ -949,6 +966,58 @@ impl PublishedResolution {
         self.model.visible_members(document, position, qualifier)
     }
 
+    /// What an editor may offer to repair the unresolved or ambiguous reference at `position`.
+    pub fn reference_repair(
+        &self,
+        document: &str,
+        position: TextPosition,
+    ) -> QueryOutcome<ReferenceRepair> {
+        self.model.reference_repair(document, position)
+    }
+
+    pub fn completion_imports(
+        &self,
+        document: &str,
+        position: TextPosition,
+        prefix: &str,
+        expected: &[ElementKind],
+    ) -> QueryOutcome<CompletionImports> {
+        self.model
+            .completion_imports(document, position, prefix, expected)
+    }
+
+    pub fn validate_completion_import(
+        &self,
+        document: &str,
+        position: TextPosition,
+        target: SymbolId,
+    ) -> QueryOutcome<ImportChoice> {
+        self.model
+            .validate_completion_import(document, position, target)
+    }
+
+    pub fn import_path(&self, target: SymbolId) -> Option<String> {
+        self.model.import_path(target)
+    }
+
+    pub fn import_reference_spelling(&self, target: SymbolId) -> Option<String> {
+        self.model.import_reference_spelling(target)
+    }
+
+    pub fn missing_import_plan(&self, document: &str) -> QueryOutcome<ImportPlan> {
+        self.model.missing_import_plan(document)
+    }
+
+    /// The explicit `:>>` repair for the declaration at `position`, where its authored value
+    /// silently overrides the inherited member its name implicitly redefines.
+    pub fn implicit_redefinition_repair(
+        &self,
+        document: &str,
+        position: TextPosition,
+    ) -> QueryOutcome<ImplicitRedefinitionRepair> {
+        self.model.implicit_redefinition_repair(document, position)
+    }
+
     /// The settled evaluation of one element: value, state, authored units and required
     /// measurement, from facts this publication fixed before it became visible.
     pub fn evaluate(&self, symbol: SymbolId) -> QueryOutcome<ElementEvaluation> {
@@ -962,6 +1031,14 @@ impl PublishedResolution {
     /// structure resolution already builds -- it performs no new analysis.
     pub fn resolved_expression(&self, symbol: SymbolId) -> QueryOutcome<PublishedExpression> {
         self.model.resolved_expression(symbol)
+    }
+
+    /// One workspace `connect` / `interface` connector and its resolved ends.
+    ///
+    /// `Ok(None)` when `symbol` is not such a connector. Dotted ends keep one outcome per authored
+    /// segment, the same path [`PublishedConnector`] publishes for model export.
+    pub fn connector(&self, symbol: SymbolId) -> QueryOutcome<Option<PublishedConnector>> {
+        self.model.connector(symbol)
     }
 
     /// The effective expression body and bindings in a derived type or typed usage, with
@@ -1003,6 +1080,15 @@ impl PublishedResolution {
     /// consumer takes when it needs to keep something.
     pub fn qualified_name(&self, symbol: SymbolId) -> Option<&str> {
         self.model.symbol_qualified_name(symbol)
+    }
+
+    /// KerML `deriveElementQualifiedName`: the escaped `::`-joined name that names exactly this
+    /// element from the root namespace. `None` where a segment is unnamed or not unique.
+    ///
+    /// Composed on request rather than stored, so this allocates. It is how source that names an
+    /// element is written, which is what [`Self::qualified_name`]'s display path is not.
+    pub fn element_qualified_name(&self, symbol: SymbolId) -> Option<String> {
+        self.model.symbol_element_qualified_name(symbol)
     }
 
     /// One run of authored text, borrowed from this publication.
@@ -1286,10 +1372,20 @@ impl PublishedResolution {
     /// publication envelope. `max_nodes` bounds the element list (and the per-element composition
     /// work); use `usize::MAX` for the whole workspace.
     pub fn model_projection(&self, max_nodes: usize) -> QueryOutcome<PublishedModelProjection> {
+        self.model_projection_including(max_nodes, LibraryElementInclusion::None)
+    }
+
+    /// [`Self::model_projection`] with an explicit library-element scope.
+    pub fn model_projection_including(
+        &self,
+        max_nodes: usize,
+        inclusion: LibraryElementInclusion,
+    ) -> QueryOutcome<PublishedModelProjection> {
         self.model.model_projection(
             max_nodes,
             *self.identity.source_digest(),
             self.identity.model_digest(),
+            inclusion,
         )
     }
 

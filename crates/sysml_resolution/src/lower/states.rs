@@ -22,7 +22,7 @@ use crate::MembershipRole;
 use crate::StateSubactionKind;
 use sysml_v2_parser::ast::{
     ActionDefBody, DoAction, EntryAction, ExhibitState as ParserExhibitState, ExitAction,
-    Expression, FinalState, MembershipKind as ParserMembershipKind, Node, PerformActionTarget,
+    Expression, MembershipKind as ParserMembershipKind, Node, PerformActionTarget,
     QualifiedReferenceId, Span, StateActionUsage, StateBodyModifier, StateDef, StateDefBody,
     StateDefBodyElement, StateUsage as ParserStateUsage, ThenStmt, Transition, TransitionAccept,
     TransitionEffect,
@@ -138,6 +138,9 @@ impl SemanticModelBuilder {
                         node.span,
                     );
                 }
+                StateDefBodyElement::PortUsage(node) => {
+                    self.lower_port_usage(document, Some(owner), node)?;
+                }
                 StateDefBodyElement::ConstraintUsage(node) => {
                     // New upstream member kind: kept visible as unsupported rather than dropped.
                     self.push_unsupported(
@@ -185,9 +188,6 @@ impl SemanticModelBuilder {
                 }
                 StateDefBodyElement::Ref(node) => {
                     self.lower_ref_decl(document, Some(owner), node)?;
-                }
-                StateDefBodyElement::FinalState(node) => {
-                    self.lower_final_state(document, owner, node)?;
                 }
                 StateDefBodyElement::AttributeUsage(node) => {
                     self.lower_attribute_usage(document, Some(owner), node)?;
@@ -293,7 +293,7 @@ impl SemanticModelBuilder {
         body: &ActionDefBody,
         span: Span,
     ) -> Result<(), ConstructionError> {
-        let binding_kind = match kind {
+        let empty_kind = match kind {
             StateSubactionKind::Entry => DeclarationKind::EntryActionBinding,
             StateSubactionKind::Do => DeclarationKind::DoActionBinding,
             StateSubactionKind::Exit => DeclarationKind::ExitActionBinding,
@@ -328,7 +328,8 @@ impl SemanticModelBuilder {
                 TransitionEffect::Perform { .. } => DeclarationKind::PerformActionUsage,
                 TransitionEffect::Expression(_) => DeclarationKind::ActionUsage,
             },
-            _ => binding_kind,
+            StateActionUsage::Empty => empty_kind,
+            StateActionUsage::Perform { .. } => DeclarationKind::PerformActionUsage,
         };
         let declaration = self.push_typed_declaration(
             document,
@@ -509,38 +510,6 @@ impl SemanticModelBuilder {
         )
     }
 
-    /// Lowers a state def/usage's `final <name>;`/`final state <name>;` body element (BNF
-    /// `FinalState`) as a named `DeclarationKind::FinalState` feature owned by the enclosing state
-    /// `owner` declaration, mirroring `lower_state_usage`'s plain named-declaration shape.
-    /// `FinalState.state_name` is always a non-empty declared name per the grammar (`final` is
-    /// always followed by a mandatory `name`), so this declares a genuine new nested state rather
-    /// than referencing an existing one -- unlike `lower_state_then_stmt`'s `InitialState`, there
-    /// is no target reference to resolve.
-    pub(crate) fn lower_final_state(
-        &mut self,
-        document: DocumentIdx,
-        owner: DeclarationId,
-        node: &Node<FinalState>,
-    ) -> Result<(), ConstructionError> {
-        let name = self.intern_declaration_name(document, Some(node.value.state_name))?;
-        let declaration = self.push_typed_declaration(
-            document,
-            Some(owner),
-            DeclarationKind::FinalState,
-            name,
-            node.span,
-            // `ast::FinalState` carries only its state name.
-            DeclarationFacts::none(),
-        )?;
-        self.push_membership(
-            declaration,
-            MembershipKind::Feature,
-            Visibility::Default,
-            node.span,
-        )?;
-        Ok(())
-    }
-
     /// Shared helper for `lower_state_entry_action`/`lower_state_do_action`/
     /// `lower_state_exit_action`/`lower_state_then_stmt`: pushes an authored reference of `kind`
     /// sourced at `declaration` for an already-structured `QualifiedReferenceId` target, mirroring
@@ -586,6 +555,15 @@ impl SemanticModelBuilder {
     ) -> Result<(), ConstructionError> {
         let name = self.intern_declaration_name(document, node.value.name)?;
         let short_name = self.intern_short_name(document, node.value.short_name)?;
+        // Only TargetTransitionUsage omits both its source and declaration part (SysML 8.2.2.18.3).
+        let implicit_transition_source = if node.value.source.is_none()
+            && node.value.name.is_none()
+            && node.value.short_name.is_none()
+        {
+            self.transition_sources.get(&owner).copied()
+        } else {
+            None
+        };
         let declaration = self.push_typed_declaration(
             document,
             Some(owner),
@@ -596,6 +574,7 @@ impl SemanticModelBuilder {
             // source/target/trigger/guard/effect facts are lowered as references.
             DeclarationFacts {
                 short_name,
+                implicit_transition_source,
                 ..DeclarationFacts::none()
             },
         )?;
@@ -735,8 +714,16 @@ impl SemanticModelBuilder {
                 self.push_action_binding_reference(
                     document,
                     effect_action.expect("an authored effect always creates its action"),
-                    ReferenceKind::TransitionEffect,
+                    ReferenceKind::FeatureTyping,
                     *type_name,
+                )?;
+                self.lower_state_action_effect(
+                    document,
+                    effect_action.expect("an authored effect always creates its action"),
+                    node.value
+                        .effect
+                        .as_ref()
+                        .expect("matched an authored effect"),
                 )?;
             }
             Some(TransitionEffect::Expression(expression)) => {
@@ -753,11 +740,14 @@ impl SemanticModelBuilder {
             | Some(TransitionEffect::Accept { .. })
             | Some(TransitionEffect::Send { .. })
             | Some(TransitionEffect::Assign { .. }) => {
-                self.push_unsupported(
+                self.lower_state_action_effect(
                     document,
-                    UnsupportedFamily::StateDefinitionMember,
-                    node.span,
-                );
+                    effect_action.expect("an authored effect always creates its action"),
+                    node.value
+                        .effect
+                        .as_ref()
+                        .expect("matched an authored effect"),
+                )?;
             }
         }
         Ok(())
@@ -1057,8 +1047,8 @@ impl SemanticModelBuilder {
     /// effect): its path expression is a structured `Expression` (not a flattened string), so a
     /// simple/qualified name (`Expression::FeatureRef`) resolves as an authored reference of
     /// `kind` through the same shared `DeclarationDomain::Any` lexical lookup as
-    /// `lower_succession_end`. Any other expression shape is left as an explicit unsupported-
-    /// member diagnostic, mirroring `lower_succession_end`'s scope boundary.
+    /// `lower_succession_end`. A dotted feature chain retains the endpoint's role while resolving
+    /// each segment through its effective type. Other shapes remain explicitly unsupported.
     pub(crate) fn lower_transition_end(
         &mut self,
         document: DocumentIdx,
@@ -1084,9 +1074,9 @@ impl SemanticModelBuilder {
                     import: None,
                 })?;
             }
-            Expression::MemberAccess { .. } => {
+            Expression::MemberAccess { .. } | Expression::FeatureChainRef(_) => {
                 if self
-                    .push_member_access_expression(owner, document, node)?
+                    .push_member_access_expression_with_kind(owner, document, kind, node)?
                     .is_none()
                 {
                     self.push_unsupported(

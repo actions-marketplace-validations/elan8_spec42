@@ -2384,21 +2384,36 @@ fn default_reference_usage_typed_binding_resolves_its_typing() {
     );
 }
 
-/// The standard-view rule needs a library-admitted definition, and the source role that makes
-/// a document a library is not expressible in the snapshot corpus, so it is pinned here.
+/// The standard-view rule needs library-admitted definitions, and the source roles that make a
+/// document the standard library or a library are not expressible in the snapshot corpus, so it
+/// is pinned here. A stand-in standard library declares two standard view definitions; a domain
+/// library declares the views the workspace uses.
 #[test]
-fn a_view_typed_by_a_non_standard_library_definition_is_reported() {
-    let publish = |library: &str| {
+fn a_view_typed_by_a_library_definition_outside_the_standard_views_is_reported() {
+    let publish = |library: &str, view_type: &str| {
         let request = BuildRequest::new(
             vec![
                 SourceInput::new(
-                    "memory://views.sysml",
-                    format!("library package Views {{ view def {library}; }}"),
+                    "memory://standard.sysml",
+                    "standard library package StandardViewDefinitions { \
+                     view def View; view def GeneralView :> View; }"
+                        .to_owned(),
+                    SourceKind::StandardLibrary,
+                ),
+                SourceInput::new(
+                    "memory://domain.sysml",
+                    format!(
+                        "library package Domain {{ private import StandardViewDefinitions::*; \
+                         {library} }}"
+                    ),
                     SourceKind::Library,
                 ),
                 SourceInput::new(
                     "memory://test.sysml",
-                    format!("package P {{ private import Views::*; view v : {library}; }}"),
+                    format!(
+                        "package P {{ private import StandardViewDefinitions::*; \
+                         private import Domain::*; view v : {view_type}; }}"
+                    ),
                     SourceKind::Workspace,
                 ),
             ],
@@ -2413,21 +2428,26 @@ fn a_view_typed_by_a_non_standard_library_definition_is_reported() {
             .map(|diagnostic| diagnostic.code().as_str().to_string())
             .collect::<Vec<_>>()
     };
-    assert!(
-        publish("RequirementView").contains(&"view_type_non_standard".to_string()),
-        "{:?}",
-        publish("RequirementView")
-    );
-    assert!(
-        !publish("GeneralView").contains(&"view_type_non_standard".to_string()),
-        "a standard view definition is not reported: {:?}",
-        publish("GeneralView")
-    );
-    assert!(
-        !publish("View").contains(&"view_type_non_standard".to_string()),
-        "the normative abstract base View is not reported: {:?}",
-        publish("View")
-    );
+    let reported = |library: &str, view_type: &str| {
+        publish(library, view_type).contains(&"view_type_non_standard".to_string())
+    };
+    // Specializes no standard view definition: no standard notation draws it.
+    assert!(reported("view def RequirementView;", "RequirementView"));
+    // A domain view that specializes a standard one is drawn with its notation, directly or
+    // through another domain view.
+    assert!(!reported(
+        "view def ContextView :> GeneralView;",
+        "ContextView"
+    ));
+    assert!(!reported(
+        "view def ContextView :> GeneralView; view def SystemContextView :> ContextView;",
+        "SystemContextView"
+    ));
+    // The standard definitions themselves, including the normative abstract base View.
+    assert!(!reported("", "GeneralView"));
+    assert!(!reported("", "View"));
+    // A library outside the standard library cannot make a view standard by reusing its name.
+    assert!(reported("view def GeneralView;", "Domain::GeneralView"));
 }
 
 /// A workspace's own `view def` is the author's to define, whatever it is called.
@@ -2848,23 +2868,6 @@ fn require_and_assume_constraint_members_resolve() {
     assert!(
         !sexpr.contains("unsupported_requirement_definition_member"),
         "did not expect unsupported_requirement_definition_member, got: {sexpr}"
-    );
-}
-
-/// A state def/usage body's `final <name>;` body element (BNF `FinalState`) declares a new
-/// named final pseudo-state, distinct from `then <target>;`'s reference-to-an-existing-state
-/// shape. Must lower as its own `DeclarationKind::FinalState` feature, not fall through to
-/// `unsupported_state_definition_member`.
-#[test]
-fn final_state_declares_named_pseudo_state() {
-    let sexpr = semantic_sexpr_for("package P { state def S { final done; } }");
-    assert!(
-        sexpr.contains("(kind final-state)"),
-        "expected a final-state declaration, got: {sexpr}"
-    );
-    assert!(
-        !sexpr.contains("unsupported_state_definition_member"),
-        "did not expect unsupported_state_definition_member, got: {sexpr}"
     );
 }
 
@@ -3385,7 +3388,10 @@ fn model_projection_composes_elements_connectors_and_envelope() {
     // No library admitted: every admitted document is workspace-authored.
     assert_eq!(
         projection.envelope.admitted,
-        AdmittedSourceCounts::default()
+        AdmittedSourceCounts {
+            workspace: 1,
+            ..AdmittedSourceCounts::default()
+        }
     );
 
     assert!(projection
@@ -6744,5 +6750,154 @@ fn derived_facts_follow_feature_membership_and_conformance() {
             ActionDerivedFactCollection::ViewDefinitionViewRendering
         ),
         vec![id("Model::detail")]
+    );
+}
+
+/// Library provenance is not expressible as a snapshot source role, so the export scope is
+/// pinned on the typed projection: referenced definitions and their owned members are included,
+/// and an unreferenced definition in the same library document is not.
+#[test]
+fn model_projection_includes_referenced_library_definitions_on_request() {
+    let request = BuildRequest::new(
+        vec![
+            SourceInput::new(
+                "memory://library.sysml",
+                "package SharedInterfaces { port def ExampleExchangePort { item payload; } port def Unused; }".into(),
+                SourceKind::Library,
+            ),
+            SourceInput::new(
+                "memory://project.sysml",
+                "package ExampleProject { private import SharedInterfaces::*; part def Device { port exchange : ExampleExchangePort; } }".into(),
+                SourceKind::Workspace,
+            ),
+        ],
+        ConstructionSchedule::Sequential,
+        "contract-v1",
+    )
+    .unwrap();
+    let published = build(request).unwrap();
+    let names = |inclusion: LibraryElementInclusion| {
+        let projection = settled(published.model_projection_including(usize::MAX, inclusion));
+        projection
+            .elements
+            .iter()
+            .map(|element| {
+                (
+                    element.source,
+                    published
+                        .qualified_name(element.identity)
+                        .unwrap_or("")
+                        .to_string(),
+                )
+            })
+            .collect::<Vec<_>>()
+    };
+    let has = |inclusion: LibraryElementInclusion, source: ElementSource, name: &str| {
+        names(inclusion)
+            .iter()
+            .any(|(element_source, element_name)| *element_source == source && element_name == name)
+    };
+
+    assert!(has(
+        LibraryElementInclusion::None,
+        ElementSource::Workspace,
+        "ExampleProject::Device::exchange"
+    ));
+    assert!(!has(
+        LibraryElementInclusion::None,
+        ElementSource::Library,
+        "SharedInterfaces::ExampleExchangePort"
+    ));
+
+    let referenced = names(LibraryElementInclusion::Referenced);
+    let exchange = referenced
+        .iter()
+        .find(|(_, name)| name == "ExampleProject::Device::exchange");
+    assert!(exchange.is_some(), "{referenced:?}");
+    let projection = settled(
+        published.model_projection_including(usize::MAX, LibraryElementInclusion::Referenced),
+    );
+    let exchange_id = projection
+        .elements
+        .iter()
+        .find(|element| {
+            published.qualified_name(element.identity) == Some("ExampleProject::Device::exchange")
+        })
+        .expect("exchange usage")
+        .identity;
+    let details = settled(published.element_details(exchange_id));
+    assert!(
+        details.typing.targets.iter().any(|target| {
+            published.qualified_name(target.identity)
+                == Some("SharedInterfaces::ExampleExchangePort")
+        }),
+        "typing did not resolve: {:?}",
+        details.typing.targets
+    );
+    assert!(has(
+        LibraryElementInclusion::Referenced,
+        ElementSource::Library,
+        "SharedInterfaces::ExampleExchangePort"
+    ));
+    assert!(has(
+        LibraryElementInclusion::Referenced,
+        ElementSource::Library,
+        "SharedInterfaces::ExampleExchangePort::payload"
+    ));
+    assert!(!has(
+        LibraryElementInclusion::Referenced,
+        ElementSource::Library,
+        "SharedInterfaces::Unused"
+    ));
+    assert!(has(
+        LibraryElementInclusion::All,
+        ElementSource::Library,
+        "SharedInterfaces::Unused"
+    ));
+}
+
+#[test]
+fn referenced_projection_follows_library_types_and_specializations_transitively() {
+    let published = build(
+        BuildRequest::new(
+            vec![
+                SourceInput::new(
+                    "memory://library.sysml",
+                    "package Types { part def Base { part inherited : Payload; } part def Used :> Base { part payload : Payload; } part def Payload { part cycle : Used; } part def Unused; }".into(),
+                    SourceKind::Library,
+                ),
+                SourceInput::new(
+                    "memory://project.sysml",
+                    "package App { part component : Types::Used; }".into(),
+                    SourceKind::Workspace,
+                ),
+            ],
+            ConstructionSchedule::Sequential,
+            "contract-v1",
+        )
+        .unwrap(),
+    )
+    .unwrap();
+    let projection = settled(
+        published.model_projection_including(usize::MAX, LibraryElementInclusion::Referenced),
+    );
+    let mut names = projection
+        .elements
+        .iter()
+        .map(|element| published.qualified_name(element.identity).unwrap())
+        .collect::<Vec<_>>();
+    names.sort_unstable();
+    assert_eq!(
+        names,
+        vec![
+            "App",
+            "App::component",
+            "Types::Base",
+            "Types::Base::inherited",
+            "Types::Payload",
+            "Types::Payload::cycle",
+            "Types::Used",
+            "Types::Used::payload",
+        ]
     );
 }

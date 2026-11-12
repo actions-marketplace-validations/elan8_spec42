@@ -23,7 +23,68 @@ use crate::TextRange;
 use sysml_v2_parser::ParseError;
 use sysml_v2_parser::ParsedDocument;
 
+/// The note attached to the non-public member a qualified name failed to reach.
+const RELATED_HIDDEN_MEMBER: &str = "Non-public member the qualified name names.";
+
 impl<D> SemanticModel<D> {
+    /// One diagnostic derivation for reporting and source-linked projections, including libraries
+    /// omitted from the reporting scope. Its public view carries handles and static code vocabulary.
+    pub(crate) fn unsupported_construct_fact(
+        &self,
+        record: &crate::lower::facts::UnsupportedRecord,
+    ) -> Result<crate::UnsupportedConstruct, ResolutionError> {
+        Ok(crate::UnsupportedConstruct {
+            document: crate::DocumentId::from_index(record.document.index())
+                .ok_or(ResolutionError::Capacity)?,
+            range: document_range(&self.storage, record.document, &record.span)?,
+            code: unsupported_construct_code(record.family),
+        })
+    }
+    /// The non-public segment that made an unresolved qualified name fail: the path resolves once
+    /// visibility is ignored, and a namespace it passes through does not own that segment publicly
+    /// (KerML 8.2.3.5.3).
+    fn hidden_qualified_segment(
+        &self,
+        reference: &crate::lower::facts::AuthoredReference,
+    ) -> Result<Option<(crate::model::DeclarationId, &'static str)>, ResolutionError> {
+        let path = self.authored_path(reference.path);
+        let segments = path
+            .split("::")
+            .filter(|segment| !segment.is_empty())
+            .count();
+        if segments < 2 {
+            return Ok(None);
+        }
+        let source = self
+            .storage
+            .declaration(reference.source)
+            .ok_or(ResolutionError::InvalidStorage)?;
+        let [target] = self.resolve_qualifier_scopes(source.owner, &path)?[..] else {
+            return Ok(None);
+        };
+        let mut segment = target;
+        for _ in 1..segments {
+            let Some(owner) = self.storage.declaration(segment).and_then(|d| d.owner) else {
+                break;
+            };
+            match self
+                .memberships
+                .get(segment)
+                .map(|membership| membership.visibility)
+            {
+                Some(crate::resolve::names::EffectiveVisibility::Private) => {
+                    return Ok(Some((segment, "private")))
+                }
+                Some(crate::resolve::names::EffectiveVisibility::Protected) => {
+                    return Ok(Some((segment, "protected")))
+                }
+                Some(crate::resolve::names::EffectiveVisibility::Public) | None => {}
+            }
+            segment = owner;
+        }
+        Ok(None)
+    }
+
     /// Every diagnostic this publication settled, as facts rather than rendered text.
     ///
     /// Derived once while the model is sealed, for the same reason the other indexes are: a query
@@ -48,6 +109,7 @@ impl<D> SemanticModel<D> {
         // quadratic in the admitted corpus -- invisible while only workspace documents were
         // derived, and the reason a library's own documents could not be.
         let declarations_by_document = self.declarations_by_document()?;
+        let duplicate_root_packages = self.duplicate_root_packages()?;
         for document_index in self.reported_document_indices(reported) {
             let document_id = DocumentIdx(document_index as u32);
             // Preserve the source context of failures from every descendant diagnostic check.
@@ -96,7 +158,8 @@ impl<D> SemanticModel<D> {
                     .iter()
                     .filter(|record| record.document == document_id)
                 {
-                    let code = unsupported_construct_code(record.family);
+                    let construct = self.unsupported_construct_fact(record)?;
+                    let code = construct.code;
                     diagnostics.push(Diagnostic {
                         payload: None,
                         message: code.describe().into(),
@@ -106,7 +169,7 @@ impl<D> SemanticModel<D> {
                         origin: DiagnosticOrigin::Semantic,
                         location: DiagnosticLocation {
                             document: document.identity.clone(),
-                            range: document_range(&self.storage, document_id, &record.span)?,
+                            range: construct.range,
                         },
                         related: Box::default(),
                     });
@@ -130,11 +193,39 @@ impl<D> SemanticModel<D> {
                     if self.resolution.alias_failures.contains(&reference_id) {
                         continue;
                     }
+                    // Without the measurement library a unit cannot be checked at all, and its
+                    // absence is an input the workspace did not supply, not a fault at each unit.
+                    if reference.kind == ReferenceKind::QuantityUnit
+                        && self.expressions.anchors.measurement_unit.is_none()
+                    {
+                        continue;
+                    }
+                    // The unit check reports this one, with the units it could be.
+                    if reference.kind == ReferenceKind::QuantityUnit
+                        && matches!(status, ResolutionStatus::Ambiguous(_))
+                    {
+                        continue;
+                    }
                     let Some((severity, code)) = reference_diagnostic(reference.kind, status)
                     else {
                         continue;
                     };
                     let mut related = Vec::new();
+                    let mut message: Box<str> = code.describe().into();
+                    if matches!(status, ResolutionStatus::Unresolved) {
+                        if let Some((hidden, visibility)) =
+                            self.hidden_qualified_segment(reference)?
+                        {
+                            let name = self.display_name(hidden);
+                            message = format!(
+                                "'{name}' is {visibility}, so a qualified name cannot reach it. \
+                                 Make '{name}' public, or use its simple name inside its \
+                                 namespace."
+                            )
+                            .into();
+                            related.push(self.related_declaration(hidden, RELATED_HIDDEN_MEMBER)?);
+                        }
+                    }
                     if let ResolutionStatus::Ambiguous(candidates) = status {
                         // Every candidate, in the resolver's canonical candidate order: choosing one
                         // would settle an ambiguity the publication deliberately left open.
@@ -154,7 +245,7 @@ impl<D> SemanticModel<D> {
                                         .into_boxed_str(),
                                 },
                             ),
-                        message: code.describe().into(),
+                        message,
                         subject: self.symbol_id(reference.source),
                         code,
                         severity,
@@ -181,6 +272,20 @@ impl<D> SemanticModel<D> {
                     &mut diagnostics,
                 )?;
                 namespace_checks += namespace_started.elapsed();
+                for root in declared {
+                    if let Some(first) = duplicate_root_packages.get(root) {
+                        let mut diagnostic = self.declaration_diagnostic(
+                            *root,
+                            DiagnosticCode::DuplicateRootPackage,
+                            DiagnosticSeverity::Warning,
+                        )?;
+                        diagnostic.related = Box::from([self.related_declaration(
+                            *first,
+                            crate::check::host::RELATED_FIRST_DECLARATION,
+                        )?]);
+                        diagnostics.push(diagnostic);
+                    }
+                }
                 self.collect_host_conformance(document_id, declared, &mut diagnostics)?;
                 self.collect_library_context(
                     document_id,

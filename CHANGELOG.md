@@ -7,6 +7,254 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.60.2] - 2026-11-10
+
+- **Upgrade notes.** Project settings now live in `spec42.toml`; Spec42 no longer reads
+  `syside.toml`. Copy settings needed by Spec42 into `spec42.toml`, and move external library
+  folders from `include` to `library_paths`. Keep `syside.toml` if another tool needs it.
+  `include` and `exclude` select in-project sources; patterns that leave the project are errors.
+  Model export schema 2 adds `envelope.admitted.workspace`. The semantic contract stays
+  `state-trigger-labels-v74`, diagram products stay schema 12, and the generator ABI stays version 7.
+
+- **Project configuration no longer silently empties a model.** `spec42.toml` source filters and
+  `library_paths` work in the CLI and language server, including projects with `.project.json`
+  dependencies. A check or export fails when every requested source was excluded. Explicitly
+  targeted library documents continue to report diagnostics.
+
+- **Model exports can include referenced library definitions.** Use
+  `model-export --library-elements referenced` to include typing, specialization, subsetting,
+  and redefinition targets transitively, together with their owned library members. Unrelated
+  definitions remain out of the export. The default `none` keeps workspace-only elements;
+  `all` includes all admitted library and external elements, excluding the standard library.
+
+- **Views can use definitions that specialize standard views.** A view typed by a library
+  definition such as `view def ContextView :> GeneralView` no longer reports
+  `view_type_non_standard`.
+
+## [0.60.1] - 2026-11-08
+
+- **Upgrade notes.** No contract, schema or ABI changes: the semantic contract stays
+  `state-trigger-labels-v74`, diagram products stay schema 12, model export schema 2 and the
+  generator ABI version 7.
+
+- **Diagrams with quantity units no longer stop with an internal error.** A state machine or
+  action whose expressions use quantity units, such as a transition effect that assigns
+  `remaining + 60 [s]`, stopped `spec42 diagram` and every consumer of the diagram product
+  since 0.58.0. Relationship kinds that no diagram has a notation for, such as a quantity's
+  unit, are now skipped, and nothing that was drawn before changes.
+
+## [0.60.0] - 2026-11-08
+
+- **Upgrade notes.** No contract, schema or ABI changes: the semantic contract stays
+  `state-trigger-labels-v74`, diagram products stay schema 12, model export schema 2 and the
+  generator ABI version 7. Only diagram drawing changes, so action flow and interconnection
+  figures may lay out differently from 0.59.2.
+
+- **Action flow parameters stand on the top and bottom edges.** In an action flow drawn top to
+  bottom, an action's inputs stand on its top edge and its outputs on its bottom edge (SysML v2
+  `param-t` and `param-b`), so flows between them run straight down instead of looping out to
+  the sides. Parameters are packed from the left end of the edge, which keeps its middle free for
+  successions; a succession that layout still runs through a parameter or its name is rerouted
+  around them. An action that holds its own flow keeps its parameters on its sides, as do all
+  actions in a left-to-right flow.
+
+- **A bus on a closed part is one port.** In an interconnection view limited in depth, a port with
+  nested ports, such as a wiring harness modelled as a bus of signal ports, is drawn on a closed
+  part as that one port, and the connections to its signals end on it, so a harness shows as one
+  line per end. An open part still shows the nested ports its parts connect to. The port-family
+  legend lists only the families of the connections that are drawn.
+
+- **Ports without a direction face what they connect to.** An interconnection view turns a port
+  with no direction, such as a bus port, towards the parts its connectors lead to, so connectors
+  no longer loop around their part or the whole view.
+
+## [0.59.2] - 2026-11-07
+
+- **Upgrade notes.** No contract, schema or ABI changes: the semantic contract stays
+  `state-trigger-labels-v74`, diagram products stay schema 12, model export schema 2 and the
+  generator ABI version 7.
+
+- **Qualified references resolve through visible memberships.** Looking up an element by a
+  qualified name, as document generators do for names written in prose, now follows public
+  imports, aliases and inherited members, the way names in SysML source already resolve.
+  `Aliases::mass` finds `Budgets::mass` when `Aliases` declares `public import Budgets::*;`, and
+  `Architecture::Module::latency` reaches `latency` through `alias Module for Parts::Integration;`.
+  Private imports are still not followed, a member a namespace owns still wins over an imported
+  one, and a name that ends at an alias still names the alias.
+
+## [0.59.1] - 2026-11-06
+
+- **Upgrade notes.** The semantic contract version is now `state-trigger-labels-v74`, so earlier
+  publications and serialised models are not reused. The generator ABI, diagram schema 12 and
+  model export schema 2 are unchanged.
+
+- **State diagrams show what triggers a transition.** Timed triggers such as
+  `accept after dwellTime` and typed payloads such as `accept c : InvokeReset` appear on the
+  arrow, where they were missing or replaced by the transition's name, which now shows in its
+  tooltip. Entry, do and exit actions that refer to an action by name are listed in their state.
+- **Easier-to-read state and sequence diagrams.** States are larger and closer together, and a
+  state with no actions centres its name. A transition from a nested state to one outside its
+  container no longer runs along the container's border. Sequence headers keep long part and
+  type names in full instead of shortening them.
+- **Copilot edits no longer add stale diagnostics.** The VS Code extension only sends files and
+  unsaved new documents to the language server, so Copilot chat edit histories, code blocks and
+  revision previews no longer count as extra copies of your models.
+- **`spec42 diagram` warns about an empty view.** When a view's expose and filter declarations
+  select nothing, the command prints `warning[empty_diagram]` on stderr. The JSON on stdout is
+  unchanged.
+
+## [0.59.0] - 2026-11-05
+
+- **Upgrade notes.** **Models may report new errors and warnings.** A computed value whose type
+  is unrelated to its feature is now an error (`attribute n : Boolean = 1 + 2`), and one that
+  narrows it without proof is a warning (`attribute n : Natural = 11 - 1`), for bound values and
+  defaults alike. Reference values and `satisfy … by` operands are checked against the receiving
+  feature or requirement subject: an error when the types cannot share an instance (a class and a
+  data type, or disjoint types), a warning otherwise. A constraint inherited by a usage that binds
+  all its inputs and evaluates to false now warns at that usage. The semantic contract version is
+  now `diagram-syntax-diagnostics-v73`, so earlier publications and serialised models are
+  not reused. **Model export is schema 2**: expression trees add `invocation`, `sequence` and
+  `meta-cast` nodes, and elements add `effective_name`, `effective_qualified_name`,
+  `multiplicity_expressions`, `exposure`, `evaluation`, `analysis`, `membership.role` and
+  `trigger_kind`. Diagram products are **schema 12**, adding unsupported-syntax diagnostics and
+  their source ranges; consumers must accept the new schema and regenerate diagram products.
+  The generator ABI stays **version 7**, but its compatibility token has changed:
+  **rebuild generator plugins against this release.** An unsupported invocation node now lists
+  its callee before its arguments, and `featureDirection`
+  is set on every directed member, not only ports, so guests must not use it to recognise a port.
+  Direct consumers of the parser AST must handle serialization version **292**.
+  **Update the backend and VS Code extension together**: the Views panel now requests
+  `spec42/diagramPresentation`, which older servers do not support.
+
+- **Values are type-checked.** Scalar results are typed from the library's operator and function
+  signatures, so `Integer` arithmetic bound to `Natural` is no longer accepted just because it
+  folds to a nonnegative number, while `Positive` sums and products stay `Positive`. Operator
+  signatures resolve without importing the function packages. The few library findings that need
+  constraint reasoning to prove are warnings, tracked in #437.
+- **Inherited constraints are evaluated in context.** When a usage supplies every input of a
+  constraint or derived value it inherits, Spec42 evaluates it there, including through unnamed
+  redefinitions and contextual `self` and `that` references. A false verdict is reported at the
+  usage, with the authored constraint linked. Unbound inputs, cycles and unsupported calculations
+  stay explicitly unresolved rather than failing.
+- **Model exports carry what the model settles.** Exports keep effective names for unnamed
+  redefinitions (no more `Pkg::c::`), the expressions behind multiplicity bounds and their values,
+  whether an `expose` is recursive, evaluation values and analysis verdicts, and function, calc and
+  `meta` expressions as structured nodes. State exports keep port members, `when`/`at`/`after`
+  trigger kinds and arguments, entry/do/exit roles, and transition effects with their typing.
+- **State machines.** Shorthand transitions (`state a; accept E then b;`) keep their source and
+  are drawn, dotted endpoints such as `first p.x` keep their roles, and effects such as
+  `do action notify : Notify` are modelled as perform actions. A transition may cross into a
+  sibling composite state; transitions between parallel regions and unrelated machines are still
+  reported. Declared `entry`/`do`/`exit` actions are `PerformActionUsage`s, and state bodies may
+  declare ports.
+- **Name resolution.** A recursive import (`P::**`) imports the inherited public members of the
+  namespaces it reaches, such as the features a requirement subject gets from its type, honouring
+  visibility and local redefinitions. It does not reach into members nested inside inherited
+  features, which kept the OMG Annex A model free of false `ambiguous_reference` errors. Imports that keep changing between passes are reported as nonconverged
+  instead of stalling. A feature chain after `->select { … }` resolves through the selection
+  result.
+- **Views.** View definitions and usages may declare attributes such as a document number or a
+  section heading. `render Views::asElementTable;` no longer reports
+  `view_rendering_invalid_target`.
+- **Views panel.** Fit View, Go to View Definition and Export are icons in the panel title.
+  The export menu offers SVG, PNG, transparent backgrounds and Copy view JSON. The header keeps
+  the view selector with the view kind and status beneath it.
+- **File icons.** SysML and KerML files use the Elan8 icon in light and dark themes, unless the
+  selected file icon theme supplies its own matching icons.
+- **Reliable view updates.** Views refresh from analysis notifications, with the catalog and
+  drawing taken from the same publication. Switching views while analysis is pending recovers
+  automatically, and unsupported syntax has clickable diagnostic locations in the view details.
+- **Diagrams.** General views show the effective `in`/`out` direction of members inherited under
+  a conjugated port, label an unnamed redefinition with the name it redefines and leave other
+  unnamed members unlabelled instead of using the metaclass name, and interconnection views of a
+  part definition draw one frame instead of two.
+- **Zed releases.** Releases still include the Zed extension artifact, but no longer automatically
+  submit an update to the Zed extension registry.
+
+## [0.58.1] - 2026-11-01
+
+- **Upgrade notes.** The semantic contract version is now `measurement-reference-operands-v63`, so
+  earlier publications and serialised models are not reused. The generator ABI and diagram schema
+  are unchanged.
+
+- **Coordinate frames and scales in `[ ]` are accepted.** The library defines `[` for any
+  measurement reference, not only units. `(0, 0, 0) [spatialCF]` and `20 ['°C_abs']` no longer
+  report `unknown_unit_symbol`, which clears those warnings on valid OMG models, including Annex A.
+  A name that is not a measurement reference still reports it.
+
+## [0.58.0] - 2026-11-01
+
+- **Upgrade notes.** **Models may report new errors.** The parser now follows the grammar more
+  strictly: a `/* */` comment between the tokens of a declaration, a `;` after a result expression
+  (`1 + 2;`), `library standard package`, `final name;` and `final state name;` are parse errors,
+  and a qualified name resolves only through public members. Use `//` or `//* */` notes, remove the
+  `;`, write `standard library package`, finish a state machine with a transition to `done`, and
+  reach private or protected members by simple name from inside their namespace. A unit in `[ ]`
+  must now be in scope: `30 [A]` needs an import of `SI::ampere` or `SI::*`, or `SI::A`. Diagram products are **schema 11**, with node `presentationKey` and
+  `multiplicity` and interconnection `metadata.portFamilies`; consumers must accept
+  `schemaVersion` 11. The generator ABI is **version 7** with semantic API **0.5.0**: **a generator
+  plugin built against 0.57.0 must be rebuilt.** The semantic contract version is now
+  `state-done-finality-v62`, so earlier publications and serialised models are not reused. Hierarchy
+  clients must retain item data in follow-up requests. Building the VS Code extension requires
+  Node.js 22.12 or newer, and regenerating its lockfiles requires npm 11.
+
+- **Responsive editing.** Rapid changes replace obsolete analysis instead of queueing it, the
+  editor shows the current analysis status, and the previous source and analysis stay coherent
+  when a rebuild fails. Stale editor updates no longer replace newer text or a reopened buffer,
+  and views keep their viewport and disclosure across publications. Library configuration rescans
+  are bounded, and project and library changes preserve unsaved editors.
+- **Imports repair themselves.** Quick fixes import or qualify a referenced element, create a
+  missing definition, and make an implicit redefinition explicit. Completion offers out-of-scope
+  types and adds their private import in one step, and **Add all unambiguous missing imports**
+  repairs a whole file.
+- **Completion keeps up while you type.** It no longer opens on every space or hijacks Enter, and
+  offers only a namespace's or feature's members after `::` and `.`.
+- **Diagnostics catch more real mistakes.**
+  - Non-Boolean guards are reported on transitions and on conditional successions, and non-Boolean
+    constraint, assert and require bodies are judged by their result type, not only when they fold
+    to a literal.
+  - A definition that specializes a usage, or a usage that subsets, redefines or references a
+    definition, is reported.
+  - A qualified name to a private or protected member names that member and links to it.
+  - A `;` directly after a closing `}` is reported.
+  - A bracketed unit resolves by name, so a unit out of scope is reported, and a name that is not a
+    unit reports `unknown_unit_symbol`.
+  - `duplicate_root_package` warns when two root packages in a workspace share a name.
+  - `multiple_final_states` is retired, and a transition to `done` or to an inherited state no
+    longer reports `transition_endpoint_invalid_context`.
+  - A body still open at end of input keeps its members, and an import without visibility keeps its
+    target, so one unfinished line no longer hides the rest of the file.
+  - The validation guide documents how follow-on diagnostics are reported.
+- **Name resolution follows the specification.** `import all` imports members whatever their
+  visibility, a nested package honours its visibility, and references through an alias, including
+  one re-exported by a public import, resolve to the aliased element. Importing a single member
+  brings in its short name too, so `import SI::ampere` makes `A` visible.
+- **More valid models parse.** Case and analysis bodies accept control nodes, `item` members and
+  structured action nodes. `include` accepts feature chains and a full usage declaration.
+- **Sequence views are reliable.** Repeated and anonymous messages no longer produce false ordering
+  cycles, useful partial drawings are preserved, and projection limitations are shown with
+  actionable detail.
+- **State Transition Views show `done`.** A transition to `done` is drawn, ending at a final node.
+  It was dropped before.
+- **Action flows read better.** Parameters use SysML parameter notation instead of port squares, a
+  nested action draws its own start and done inside it, `then assign` connects to the member before
+  it, and named terminate and assign nodes are single nodes.
+- **Interconnection views** colour connectors by port family, so related and conjugated ports
+  share a colour, and show a legend.
+- **Diagram labels** show a usage's multiplicity (`joints : Motor [6]`) instead of drawing
+  multiplicity and expression internals as boxes.
+- **Editor fixes.** Multiline documentation formatting, folding, structured loop semantics, nested
+  state readability, and semantic highlighting of statement keywords, action names and terminate
+  targets. Navigation, rename, formatting, outlines and selection are safe with Unicode text and
+  current editor versions. Readiness is announced before diagnostics are published.
+- **Generators** retain resolved relationships beside unsettled ones, receive named metaclasses for
+  every element kind, and can query expression trees, connector feature chains and the succession
+  a `then` member declares.
+- **Security.** Update the archive reader, WebAssembly runtime and extension dependencies to fix
+  security advisories.
+- **Performance measurement.** Opt-in measurements cover edit-to-view refresh and diagram rendering
+  phases, and live editor benchmarks use reproducible inputs.
+
 ## [0.57.0] - 2026-10-22
 
 - **Upgrade notes.** Diagram products are **schema 7**: browser metadata carries `rows` (row

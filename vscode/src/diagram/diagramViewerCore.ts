@@ -12,6 +12,13 @@ export type SourceNavigation = {
   endCharacter: number;
 };
 
+/** A webview may navigate an admitted library only at a source range supplied by its product. */
+export function productContainsSourceTarget(product: DiagramProduct, target: SourceNavigation): boolean {
+  return product.sources.some((source) => product.documents[source.document]?.uri === target.uri &&
+    source.range[0] === target.startLine && source.range[1] === target.startCharacter &&
+    source.range[2] === target.endLine && source.range[3] === target.endCharacter);
+}
+
 export function visibleSourceColumn(
   uri: string,
   editors: readonly { uri: string; viewColumn?: number }[],
@@ -32,11 +39,7 @@ export const DIAGRAM_VIEWS = [
 
 export type DiagramViewId = typeof DIAGRAM_VIEWS[number]["id"];
 
-export type DiagramSemanticReference =
-  | { kind: "qualified-name"; document: string; qualifiedName: string; sourceDomain: string }
-  | { kind: "tooling-element-id"; elementId: string; sourceDomain: string }
-  | { kind: "source-anchor"; document: string; ownerQualifiedName: string | null; metaclass: string; sourceDomain: string; range: unknown }
-  | { kind: "relationship"; document: string; sourceQualifiedName: string; relationshipKind: string; ordinal: number; sourceDomain: string };
+export type DiagramSemanticReference = import("../generated/diagram-presentation").DiagramReferenceChoice;
 
 const NOTATION_ROLES = new Set([
   "definition", "usage", "reference-usage", "namespace", "annotation", "unsupported",
@@ -209,30 +212,6 @@ export function resolveDiagramSelection(
   return options[0];
 }
 
-/**
- * Backoff for the diagram view's reconcile loop, which runs while the view is visible and its
- * render does not yet match the publication. `attempt` is the 0-based consecutive-failure count;
- * `settled` is set once an answer looks final (no model files, or a genuinely empty catalog) so
- * the loop drops to a slow keep-checking cadence instead of a spinner-speed retry.
- */
-export function reconcileDelayMs(attempt: number, settled: boolean): number {
-  if (settled) return 45_000;
-  const capped = Math.min(Math.max(0, Math.trunc(attempt)), 6);
-  return Math.min(15_000, 600 * 2 ** capped);
-}
-
-/**
- * Whether a `spec42/publicationChanged` notification means the panel's current render is stale.
- * A render with no known digest (nothing drawn yet) is not "stale" — it just has nothing to
- * compare — so this returns false and the caller leaves the panel alone.
- */
-export function diagramRenderIsStale(
-  renderedModelDigest: string | undefined,
-  publishedModelDigest: string,
-): boolean {
-  return renderedModelDigest !== undefined && renderedModelDigest !== publishedModelDigest;
-}
-
 export function parseStateTransitionViewCatalog(value: unknown): StateTransitionViewCatalog {
   if (!value || typeof value !== "object") throw new Error("Spec42 returned an invalid state-transition catalog.");
   const candidate = value as Record<string, unknown>;
@@ -339,6 +318,10 @@ export function parseDiagramProduct(text: string): DiagramProduct {
       !Array.isArray(projection.edges) || !projection.metadata || typeof projection.metadata !== "object" ||
       !isDiagramScene(projection.scene, String(view.kind), sources.length)) {
     throw new Error(`Generated diagram product does not match schema version ${DIAGRAM_PRODUCT_SCHEMA_VERSION}.`);
+  }
+  const presentationKeys = (projection.nodes as Array<{ presentationKey: string }>).map(node => node.presentationKey);
+  if (new Set(presentationKeys).size !== presentationKeys.length) {
+    throw new Error("Generated diagram product has duplicate presentation keys.");
   }
   for (const reason of completeness.reasons) {
     if (!reason || typeof reason !== "object") throw new Error("Generated diagram product has a malformed completeness reason.");
@@ -454,7 +437,8 @@ function isDiagramNode(value: unknown, referenceCount: number, sourceCount: numb
   if (!value || typeof value !== "object") return false;
   const node = value as Record<string, unknown>;
   const compartments = node.compartments;
-  return indexIn(node.reference, referenceCount) && indexIn(node.source, sourceCount) && typeof node.metaclass === "string" &&
+  return typeof node.presentationKey === "string" && node.presentationKey.length > 0 &&
+    indexIn(node.reference, referenceCount) && indexIn(node.source, sourceCount) && typeof node.metaclass === "string" &&
     typeof node.notationRole === "string" && NOTATION_ROLES.has(node.notationRole) &&
     (node.name === null || typeof node.name === "string") && (node.owner === null || indexIn(node.owner, nodeCount)) &&
     isDiagramTyping(node.typing, referenceCount) &&
@@ -494,7 +478,8 @@ export function isDiagramSemanticReference(value: unknown): value is DiagramSema
   if (reference.kind === "source-anchor") {
     return typeof reference.document === "string" && typeof reference.metaclass === "string" &&
       (reference.ownerQualifiedName === null || typeof reference.ownerQualifiedName === "string") &&
-      !!reference.range && typeof reference.range === "object";
+      !!reference.range && typeof reference.range === "object" &&
+      !!parseSourceNavigation({ uri: reference.document, ...reference.range });
   }
   return reference.kind === "relationship" && typeof reference.document === "string" &&
     typeof reference.sourceQualifiedName === "string" && typeof reference.relationshipKind === "string" &&

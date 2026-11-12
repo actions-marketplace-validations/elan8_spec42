@@ -420,11 +420,34 @@ impl TestSession {
         root_uri: Option<&url::Url>,
         initialization_options: Option<serde_json::Value>,
     ) {
+        self.initialize_with_client_capabilities(
+            client_name,
+            root_uri,
+            initialization_options,
+            serde_json::json!({}),
+        );
+    }
+
+    pub fn initialize_with_capabilities(
+        &mut self,
+        client_name: &str,
+        capabilities: serde_json::Value,
+    ) {
+        self.initialize_with_client_capabilities(client_name, None, None, capabilities);
+    }
+
+    fn initialize_with_client_capabilities(
+        &mut self,
+        client_name: &str,
+        root_uri: Option<&url::Url>,
+        initialization_options: Option<serde_json::Value>,
+        capabilities: serde_json::Value,
+    ) {
         let init_id = next_id();
         let mut params = serde_json::json!({
             "processId": null,
             "rootUri": root_uri,
-            "capabilities": {},
+            "capabilities": capabilities,
             "clientInfo": { "name": client_name, "version": "0.1.0" }
         });
         if let Some(options) = initialization_options {
@@ -461,6 +484,12 @@ impl TestSession {
             })
             .to_string(),
         );
+    }
+
+    pub fn did_close(&mut self, uri: &str) {
+        send_message(&mut self.stdin, &serde_json::json!({
+            "jsonrpc":"2.0", "method":"textDocument/didClose", "params":{"textDocument":{"uri":uri}}
+        }).to_string());
     }
 
     pub fn did_change_full(&mut self, uri: &str, text: &str, version: i32) {
@@ -519,6 +548,50 @@ impl TestSession {
         serde_json::from_str(&raw).expect("json response")
     }
 
+    /// Drive the presentation protocol from lifecycle notifications, without a sleep/retry timer.
+    /// Wakes received before the pending response are retained just as in the real client.
+    pub fn diagram_presentation_when_ready(
+        &mut self,
+        params: serde_json::Value,
+    ) -> serde_json::Value {
+        loop {
+            let id = next_id();
+            send_message(&mut self.stdin, &serde_json::json!({"jsonrpc":"2.0","id":id,"method":"spec42/diagramPresentation","params":params}).to_string());
+            let mut wake = false;
+            let response = loop {
+                let message: serde_json::Value = serde_json::from_str(
+                    &read_message(&mut self.stdout).expect("presentation response"),
+                )
+                .unwrap();
+                if message["method"] == lsp_server::views::dto::ANALYSIS_STATUS_CHANGED_METHOD {
+                    wake = true;
+                }
+                if message["id"] == id {
+                    break message;
+                }
+            };
+            match response["result"]["state"].as_str() {
+                Some("superseded") => continue,
+                Some("updating") => {
+                    if !wake {
+                        loop {
+                            let message: serde_json::Value = serde_json::from_str(
+                                &read_message(&mut self.stdout).expect("analysis completion wake"),
+                            )
+                            .unwrap();
+                            if message["method"]
+                                == lsp_server::views::dto::ANALYSIS_STATUS_CHANGED_METHOD
+                            {
+                                break;
+                            }
+                        }
+                    }
+                }
+                _ => return response,
+            }
+        }
+    }
+
     /// Synchronization barrier for integration tests.
     ///
     /// Sends a cheap request and waits for its response so prior notifications
@@ -542,6 +615,62 @@ impl TestSession {
                 return message["params"].clone();
             }
         }
+    }
+
+    /// Observe both exact-version diagnostics and the completed owner's model identity. Used
+    /// for restart/configuration parity; handler completion alone cannot satisfy this barrier.
+    pub fn wait_for_publication_version(
+        &mut self,
+        uri: &str,
+        version: i32,
+    ) -> (serde_json::Value, serde_json::Value) {
+        let mut diagnostics = None;
+        let mut publication = None;
+        let mut workspace_diagnostics = serde_json::Map::new();
+        while diagnostics.is_none() || publication.is_none() {
+            let message: serde_json::Value = serde_json::from_str(
+                &read_message(&mut self.stdout).expect("versioned publication"),
+            )
+            .expect("JSON-RPC message");
+            if message["method"] == "textDocument/publishDiagnostics" {
+                if let Some(source_uri) = message["params"]["uri"].as_str() {
+                    workspace_diagnostics.insert(
+                        source_uri.to_owned(),
+                        message["params"]["diagnostics"].clone(),
+                    );
+                }
+            }
+            if message["method"] == "textDocument/publishDiagnostics"
+                && message["params"]["uri"]
+                    .as_str()
+                    .is_some_and(|value| value.eq_ignore_ascii_case(uri))
+                && message["params"]["version"] == version
+            {
+                diagnostics = Some(message["params"]["diagnostics"].clone());
+            }
+            if let Some(raw) = message["params"]["message"]
+                .as_str()
+                .and_then(|raw| raw.strip_prefix("[SysML][perf] "))
+            {
+                let record: serde_json::Value =
+                    serde_json::from_str(raw).expect("performance record");
+                if record["event"] == "backend:publication"
+                    && record["editorVersions"]
+                        .as_object()
+                        .is_some_and(|versions| {
+                            versions.iter().any(|(key, value)| {
+                                key.eq_ignore_ascii_case(uri) && value == version
+                            })
+                        })
+                {
+                    publication = Some(record);
+                }
+            }
+        }
+        (
+            publication.unwrap(),
+            serde_json::Value::Object(workspace_diagnostics),
+        )
     }
 
     pub fn wait_for_diagnostics(&mut self, uri: &str) -> Vec<serde_json::Value> {

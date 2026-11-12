@@ -1,4 +1,4 @@
-//! The schema-10 diagram product: a typed diagram view projection
+//! The schema-12 diagram product: a typed diagram view projection
 //! (`DiagramViewProjection`, as served by `GeneratorModelView::diagram_view`) normalized into the
 //! JSON document `diagram_draw` renders -- documents, sources and semantic references interned
 //! once and referenced by index.
@@ -15,7 +15,7 @@ use serde_json::{json, Value};
 use spec42_generator_protocol as model;
 
 /// Version of the product format `diagram_draw` consumes.
-pub const SCHEMA_VERSION: u32 = 10;
+pub const SCHEMA_VERSION: u32 = 12;
 
 /// The file name under which generators publish the product.
 pub const ARTIFACT_PATH: &str = "diagram.json";
@@ -184,6 +184,17 @@ fn published_relationships(
 
 impl NormalizedProduct {
     fn new(typed: &model::DiagramViewProjection) -> Result<Self, String> {
+        let mut presentation_keys = std::collections::BTreeSet::new();
+        for element in &typed.elements {
+            if element.presentation_key.is_empty()
+                || !presentation_keys.insert(&element.presentation_key)
+            {
+                return Err(
+                    "diagram presentation keys must be nonempty and unique within a projection"
+                        .to_owned(),
+                );
+            }
+        }
         let mut references = BTreeMap::<ReferenceKey, model::DiagramSemanticReference>::new();
         let mut sources = BTreeMap::<SourceKey, model::SourceReference>::new();
         collect_reference(&mut references, &typed.view.reference);
@@ -246,6 +257,11 @@ impl NormalizedProduct {
         collect_scene_sources(&mut sources, &typed.scene);
         for reason in &typed.incomplete_reasons {
             collect_reason_reference(&mut references, reason);
+            if let model::DiagramIncompleteReason::UnsupportedSyntax { diagnostics } = reason {
+                for diagnostic in diagnostics {
+                    collect_source(&mut sources, &diagnostic.source);
+                }
+            }
         }
         for reference in references.values() {
             if let model::DiagramSemanticReference::SourceAnchor {
@@ -462,6 +478,7 @@ impl NormalizedProduct {
         };
         Ok(json!({
             "reference": self.reference(&value.reference)?,
+            "presentationKey": value.presentation_key,
             "metaclass": value.metaclass.as_str(),
             "notationRole": notation_role(value.notation_role),
             "name": value.name,
@@ -635,8 +652,12 @@ impl NormalizedProduct {
     fn incomplete_reason(&self, value: &model::DiagramIncompleteReason) -> Result<Value, String> {
         Ok(match value {
             model::DiagramIncompleteReason::ParseRecovery => json!({ "code": "parse-recovery" }),
-            model::DiagramIncompleteReason::UnsupportedSyntax => {
-                json!({ "code": "unsupported-syntax" })
+            model::DiagramIncompleteReason::UnsupportedSyntax { diagnostics } => {
+                json!({ "code": "unsupported-syntax", "diagnostics": diagnostics.iter().map(|diagnostic| Ok(json!({
+                    "code": diagnostic.code,
+                    "message": diagnostic.message,
+                    "source": self.source(&diagnostic.source)?,
+                }))).collect::<Result<Vec<Value>, String>>()? })
             }
             model::DiagramIncompleteReason::NonConverged => json!({ "code": "non-converged" }),
             model::DiagramIncompleteReason::ExposureUnresolved { exposure } => {
@@ -1281,6 +1302,7 @@ mod tests {
     #[test]
     fn normalization_interns_references_and_sources_once() {
         let product = projection(vec![model::DiagramElement {
+            presentation_key: "p:root".to_owned(),
             occurrence: occurrence("P::root"),
             reference: qualified("P::root"),
             metaclass: model::Metaclass::PartDefinition,
@@ -1307,11 +1329,28 @@ mod tests {
             normalized.element(&product.elements[0]).unwrap()["notationRole"],
             "definition"
         );
+        assert_eq!(
+            normalized.element(&product.elements[0]).unwrap()["presentationKey"],
+            "p:root"
+        );
+        let mut invalid = product.clone();
+        invalid.elements.push(invalid.elements[0].clone());
+        assert!(
+            NormalizedProduct::new(&invalid).is_err(),
+            "duplicate presentation identities must be rejected"
+        );
+        invalid.elements.pop();
+        invalid.elements[0].presentation_key.clear();
+        assert!(
+            NormalizedProduct::new(&invalid).is_err(),
+            "missing presentation identity must be rejected"
+        );
     }
 
     #[test]
     fn reference_table_order_does_not_depend_on_node_insertion_order() {
         let element = |name: &str, line| model::DiagramElement {
+            presentation_key: format!("p:{name}"),
             occurrence: occurrence(name),
             reference: qualified(name),
             metaclass: model::Metaclass::PartDefinition,
@@ -1393,6 +1432,7 @@ mod tests {
     fn normalized_product_scales_to_thousands_of_graph_records() {
         let elements = (0..1_000)
             .map(|index| model::DiagramElement {
+                presentation_key: format!("p:{index}"),
                 occurrence: occurrence(&format!("P::n{index:04}")),
                 reference: qualified(&format!("P::n{index:04}")),
                 metaclass: model::Metaclass::PartUsage,

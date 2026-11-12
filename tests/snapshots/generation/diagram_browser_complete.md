@@ -168,8 +168,8 @@ package BrowserExample {
 ## diagram.json
 ~~~json
 {
-  "schemaVersion": 10,
-  "modelDigest": "blake3:8de60b8141170623737d6c851e66870471261895bffd6e2312699cdc4cd8343e",
+  "schemaVersion": 12,
+  "modelDigest": "blake3:86b10e719bc3104ad5771ff32b006ff7b7a14fa95e621c8808b4e09218a1d6d1",
   "documents": [
     {
       "uri": "memory://snapshot/diagram_browser_complete.md",
@@ -292,6 +292,7 @@ package BrowserExample {
         "name": "Root",
         "notationRole": "definition",
         "owner": null,
+        "presentationKey": "p:e9a93ed43c9b2d04fabfedbbd722553d9d2208ba39db14c34751c5ea30994b78",
         "reference": 0,
         "source": 0,
         "stateSubaction": null,
@@ -310,6 +311,7 @@ package BrowserExample {
         "name": "branch",
         "notationRole": "usage",
         "owner": 0,
+        "presentationKey": "p:c9fe35fa2a0eedb17efb8441f8f483bce3d2b25e5c6673f6d5dd3ba8c834976e",
         "reference": 1,
         "source": 1,
         "stateSubaction": null,

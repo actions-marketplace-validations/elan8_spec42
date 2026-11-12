@@ -1,5 +1,5 @@
 //! Port of `prepareViewData` and every shipped-view prepare path (general, interconnection,
-//! sequence, action-flow, state-transition, browser, grid, geometry), including schema-10 typed
+//! sequence, action-flow, state-transition, browser, grid, geometry), including schema-12 typed
 //! products.
 
 use std::collections::{HashMap, HashSet};
@@ -1593,6 +1593,7 @@ fn map_port_detail(port: &Value) -> Value {
             "parentId": field(port, "ownerNodeId"),
             "scenePortId": field(port, "id"),
             "sideHint": field(port, "sideHint"),
+            "busPortId": field(port, "busPortId"),
         },
     })
 }
@@ -2082,6 +2083,9 @@ fn interconnection_scene_from_typed_projection(
                 "id": id_for(index),
                 "semanticId": qualified_name(index),
                 "ownerNodeId": id_for(owner),
+                // A nested port's outermost port on its part, such as the bus it is a signal of:
+                // a closed part shows only that port.
+                "busPortId": through_ports.first().map(|port| id_for(*port)),
                 "name": display_name(index, &through_ports),
                 "typeName": type_name(element),
                 // The arrow in a port's square shows the direction written on the port, or
@@ -3103,11 +3107,11 @@ fn prepare_typed_diagram_product(input: &Value) -> Option<Result<Value, String>>
                 field(node, "source") == field(vertex, "navigation")
                     && as_string(field(node, "metaclass"), "").contains("State")
             })?;
-            let action = projected_nodes.iter().find(|node| {
+            let (action_index, action) = projected_nodes.iter().enumerate().find(|(_, node)| {
                 field(node, "owner").as_u64() == Some(state as u64)
                     && field(node, "stateSubaction").as_str() == Some(role)
             })?;
-            // Named by its own name, or by the action it is typed by when it has none.
+            // Format the supplied name, type, or explicit state-action binding target.
             field(action, "name")
                 .as_str()
                 .map(str::to_owned)
@@ -3116,6 +3120,42 @@ fn prepare_typed_diagram_product(input: &Value) -> Option<Result<Value, String>>
                         .first()
                         .and_then(|typed| field(typed, "label").as_str())
                         .map(str::to_owned)
+                })
+                .or_else(|| {
+                    let binding = match role {
+                        "entry" => "entryActionBinding",
+                        "do" => "doActionBinding",
+                        "exit" => "exitActionBinding",
+                        _ => return None,
+                    };
+                    let relationship = as_array(field(projection, "relationships")).iter().find(
+                        |relationship| {
+                            field(relationship, "source").as_u64() == Some(action_index as u64)
+                                && field(relationship, "kind").as_str() == Some(binding)
+                        },
+                    )?;
+                    let target = field(relationship, "target");
+                    if field(target, "status").as_str() != Some("resolved") {
+                        return None;
+                    }
+                    if let Some(node) = field(target, "node")
+                        .as_u64()
+                        .and_then(|index| projected_nodes.get(index as usize))
+                    {
+                        return field(node, "name").as_str().map(str::to_owned);
+                    }
+                    let reference = field(target, "reference").as_u64()?;
+                    projected_nodes
+                        .iter()
+                        .find(|node| field(node, "reference").as_u64() == Some(reference))
+                        .and_then(|node| field(node, "name").as_str())
+                        .map(str::to_owned)
+                        .or_else(|| {
+                            references
+                                .get(reference as usize)
+                                .and_then(|reference| field(reference, "qualifiedName").as_str())
+                                .map(str::to_owned)
+                        })
                 })
         };
         // A state that owns states shows them inside it (SysML 8.2.3.18). The vertex of a
@@ -3232,6 +3272,7 @@ fn prepare_typed_diagram_product(input: &Value) -> Option<Result<Value, String>>
                 "edgeKind": "transition",
                 "attributes": {
                     "semanticSceneId": field(transition, "id"),
+                    "transitionName": field(transition, "label"),
                     "relationType": "transition",
                     "selfLoop": field(transition, "source") == field(transition, "target"),
                     "trigger": trigger,
@@ -3305,11 +3346,7 @@ fn prepare_typed_diagram_product(input: &Value) -> Option<Result<Value, String>>
                 && composite_unless_ref(&as_string(field(element, "metaclass"), ""));
             json!({
                 "id": format!("n:{index}"),
-                "label": if field(element, "name").is_string() {
-                    field(element, "name").clone()
-                } else {
-                    Value::String(as_string(field(element, "metaclass"), ""))
-                },
+                "label": as_string(field(element, "name"), ""),
                 "kind": as_string(field(element, "metaclass"), "Unrecognized"),
                 "uri": field(&source, "uri"),
                 "range": field(&source, "range"),
@@ -3320,7 +3357,16 @@ fn prepare_typed_diagram_product(input: &Value) -> Option<Result<Value, String>>
                     "typingStatus": field(typing, "status"),
                     "typedByName": typed_by_name,
                     "multiplicity": field(element, "multiplicity"),
-                    "direction": field(element, "direction"),
+                    // A port's aggregate flow direction supplies IBD arrows, not an
+                    // authored `in`/`out` prefix on the port itself. Directed members
+                    // use their effective occurrence direction under conjugation.
+                    "direction": if matches!(field(element, "metaclass").as_str(),
+                        Some("PortUsage" | "PortDefinition" | "ConjugatedPortDefinition"))
+                        || field(element, "featureDirection").is_null() {
+                        field(element, "direction")
+                    } else {
+                        field(element, "featureDirection")
+                    },
                     "conjugated": field(element, "conjugated"),
                     "referenceMembership": reference_membership,
                     "authoredReference": authored_reference,
@@ -3457,6 +3503,48 @@ fn composite_unless_ref(metaclass: &str) -> bool {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn general_view_uses_names_and_effective_directions_from_the_product() {
+        // A renderer contract test supplies an already prepared semantic product. The snapshot
+        // corpus separately verifies how occurrence names and directions reach this boundary.
+        let payload = json!({
+            "schemaVersion": diagram_product::SCHEMA_VERSION,
+            "selectedView": {"kind": "general-view", "name": "Occurrences"},
+            "projection": {
+                "kind": "general-view",
+                "nodes": [
+                    {"metaclass": "MetadataUsage", "name": null},
+                    {"metaclass": "BindingConnectorAsUsage", "name": null},
+                    {"metaclass": "ItemUsage", "name": "o", "direction": "out", "featureDirection": "in"},
+                    {"metaclass": "ItemUsage", "name": "o", "direction": "out", "featureDirection": "out"},
+                    {"metaclass": "ItemUsage", "name": "local", "direction": "out", "featureDirection": "out"}
+                ],
+                "edges": []
+            }
+        });
+        let input = prepare_view_data(&payload).expect("general view prepares");
+        let nodes = input["nodes"].as_array().unwrap();
+        for kind in ["MetadataUsage", "BindingConnectorAsUsage"] {
+            let node = nodes
+                .iter()
+                .find(|node| node["kind"] == kind)
+                .unwrap_or_else(|| panic!("missing {kind}: {input}"));
+            assert_eq!(
+                node["label"], "",
+                "an absent name stays absent in the label"
+            );
+        }
+        let mut directions = nodes
+            .iter()
+            .filter(|node| node["label"] == "o")
+            .map(|node| node["attributes"]["direction"].as_str().unwrap())
+            .collect::<Vec<_>>();
+        directions.sort();
+        assert_eq!(directions, ["in", "out"]);
+        let local = nodes.iter().find(|node| node["label"] == "local").unwrap();
+        assert_eq!(local["attributes"]["direction"], "out");
+    }
 
     #[test]
     fn package_container_groups_keep_encounter_order() {

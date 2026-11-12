@@ -244,6 +244,7 @@ part def Vehicle {
     (relationship (kind typeFeaturing) (source (node (document "memory://snapshot/coverage_sysml_usages.md") (path (named (kind part-def) (name "Vehicle")) (named (kind attribute) (name "mass")) (anonymous (kind kerml-literal-integer) (ordinal 0))))) (target (node (document "memory://snapshot/coverage_sysml_usages.md") (qualified-name "Vehicle"))) (provenance implied))
     (relationship (kind typeFeaturing) (source (node (document "memory://snapshot/coverage_sysml_usages.md") (path (named (kind part-def) (name "Vehicle")) (named (kind attribute) (name "mass")) (anonymous (kind kerml-literal-integer) (ordinal 0)) (anonymous (kind kerml-feature) (ordinal 0))))) (target (node (document "memory://snapshot/coverage_sysml_usages.md") (path (named (kind part-def) (name "Vehicle")) (named (kind attribute) (name "mass")) (anonymous (kind kerml-literal-integer) (ordinal 0))))) (provenance implied))
     (relationship (kind typeFeaturing) (source (node (document "memory://snapshot/coverage_sysml_usages.md") (qualified-name "Vehicle::nextEvent"))) (target (node (document "memory://snapshot/coverage_sysml_usages.md") (qualified-name "Vehicle"))) (provenance implied))
+    (relationship (kind succession) (source (node (document "memory://snapshot/coverage_sysml_usages.md") (qualified-name "Vehicle::nextEvent"))) (target (node (document "memory://snapshot/coverage_sysml_usages.md") (qualified-name "Vehicle::refEvent"))) (provenance implied))
     (relationship (kind typeFeaturing) (source (node (document "memory://snapshot/coverage_sysml_usages.md") (qualified-name "Vehicle::out1"))) (target (node (document "memory://snapshot/coverage_sysml_usages.md") (qualified-name "Vehicle"))) (provenance implied))
     (relationship (kind typeFeaturing) (source (node (document "memory://snapshot/coverage_sysml_usages.md") (qualified-name "Vehicle::payload"))) (target (node (document "memory://snapshot/coverage_sysml_usages.md") (qualified-name "Vehicle"))) (provenance implied))
     (relationship (kind typeFeaturing) (source (node (document "memory://snapshot/coverage_sysml_usages.md") (qualified-name "Vehicle::person1"))) (target (node (document "memory://snapshot/coverage_sysml_usages.md") (qualified-name "Vehicle"))) (provenance implied))
@@ -265,6 +266,7 @@ part def Vehicle {
   )
   (evaluation
     (evaluated (declaration (node (document "memory://snapshot/coverage_sysml_usages.md") (path (named (kind part-def) (name "Vehicle")) (named (kind attribute) (name "mass")) (anonymous (kind kerml-literal-integer) (ordinal 0))))) (state literal) (value (kind integer) (integer 100)))
+    (evaluated (declaration (node (document "memory://snapshot/coverage_sysml_usages.md") (path (named (kind part-def) (name "Vehicle")) (named (kind attribute) (name "weights")) (anonymous (kind kerml-multiplicity-range) (ordinal 0)) (anonymous (kind kerml-literal-integer) (ordinal 0))))) (state literal) (value (kind integer) (integer 3)))
   )
 )
 ~~~
@@ -386,7 +388,8 @@ part def Vehicle {
 # EXPRESSIONS
 ~~~sexpr
 (expressions
-  (declaration (id (node (document "memory://snapshot/coverage_sysml_usages.md") (path (named (kind part-def) (name "Vehicle")) (named (kind attribute) (name "mass")) (anonymous (kind kerml-literal-integer) (ordinal 0))))) (outcome resolved) (literal (value (kind integer) (integer 100))))
+  (declaration (id (node (document "memory://snapshot/coverage_sysml_usages.md") (path (named (kind part-def) (name "Vehicle")) (named (kind attribute) (name "mass")) (anonymous (kind kerml-literal-integer) (ordinal 0))))) (outcome resolved) (result-typing (status unsupported)) (literal (value (kind integer) (integer 100))))
+  (declaration (id (node (document "memory://snapshot/coverage_sysml_usages.md") (path (named (kind part-def) (name "Vehicle")) (named (kind attribute) (name "weights")) (anonymous (kind kerml-multiplicity-range) (ordinal 0)) (anonymous (kind kerml-literal-integer) (ordinal 0))))) (outcome resolved) (result-typing (status unsupported)) (literal (value (kind integer) (integer 3))))
 )
 ~~~
 # NAVIGATION

@@ -4,7 +4,7 @@
   "publisher": "Elan8",
   "icon": "logo/logo.png",
   "description": "Open, local-first SysML v2 and KerML tooling with live editing and the same analysis engine for CI and assistants.",
-  "version": "0.57.0",
+  "version": "0.60.2",
   "license": "MIT",
   "keywords": [
     "sysml",
@@ -48,7 +48,11 @@
         "extensions": [
           ".sysml"
         ],
-        "configuration": "./language-configuration.json"
+        "configuration": "./language-configuration.json",
+        "icon": {
+          "light": "./media/icons/elan8-file.svg",
+          "dark": "./media/icons/elan8-file.svg"
+        }
       },
       {
         "id": "kerml",
@@ -59,7 +63,11 @@
         "extensions": [
           ".kerml"
         ],
-        "configuration": "./language-configuration.json"
+        "configuration": "./language-configuration.json",
+        "icon": {
+          "light": "./media/icons/elan8-file.svg",
+          "dark": "./media/icons/elan8-file.svg"
+        }
       }
     ],
     "semanticTokenScopes": [
@@ -146,16 +154,6 @@
         }
       }
     ],
-    "snippets": [
-      {
-        "language": "sysml",
-        "path": "./snippets/sysml.json"
-      },
-      {
-        "language": "kerml",
-        "path": "./snippets/sysml.json"
-      }
-    ],
     "commands": [
       {
         "command": "sysml.formatDocument",
@@ -182,6 +180,26 @@
         "command": "spec42.diagram.copyJson",
         "title": "Copy View JSON",
         "category": "Spec42"
+      },
+      {
+        "command": "spec42.diagram.home",
+        "title": "Fit View",
+        "icon": "$(home)",
+        "category": "Spec42"
+      },
+      {
+        "command": "spec42.diagram.goToDefinition",
+        "title": "Go to View Definition",
+        "icon": "$(go-to-file)",
+        "category": "Spec42",
+        "enablement": "spec42.diagram.canGoToDefinition"
+      },
+      {
+        "command": "spec42.diagram.export",
+        "title": "Export View...",
+        "icon": "$(export)",
+        "category": "Spec42",
+        "enablement": "spec42.diagram.hasFrame"
       },
       {
         "command": "spec42.examples.refresh",
@@ -318,6 +336,21 @@
           "command": "spec42.examples.refresh",
           "when": "view == spec42Examples",
           "group": "navigation"
+        },
+        {
+          "command": "spec42.diagram.home",
+          "when": "view == spec42DiagramView",
+          "group": "navigation@1"
+        },
+        {
+          "command": "spec42.diagram.goToDefinition",
+          "when": "view == spec42DiagramView",
+          "group": "navigation@2"
+        },
+        {
+          "command": "spec42.diagram.export",
+          "when": "view == spec42DiagramView",
+          "group": "navigation@3"
         }
       ],
       "view/item/context": [
@@ -375,6 +408,18 @@
         },
         {
           "command": "sysml.library.removeLocalLibraryPath"
+        },
+        {
+          "command": "spec42.diagram.home",
+          "when": "spec42.diagram.hasFrame"
+        },
+        {
+          "command": "spec42.diagram.goToDefinition",
+          "when": "spec42.diagram.canGoToDefinition"
+        },
+        {
+          "command": "spec42.diagram.export",
+          "when": "spec42.diagram.hasFrame"
         }
       ]
     },
@@ -607,6 +652,7 @@
         "editor.guides.indentation": false,
         "editor.guides.bracketPairs": false,
         "editor.bracketPairColorization.enabled": false,
+        "editor.wordBasedSuggestions": "off",
         "breadcrumbs.enabled": true,
         "breadcrumbs.showModules": true,
         "breadcrumbs.showNamespaces": true
@@ -616,6 +662,7 @@
         "editor.guides.indentation": false,
         "editor.guides.bracketPairs": false,
         "editor.bracketPairColorization.enabled": false,
+        "editor.wordBasedSuggestions": "off",
         "breadcrumbs.enabled": true,
         "breadcrumbs.showModules": true,
         "breadcrumbs.showNamespaces": true
@@ -644,9 +691,9 @@
     "@types/node": "^22.0.0",
     "@types/vscode": "^1.106.0",
     "@vscode/codicons": "0.0.44",
-    "@vscode/test-cli": "^0.0.11",
+    "@vscode/test-cli": "^0.0.15",
     "@vscode/test-electron": "^2.4.1",
-    "@vscode/vsce": "^3.2.2",
+    "@vscode/vsce": "^4.1.0",
     "esbuild": "^0.25.12",
     "typescript": "~5.6.0",
     "yauzl": "^2.10.0"
@@ -656,9 +703,11 @@
     "vscode-languageserver-protocol": "^3.17.0"
   },
   "overrides": {
+    "glob": "^14.0.3",
+    "minimatch": "^11.0.2",
     "mocha": {
       "diff": "^8.0.4",
-      "serialize-javascript": "^7.0.5"
+      "serialize-javascript": "^7.1.3"
     }
   }
 }

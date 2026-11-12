@@ -107,10 +107,12 @@ New capability lands in this order: implementation in the owning authority, a ty
 ## Filesystem project inputs
 
 Source selection is owned by `sysml_source`: host discovery ceilings, nearest `.project.json`
-boundaries, and project-root `syside.toml` include/exclude rules. Both hosts use that selection;
-editor opens and watched-file events cannot add excluded files to a project. Explicitly admitted
-in-memory sources remain the embedder's responsibility. Configuration is read on discovery rather
-than cached independently of the publication's inputs.
+boundaries, and project-root `spec42.toml` include/exclude rules. `library_paths` in that file
+are additional library roots. Both hosts use that selection and those roots, together with
+`--library-path` and `spec42.libraryPaths`; editor opens and watched-file events cannot add
+excluded files to a project. Spec42 does not read `syside.toml`. Explicitly admitted in-memory
+sources remain the embedder's responsibility. Configuration is read on discovery rather than
+cached independently of the publication's inputs.
 
 `library_catalog` owns dependency admission from KPAR resource usages and locally installed,
 versioned Sysand lock/environment metadata. Both hosts consume its selected roots and explicit
@@ -134,6 +136,11 @@ pipeline ─► lower ─► resolve ─► evaluate ─► index ─► diagnos
 - A phase reads only earlier products and writes only its own store; the previous product is
   moved, not borrowed mutably, so there is no write-back and no half-built model to observe.
 - Every derived fact has one writer. Evaluation is decided in `evaluate`, never at lowering time.
+  Authored values settle before indexing. Indexed construction first binds contextual expression
+  records and static result types, then invokes the same evaluator with those frozen bindings to
+  settle contextual values before publishing `Indexed`. Shared expression records live at the
+  semantic boundary in `expression`; the evaluator does not depend on index construction code.
+  Authored and contextual evaluation stores remain distinct, with no write-back to authored values.
   The final `diagnose` barrier runs the conformance checks and publishes their diagnostics together
   with parser, unsupported-construct, and resolution diagnostics; there is currently no separate
   published `Checked` product.
@@ -258,11 +265,35 @@ superseded build leaves the previous pair intact. Input freshness and retained f
 by `PublicationSession`, separately from startup readiness.
 
 Accepted editor deltas and versions enter desired source state before parsing. Missing syntax is
-explicitly pending. A preparation worker holds canonical syntax leases and installs them only after
+explicitly pending. A preparation worker holds the syntax authority's opaque prepared batch,
+which pins matching source/syntax leases across independent projects' memo sweeps. Admission
+transfers these existing leases without a parse or memo lookup, and installs them only after
 its captured input revision passes the actor barrier; it never replaces newer editor membership or
 version metadata. Syntax-only requests may use matching desired syntax. Semantic positional requests
 return `ContentModified` while analysis is pending, and an explicit failure when the current build
-failed, rather than applying old semantic ranges to new text.
+failed, rather than applying old semantic ranges to new text. Completion is the exception, because
+it is asked exactly while that analysis is pending: it reads its context and replaced range from the
+current editor text, queries the retained publication at the cursor translated into that
+publication's revision, takes only names and kinds from it, and marks the result as predating the
+source.
+
+The diagram viewer uses a publication-scoped presentation request rather than positional-query
+retries. One backend operation selects the canonical view and returns its catalog and product
+from the same captured publication. Normal pending analysis is a typed result, followed by an
+analysis-status wake after the owner's readiness transition, independently of diagnostic delivery.
+Clients subscribe before querying and coalesce wakes received in flight. They retain the previous
+frame while pending and reject completed work for obsolete requests. The backend rechecks owner
+and publication version before delivery. Rendering never opens a source editor or creates semantic
+inputs, and progress does not depend on polling, digest changes, or matching error prose.
+
+Import completion and file-wide import repair require current source. The semantic authority
+owns import candidates and validates proposed private imports together through its canonical
+resolver, preserving existing bindings and rejecting ambiguous or incompatible results. These
+counterfactual transactions never modify a publication. `language_service` materializes accepted
+choices at syntax-owned anchors, preserving source-owned line-ending preferences. The LSP host
+guards asynchronous results with the document's open interval, editor version and publication
+identity. Completion delivers validated additional edits eagerly so immediate acceptance includes
+the import, and guards subsequent resolve requests; file actions use a versioned document transaction.
 
 Each input revision owns cancellation shared with its child build generations. Invalidation and
 close cancel obsolete work; phase boundaries cooperate without treating cancellation as a fault.
@@ -274,6 +305,44 @@ wakes to requery the current owner, not independent stores of semantic freshness
 completion republishes workspace diagnostics and open library diagnostics once, replacing the old
 per-edit selective delivery plus a later full sweep. This is reporting scope over already-owned
 diagnostics, not a host implementation of dependency semantics.
+
+Configured-library rescans carry the owning project/configuration epoch through discovery and
+parsing to source admission. Obsolete, foreign and closed-session completions cannot mutate desired
+inputs. Editor deltas still enter in order while a rescan is pending, but semantic construction waits
+for its library inputs. Saved scan results merge around open buffers. Unexpected discovery/parsing
+worker failures retain the coherent publication and an explicit failed state across subsequent edits;
+retrying the same configuration creates a new epoch. An open buffer from a removed library keeps its
+source provenance for that editor interval and is withdrawn on close.
+Each project retains at most one active configured-library discovery job and one replaceable
+pending request containing the latest complete configuration. Obsolete jobs stop at discovery and
+parsing boundaries; closing the project discards pending discovery. The discovery driver releases
+its interval after source admission, independently of semantic construction. Readiness and
+diagnostic delivery follow the current semantic publication through the owner's completion loop.
+Startup uses this same queue and source-admission epoch. Until its sources are admitted, a new
+configuration replaces the whole pending workspace/library discovery scope. An obsolete startup
+scan cannot admit old libraries, lose the workspace scan, or signal readiness. Watched filesystem
+batches invalidate older saved-source reads before I/O and hold source admission until the observed
+batch is ingested; the last overlapping batch schedules fresh discovery for the current scope.
+Library-search reads and parsing also run off the actor and cross an epoch guard at admission.
+Discovery failures remain explicit and retry the complete pending scope; initial and reindex
+readiness delivery is claimed once and follows semantic publication before diagnostics.
+Source readiness and notification delivery form one explicit host transition state: discovery,
+awaiting notification, sending, and announced. Startup discovery scope survives configuration
+replacement until source admission. Disk observations retain their independent revision and fence;
+semantic freshness remains owned by `PublicationSession`. These states cannot independently mark
+pending discovery as announced or start another readiness send while one is in flight.
+
+Discovery captures an immutable, content-identified `LibraryCatalog` from the canonical closure
+authority. Publication preparation selects the closure for the latest authored syntax against this
+inventory, without filesystem reads. Changing or removing imports therefore changes the selected
+library set as on a fresh publication. Open library overlays replace their saved revisions while
+preserving language, library role and root-relative identity. Workspace-selected sources remain
+authored seeds independently of their configured library reporting role; removing that role keeps
+the workspace source and drops obsolete library-location metadata. Library watch events fan out to
+all admitting projects and refresh the inventory when its source revisions change. Save echoes do
+not reload it. Loose projects initialize the inventory for explicitly opened sources without
+recursively discovering unopened siblings. Search preparation crosses the source barrier before
+readiness; recovery search entries cannot compete with committed semantic entries for one source.
 
 ### Project boundaries and library admission
 
@@ -314,7 +383,31 @@ independent results deterministically or require project provenance. Manifest ch
 affected project configuration while preserving editor-owned unsaved revisions; they never merge
 project publications or expose an undeclared library.
 
+Editor library settings replace the defaults used by existing manifestless projects and by future
+project discovery. Manifest-owned admissions retain their selected roots until project rediscovery;
+retrying a failed discovery uses that project's roots rather than editor defaults. A source may be
+authored by one workspace project and admitted as a library by others. Editor and watched-file
+mutations reach the authoring owner and every admitting consumer, with each owner updated once.
+An admitted library outside the declared workspace roots stays with its consumers; opening it does
+not create a competing loose publication. A pre-existing independent authoring owner is retained.
+The registry computes one source-ownership plan for both live notifications and replacement-session
+handoff, distinguishing workspace authors from library consumers independently of reporting role.
+Replacement registries are staged with their unsaved buffers before the registry is swapped. An
+open library overlay remains with its existing consumers across root removal until its editor
+interval closes; newly admitting consumers receive that same buffer during rediscovery. Text
+revision uses the source authority's revision operation so language and library location survive
+edits even after the original root is removed.
+
 ## Publication lifecycle and identity
+
+Diagram presentation state belongs to the editor, but its occurrence identity comes from the
+canonical diagram query. The generator boundary hashes each occurrence's settled structural key
+into an opaque presentation key; the diagram product carries that key on its node. Consumers may
+remap disclosure state by exact key equality within the same selected view. Product-local indexes,
+labels, qualified-name text and source ranges never establish cross-publication correspondence.
+Missing or duplicate keys cannot transfer state. This preserves contextual occurrences while
+allowing indexes and source positions to change. Generated wire bindings, product validation and
+presentation-state regression tests enforce the boundary.
 
 A publication is an immutable `PublishedModel` with a dependency-complete, owner-scoped identity
 derived through domain-separated canonical encoding from the content digests of every admitted
@@ -378,7 +471,7 @@ Each invariant above is checked in a place the constrained crates cannot disable
 | the facade publishes no parser or graph type and no text-taking syntax entry point | `crates/sysml_query/tests/architecture.rs` (public API visitor) |
 | no consumer re-implements a facade query, revives a retired heuristic, holds a parsed tree or stratum outside the allow-listed host fields, or reads SysML files | `crates/sysml_query/tests/syntax_authority.rs` (retired-name list, shadowed-name set, source-probe detector with predicate-backed exemptions, field and I/O bans) |
 | a host declares no SysML text entry point and no document-keyed map outside the session's index, both against a shrinking allow-list | `crates/sysml_query/tests/architecture.rs` (AST visitors over `lsp_server/src` and `server/src`) |
-| one `Services` per host; library closure never on the edit path | `crates/lsp_server/tests/debt_guardrails.rs` |
+| one `Services` per host; library filesystem discovery never on the edit path; closure selection belongs to the immutable canonical catalogue | `crates/lsp_server/tests/debt_guardrails.rs` |
 | nearest-manifest project ownership, nested-project isolation, host-selected language-baseline availability and compatibility constraints, manifestless defaults, and exact local dependency admission are shared by batch and editor hosts | `crates/sysml_source` project-boundary tests; `crates/workspace/tests/integration/project_dependencies.rs`; `crates/library_catalog` dependency and explicit-project-library tests; `crates/lsp_server/src/lsp_runtime/project_registry.rs` tests and `crates/lsp_server/tests/integration/project_workspaces.rs` |
 | reporting policy decides nothing semantic | `crates/sysml_diagnostics/tests/dependency_guardrails.rs` |
 | phases only depend on earlier products; evaluation has one writer; a sealed publication holds no parse tree or source text | `crates/sysml_resolution/tests/integration/phase_order.rs` |

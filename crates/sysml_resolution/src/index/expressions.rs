@@ -47,10 +47,12 @@ use crate::lower::facts::ParameterDirection;
 use crate::lower::storage::SemanticModelStorage;
 use crate::model::resolver::SemanticModel;
 use crate::model::span::document_range;
+use crate::model::AuthoredReferenceId;
 use crate::model::DeclarationId;
 use crate::model::DeclarationKind;
 use crate::model::DocumentIdx;
 use crate::model::NameId;
+use crate::model::ReferenceKind;
 use crate::resolve::results::ResolutionError;
 use crate::resolve::results::ResolutionResults;
 use crate::resolve::results::ResolutionStatus;
@@ -82,6 +84,10 @@ pub(crate) type Anchor = Option<DeclarationId>;
 
 /// `MeasurementReferences::MeasurementUnit`: the root every measurement unit's type conforms to.
 pub(crate) const MEASUREMENT_UNIT_PATH: &[&str] = &["MeasurementReferences", "MeasurementUnit"];
+/// `MeasurementReferences::TensorMeasurementReference`: the root of every measurement reference,
+/// including units, coordinate frames and scales.
+pub(crate) const TENSOR_MEASUREMENT_REFERENCE_PATH: &[&str] =
+    &["MeasurementReferences", "TensorMeasurementReference"];
 /// `Quantities::TensorQuantityValue`: the root every quantity value's type conforms to.
 pub(crate) const QUANTITY_VALUE_PATH: &[&str] = &["Quantities", "TensorQuantityValue"];
 /// `Quantities::TensorQuantityValue::mRef`: the feature every quantity value redefines to state
@@ -98,6 +104,7 @@ pub(crate) const REAL_PATH: &[&str] = &["ScalarValues", "Real"];
 #[derive(Debug, Default)]
 pub(crate) struct LibraryAnchors {
     pub(crate) measurement_unit: Anchor,
+    pub(crate) tensor_measurement_reference: Anchor,
     pub(crate) quantity_value: Anchor,
     pub(crate) measurement_reference: Anchor,
     pub(crate) boolean: Anchor,
@@ -107,12 +114,15 @@ pub(crate) struct LibraryAnchors {
     /// `Base::Anything::self`, the self-reference feature a model-level evaluable feature
     /// reference may name (KerML 8.3.4.8.5).
     pub(crate) anything_self: Anchor,
+    /// The inverse featuring-instance feature defined by the standard Base package.
+    pub(crate) things_that: Anchor,
 }
 
 impl LibraryAnchors {
     pub(crate) fn build(storage: &SemanticModelStorage) -> Self {
         Self {
             measurement_unit: find_anchor(storage, MEASUREMENT_UNIT_PATH),
+            tensor_measurement_reference: find_anchor(storage, TENSOR_MEASUREMENT_REFERENCE_PATH),
             quantity_value: find_anchor(storage, QUANTITY_VALUE_PATH),
             measurement_reference: find_anchor(storage, MEASUREMENT_REFERENCE_PATH),
             boolean: find_anchor(storage, BOOLEAN_PATH),
@@ -120,6 +130,7 @@ impl LibraryAnchors {
             integer: find_anchor(storage, INTEGER_PATH),
             real: find_anchor(storage, REAL_PATH),
             anything_self: find_anchor(storage, &["Base", "Anything", "self"]),
+            things_that: find_anchor(storage, &["Base", "things", "that"]),
         }
     }
 
@@ -217,6 +228,8 @@ pub(crate) enum UnitOutcome {
         dimensions: Box<[DeclarationId]>,
     },
     UnknownSymbol,
+    /// The name is not in scope. Name resolution reports that, so nothing is reported here.
+    Unresolved,
     Ambiguous(Box<[DeclarationId]>),
     UnsupportedExpression,
     CatalogUnavailable,
@@ -416,6 +429,14 @@ impl ExpressionIndex {
         let anchors = LibraryAnchors::build(storage);
         let catalog = UnitCatalog::build(model, &anchors)?;
 
+        let mut unit_references = std::collections::BTreeMap::new();
+        for (index, reference) in storage.references.iter().enumerate() {
+            if reference.kind == ReferenceKind::QuantityUnit {
+                let id = AuthoredReferenceId::from_index(index)
+                    .map_err(|_| ResolutionError::Capacity)?;
+                unit_references.insert((reference.source, reference.ordinal), id);
+            }
+        }
         let mut units = storage
             .unit_tokens
             .iter()
@@ -425,7 +446,15 @@ impl ExpressionIndex {
                 ordinal: token.ordinal,
                 text: token.text,
                 span: token.span,
-                outcome: catalog.resolve(storage, token.text),
+                outcome: match token
+                    .reference
+                    .and_then(|ordinal| unit_references.get(&(token.declaration, ordinal)))
+                {
+                    Some(id) => {
+                        catalog.settle(model, &anchors, token.text, model.resolution.outcome(*id))
+                    }
+                    None => catalog.resolve(storage, token.text),
+                },
             })
             .collect::<Vec<_>>();
         units.sort_by_key(|unit| (unit.declaration, unit.ordinal));
@@ -678,6 +707,41 @@ impl UnitCatalog {
             dimensions,
             admitted: true,
         })
+    }
+
+    /// What a unit written as one name settled to.
+    ///
+    /// Name resolution decides what the name means; the catalog then says whether that is a unit
+    /// and of what dimension. The library's `[` functions take any measurement reference, so a
+    /// coordinate frame or a scale is valid but has no unit outcome to publish. A name that
+    /// resolves to anything else fails the quantity check.
+    pub(crate) fn settle(
+        &self,
+        model: &ExpressionInputs<'_>,
+        anchors: &LibraryAnchors,
+        text: NameId,
+        outcome: Option<ResolutionStatus>,
+    ) -> UnitOutcome {
+        if !self.admitted {
+            return UnitOutcome::CatalogUnavailable;
+        }
+        match outcome {
+            Some(ResolutionStatus::Resolved(unit)) => match self.dimensions.get(&unit) {
+                Some(dimensions) => UnitOutcome::Resolved {
+                    unit,
+                    dimensions: dimensions.clone(),
+                },
+                None if anchors
+                    .tensor_measurement_reference
+                    .is_some_and(|reference| conforms(model.types, unit, reference)) =>
+                {
+                    UnitOutcome::UnsupportedExpression
+                }
+                None => UnitOutcome::UnknownSymbol,
+            },
+            Some(ResolutionStatus::Unresolved) => UnitOutcome::Unresolved,
+            _ => self.resolve(model.storage, text),
+        }
     }
 
     /// What one authored token names.
@@ -1008,7 +1072,9 @@ impl<D> SemanticModel<D> {
                     }),
                     None => UnitResolution::UnknownSymbol,
                 },
-                UnitOutcome::UnknownSymbol => UnitResolution::UnknownSymbol,
+                UnitOutcome::UnknownSymbol | UnitOutcome::Unresolved => {
+                    UnitResolution::UnknownSymbol
+                }
                 UnitOutcome::Ambiguous(candidates) => {
                     UnitResolution::Ambiguous(self.symbols(candidates.iter().copied()))
                 }

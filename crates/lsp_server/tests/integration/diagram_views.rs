@@ -112,7 +112,7 @@ fn diagram_views_returns_the_webshop_catalog_over_the_lsp() {
     );
 
     for view in views {
-        assert_eq!(view["namespace"], "Views", "canonical owner: {view}");
+        assert_eq!(view["namespace"], "WebShopViews", "canonical owner: {view}");
         let range = &view["source"]["range"];
         assert!(
             range["startLine"].is_u64() && range["endLine"].is_u64(),
@@ -169,6 +169,101 @@ fn diagram_views_returns_the_webshop_catalog_over_the_lsp() {
         models.len(),
         5,
         "the regression must exercise the whole webshop model"
+    );
+}
+
+#[test]
+fn diagram_presentation_keys_survive_range_changes_and_fresh_session() {
+    use diagram_product::wire::{DiagramProduct, Projection};
+    let stdlib = tempfile::tempdir().unwrap();
+    standard_library_fixture(stdlib.path());
+    let root = PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+        .join("../../examples/webshop")
+        .canonicalize()
+        .unwrap();
+    let root_uri = url::Url::from_directory_path(&root).unwrap();
+    let uri = url::Url::from_file_path(root.join("Views.sysml"))
+        .unwrap()
+        .to_string();
+    let read_keys = |session: &mut TestSession| {
+        let catalog = session.request("spec42/diagramViews", serde_json::json!({"modelUri":uri}));
+        let view = catalog["result"]["views"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .find(|view| view["name"] == "structure")
+            .unwrap();
+        let response = session.request(
+            "spec42/diagram",
+            serde_json::json!({"modelUri":uri,
+            "handle":view["handle"],"expectedModelDigest":catalog["result"]["modelDigest"]}),
+        );
+        assert!(response.get("error").is_none(), "{response}");
+        let product: DiagramProduct =
+            serde_json::from_str(response["result"]["productJson"].as_str().unwrap()).unwrap();
+        let Projection::General { nodes, .. } = product.projection else {
+            panic!("expected GeneralView");
+        };
+        assert!(!nodes.is_empty());
+        let mut keys = nodes
+            .into_iter()
+            .map(|node| node.presentation_key)
+            .collect::<Vec<_>>();
+        let count = keys.len();
+        keys.sort();
+        keys.dedup();
+        assert_eq!(
+            keys.len(),
+            count,
+            "every contextual occurrence has a unique presentation key"
+        );
+        assert!(keys.iter().all(|key| !key.is_empty()));
+        (product.model_digest, keys)
+    };
+    let mut session = TestSession::new_with_env(&[("SPEC42_LSP_TEST_STDLIB", stdlib.path())]);
+    session.initialize_with_root("presentation-range", &root_uri);
+    let models = open_workspace_models(&mut session, &root);
+    let uris = models
+        .iter()
+        .map(|(uri, _)| uri.as_str())
+        .collect::<Vec<_>>();
+    session.wait_for_publications(&uris);
+    let baseline = read_keys(&mut session);
+    let original = &models
+        .iter()
+        .find(|(model_uri, _)| model_uri == &uri)
+        .unwrap()
+        .1;
+    let changed = format!("// Move source ranges without changing the view.\n{original}");
+    session.did_change_full(&uri, &changed, 2);
+    session.wait_for_diagnostics_version(&uri, 2);
+    session.barrier();
+    let edited = read_keys(&mut session);
+    assert_ne!(
+        edited.0, baseline.0,
+        "changed sources have a new publication identity"
+    );
+    assert_eq!(
+        edited.1, baseline.1,
+        "presentation keys do not depend on source ranges or publication identity"
+    );
+    drop(session);
+
+    let mut fresh = TestSession::new_with_env(&[("SPEC42_LSP_TEST_STDLIB", stdlib.path())]);
+    fresh.initialize_with_root("presentation-fresh", &root_uri);
+    for (model_uri, text) in &models {
+        fresh.did_open(
+            model_uri,
+            if model_uri == &uri { &changed } else { text },
+            1,
+        );
+    }
+    fresh.wait_for_diagnostics_version(&uri, 1);
+    fresh.barrier();
+    assert_eq!(
+        read_keys(&mut fresh),
+        edited,
+        "a fresh host agrees on model and presentation identities"
     );
 }
 
@@ -266,4 +361,118 @@ fn sequence_products_survive_live_anonymous_nested_and_recovery_edits() {
         }
         previous_digest = Some(digest);
     }
+}
+
+#[test]
+fn diagram_presentation_selects_and_draws_closed_sources_on_one_publication() {
+    let stdlib = tempfile::tempdir().unwrap();
+    standard_library_fixture(stdlib.path());
+    let root = PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+        .join("../../examples/webshop")
+        .canonicalize()
+        .unwrap();
+    let uri = url::Url::from_file_path(root.join("Views.sysml"))
+        .unwrap()
+        .to_string();
+    let mut session = TestSession::new_with_env(&[("SPEC42_LSP_TEST_STDLIB", stdlib.path())]);
+    session.initialize_with_root(
+        "diagram-presentation-test",
+        &url::Url::from_directory_path(&root).unwrap(),
+    );
+    // Discovery supplies closed files. Rendering never requires didOpen or creates new inputs.
+    let context_uri = url::Url::from_file_path(root.join("not-admitted.sysml"))
+        .unwrap()
+        .to_string();
+    let request = |selection: serde_json::Value,
+                   known: serde_json::Value,
+                   expanded: serde_json::Value| {
+        serde_json::json!({
+            "projectUri":context_uri,"selection":selection,"preferredDocumentUri":uri,"expanded":expanded,"knownProduct":known
+        })
+    };
+    let first = session.diagram_presentation_when_ready(request(
+        serde_json::Value::Null,
+        serde_json::Value::Null,
+        serde_json::json!([]),
+    ));
+    assert!(first.get("error").is_none(), "{first}");
+    let result = &first["result"];
+    assert_eq!(result["state"], "ready", "{first}");
+    assert!(result["semanticStateVersion"].is_string());
+    let product: serde_json::Value =
+        serde_json::from_str(result["productJson"].as_str().unwrap()).unwrap();
+    assert_eq!(product["modelDigest"], result["modelDigest"]);
+    let selected = result["views"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|view| view["handle"] == result["selectedHandle"])
+        .unwrap();
+    assert_eq!(selected["reference"], result["selection"]["reference"]);
+    assert_eq!(product["selectedView"]["kind"], selected["kind"]);
+    let known = serde_json::json!({"modelDigest":result["modelDigest"],"selection":result["selection"],"expanded":[]});
+    let unchanged = session.request_once(
+        "spec42/diagramPresentation",
+        request(
+            result["selection"].clone(),
+            known.clone(),
+            serde_json::json!([]),
+        ),
+    );
+    assert_eq!(unchanged["result"]["state"], "unchanged", "{unchanged}");
+    assert_eq!(
+        unchanged["result"]["semanticStateVersion"],
+        result["semanticStateVersion"]
+    );
+    let other = result["views"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|view| view["handle"] != result["selectedHandle"])
+        .unwrap();
+    let selection = serde_json::json!({"kind":other["kind"],"reference":other["reference"]});
+    let switched = session.request_once(
+        "spec42/diagramPresentation",
+        request(selection, known.clone(), serde_json::json!([])),
+    );
+    assert_eq!(switched["result"]["state"], "ready", "{switched}");
+    assert_eq!(switched["result"]["selectedHandle"], other["handle"]);
+    let expanded = session.request_once(
+        "spec42/diagramPresentation",
+        request(
+            result["selection"].clone(),
+            known.clone(),
+            serde_json::json!(["unopened"]),
+        ),
+    );
+    assert_ne!(
+        expanded["result"]["state"], "unchanged",
+        "query options are prerequisites: {expanded}"
+    );
+    let mut removed = result["selection"].clone();
+    removed["reference"]["qualifiedName"] = "NoLongerAuthored".into();
+    let fallback = session.request_once(
+        "spec42/diagramPresentation",
+        request(removed, known.clone(), serde_json::json!(["old-view-row"])),
+    );
+    assert_eq!(fallback["result"]["state"], "ready", "{fallback}");
+    assert_eq!(fallback["result"]["expanded"], serde_json::json!([]));
+    // A deliberate editor change invalidates the retained product. The protocol waits on
+    // backend wakes, not elapsed time, and never accepts the old identity as an unchanged view.
+    let changed_source =
+        std::fs::read_to_string(root.join("Views.sysml")).unwrap() + "\n// edited revision\n";
+    session.did_open(&uri, &changed_source, 1);
+    let changed = session.diagram_presentation_when_ready(request(
+        result["selection"].clone(),
+        known,
+        serde_json::json!([]),
+    ));
+    assert_eq!(changed["result"]["state"], "ready", "{changed}");
+    assert_ne!(changed["result"]["modelDigest"], result["modelDigest"]);
+    let updated_product: serde_json::Value =
+        serde_json::from_str(changed["result"]["productJson"].as_str().unwrap()).unwrap();
+    assert_eq!(
+        updated_product["modelDigest"],
+        changed["result"]["modelDigest"]
+    );
 }

@@ -19,7 +19,7 @@ use crate::model::{
     AuthoredReferenceId, DeclarationId, DeclarationKind, DocumentIdx, MembershipKind, NameId,
     ReferenceKind, SymbolPathId, Visibility,
 };
-use crate::{MembershipRole, TextPosition, TextRange};
+use crate::MembershipRole;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(crate) enum AuthoredImportShape {
@@ -44,6 +44,9 @@ pub(crate) struct RelationshipFlags {
     pub(crate) implied: bool,
     pub(crate) recursive: bool,
     pub(crate) wildcard: bool,
+    /// `import all`: the import considers every membership, whatever its visibility (KerML
+    /// 8.3.2.4 `isImportAll`).
+    pub(crate) import_all: bool,
     /// The authored target uses the bracketed filtered-import shape. View exposes retain this
     /// separately from namespace wildcards so the exposed-element query can report the shape as
     /// unsupported instead of treating its resolved namespace as an explicitly exposed element.
@@ -406,6 +409,10 @@ pub(crate) struct DeclarationFacts {
     /// records the trigger shape on `TransitionAccept`; lowering publishes it on the synthesized
     /// accept action so generated rules never infer it from an owner name or reference spelling.
     pub(crate) is_trigger_action: Option<bool>,
+    /// Kind of this authored TriggerInvocationExpression; shared by checks and publication.
+    pub(crate) trigger_kind: Option<sysml_contract::TriggerKind>,
+    /// Authored trigger argument for diagram labels; captured from its expression span.
+    pub(crate) trigger_argument_text: Option<Box<str>>,
     /// Whether an `AcceptActionUsage`'s first input parameter owns an authored value expression.
     /// Typed payload declarations still synthesize the required payload parameter, but have no
     /// argument expression; shorthand/time triggers do.
@@ -512,8 +519,14 @@ pub(crate) struct DeclarationFacts {
     pub(crate) is_initial_node_marker: bool,
     /// On the continuation or the node a `then` declares: where its succession starts.
     pub(crate) then_source: Option<ThenSource>,
+    /// SysML 7.18.3 shorthand transition source: the preceding state or entry action.
+    /// Consumed by transition checks, implied source/succession relationships and role specializations.
+    pub(crate) implicit_transition_source: Option<DeclarationId>,
     /// On a conditional succession: when it is taken.
     pub(crate) succession_guard: Option<SuccessionGuard>,
+    /// On the expression a conditional succession owns as its guard. `GuardedSuccession` is a
+    /// `TransitionUsage`, so this is the same `GuardExpressionMember` a transition owns.
+    pub(crate) is_succession_guard: bool,
 }
 
 /// When a conditional succession is taken (SysML 7.17.5): `first a if g then b;`, and in the
@@ -1161,7 +1174,7 @@ pub(crate) struct AdmittedDocument {
 }
 
 /// One document as the sealed publication holds it: no tree, no source text.
-#[derive(Debug)]
+#[derive(Debug, Clone)]
 pub(crate) struct CanonicalDocument {
     pub(crate) identity: Box<str>,
     /// See [`AdmittedDocument::role`].
@@ -1171,58 +1184,7 @@ pub(crate) struct CanonicalDocument {
     pub(crate) lines: LineIndex,
 }
 
-/// The byte offset of every line start in one admitted source.
-///
-/// Four bytes per line, against the whole source text and AST it replaces in the sealed model. A
-/// settled parser `Span` is projected through this rather than by re-reading the document, which is
-/// what lets the publication answer a location query without a parse tree.
-#[derive(Debug, Default)]
-pub(crate) struct LineIndex {
-    /// Byte offset of the first byte of every line; always begins with `0`.
-    starts: Box<[u32]>,
-    /// Byte length of the source, so an out-of-bounds span is rejected rather than clamped.
-    length: u32,
-}
-
-impl LineIndex {
-    pub(crate) fn build(text: &str) -> Self {
-        let mut starts = vec![0u32];
-        starts.extend(text.bytes().enumerate().filter_map(|(index, byte)| {
-            (byte == b'\n')
-                .then(|| u32::try_from(index + 1).ok())
-                .flatten()
-        }));
-        Self {
-            starts: starts.into_boxed_slice(),
-            length: u32::try_from(text.len()).unwrap_or(u32::MAX),
-        }
-    }
-
-    /// The zero-based line and byte column of `offset`, or `None` past the end of the source.
-    pub(crate) fn position(&self, offset: usize) -> Option<TextPosition> {
-        let offset = u32::try_from(offset).ok()?;
-        if offset > self.length {
-            return None;
-        }
-        let line = self
-            .starts
-            .partition_point(|start| *start <= offset)
-            .checked_sub(1)?;
-        Some(TextPosition {
-            line: u32::try_from(line).ok()?,
-            character: offset - self.starts.get(line)?,
-        })
-    }
-
-    /// The zero-based range a settled byte span covers.
-    pub(crate) fn range(&self, span: &Span) -> Option<TextRange> {
-        let end = span.offset.checked_add(span.len)?;
-        Some(TextRange {
-            start: self.position(span.offset)?,
-            end: self.position(end)?,
-        })
-    }
-}
+pub(crate) use crate::positions::LineIndex;
 
 /// An authored identification component; malformed syntax is distinct from an omitted name.
 #[derive(Debug, Default, Clone, Copy, PartialEq, Eq)]
@@ -1406,6 +1368,9 @@ pub(crate) struct AuthoredUnitToken {
     pub(crate) text: NameId,
     /// The token's own range: the text between `[` and `]`, excluding the brackets.
     pub(crate) span: Span,
+    /// The ordinal of the `QuantityUnit` reference of `declaration` that names this unit. `None`
+    /// for a compound unit, which is not one name.
+    pub(crate) reference: Option<u32>,
 }
 
 /// Which member form a `filter` statement was written in.
@@ -1498,16 +1463,7 @@ pub(crate) struct AssignmentRecord {
     pub(crate) referent: Option<AuthoredReferenceId>,
 }
 
-/// The kind of a SysML `TriggerInvocationExpression` (`TriggerKind`).
-#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
-pub(crate) enum TriggerInvocationKind {
-    /// `accept when <condition>`: a change trigger on a Boolean condition.
-    When,
-    /// `accept at <instant>`: a time trigger at a time instant.
-    At,
-    /// `accept after <duration>`: a time trigger after a duration.
-    After,
-}
+pub(crate) use sysml_contract::TriggerKind as TriggerInvocationKind;
 
 /// The literal kind of a literal argument, as the parser types it.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
@@ -1537,7 +1493,6 @@ pub(crate) enum TriggerArgument {
 pub(crate) struct TriggerInvocationRecord {
     /// The TriggerInvocationExpression element.
     pub(crate) expression: DeclarationId,
-    pub(crate) kind: TriggerInvocationKind,
     pub(crate) argument: TriggerArgument,
 }
 

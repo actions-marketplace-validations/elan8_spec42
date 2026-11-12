@@ -39,7 +39,9 @@ use crate::resolve::names::build_inherited_name_index;
 use crate::resolve::names::build_inherited_name_index_for_scopes;
 use crate::resolve::names::lookup_lexical_into;
 use crate::resolve::names::CandidateRange;
+use crate::resolve::names::EffectiveVisibility;
 use crate::resolve::names::FirstScopePolicy;
+use crate::resolve::names::ImportNameSources;
 use crate::resolve::names::InheritedNameIndex;
 use crate::resolve::names::LookupTarget;
 use crate::resolve::names::MembershipIndex;
@@ -93,6 +95,7 @@ impl ResolutionReferenceFact for AuthoredReference {
 pub(crate) struct ResolutionStartingState<'a> {
     pub provisional_relationships: &'a [ImpliedRelationship],
     pub settled_outcomes: Option<&'a [ResolutionStatus]>,
+    pub settled_ambiguous_candidates: &'a [DeclarationId],
     /// Standard-library root declarations a workspace root of the same name shadows. They stay in
     /// storage for role-filtered anchor resolution but must not be bare-name lexical candidates, or
     /// an explicit `import <Name>::*` over the workspace package resolves to both and is reported
@@ -103,6 +106,14 @@ pub(crate) struct ResolutionStartingState<'a> {
     pub owned_end_features: &'a [OwnedEndRecord],
     /// Canonical last-chaining-feature typing dependencies, not specialization edges.
     pub feature_type_dependencies: &'a [(DeclarationId, DeclarationId)],
+    /// Ephemeral private imports for an editor transaction; never published.
+    pub proposed_imports: &'a [(names::NameKey, DeclarationId)],
+    /// Inherited scopes from the preceding construction pass. Imports and inheritance
+    /// must reach the same fixed point before publication.
+    pub inherited_import_scopes: Option<&'a InheritedNameIndex>,
+    /// Effective identification for those same scopes: anonymous owned redefinitions
+    /// must keep their names when the next pass decides which inherited names are hidden.
+    pub effective_import_names: Option<&'a [EffectiveNameFacts]>,
 }
 
 /// The settled direct specialization edges `(specific, general)` over resolved `references` and
@@ -235,9 +246,13 @@ pub(crate) fn resolve_dense_with_limit<R: ResolutionReferenceFact>(
     let ResolutionStartingState {
         provisional_relationships,
         settled_outcomes: seed,
+        settled_ambiguous_candidates,
         shadowed_library_roots,
         owned_end_features,
         feature_type_dependencies,
+        proposed_imports,
+        inherited_import_scopes,
+        effective_import_names,
     } = starting_state;
     let membership_records = memberships;
     let memberships = MembershipIndex::build(declarations, memberships)?;
@@ -254,8 +269,16 @@ pub(crate) fn resolve_dense_with_limit<R: ResolutionReferenceFact>(
     if let Some(seed) = seed {
         outcomes[..settled].copy_from_slice(seed);
     }
-    let mut effective_names =
-        derive_effective_names(declarations, declaration_facts, references, &outcomes)?;
+    let mut effective_names = if let Some(names) = effective_import_names {
+        if names.len() != declarations.len() {
+            return Err(ResolutionError::InvalidStorage);
+        }
+        // This is only a seed. The relationship loop re-derives names before declaring its
+        // fixed point, so stale effective names cannot escape this pass as settled facts.
+        names.to_vec()
+    } else {
+        derive_effective_names(declarations, declaration_facts, references, &outcomes)?
+    };
     let mut direct_names = build_direct_name_index(
         declarations,
         declaration_facts,
@@ -459,6 +482,7 @@ pub(crate) fn resolve_dense_with_limit<R: ResolutionReferenceFact>(
                     | ReferenceKind::ExitActionBinding
                     | ReferenceKind::InitialState
                     | ReferenceKind::ExpressionOperand
+                    | ReferenceKind::QuantityUnit
                     | ReferenceKind::TransitionSource
                     | ReferenceKind::TransitionTarget
                     | ReferenceKind::TransitionTrigger
@@ -497,6 +521,10 @@ pub(crate) fn resolve_dense_with_limit<R: ResolutionReferenceFact>(
                         | ReferenceKind::ExplicitRelationshipEndpoint
                         | ReferenceKind::SatisfySource
                         | ReferenceKind::SatisfyTarget
+                        | ReferenceKind::TransitionSource
+                        | ReferenceKind::TransitionTarget
+                        | ReferenceKind::TransitionTrigger
+                        | ReferenceKind::TransitionEffect
                 ) && reference.flags().dotted)
             })
             .unwrap_or(false)
@@ -538,6 +566,10 @@ pub(crate) fn resolve_dense_with_limit<R: ResolutionReferenceFact>(
                             | ReferenceKind::FeatureChaining
                             | ReferenceKind::SatisfySource
                             | ReferenceKind::SatisfyTarget
+                            | ReferenceKind::TransitionSource
+                            | ReferenceKind::TransitionTarget
+                            | ReferenceKind::TransitionTrigger
+                            | ReferenceKind::TransitionEffect
                             // A feature's type relationship operand may be an
                             // `OwnedFeatureChain` (`differences b.f`, KerML 8.2.4.3.1).
                             | ReferenceKind::Unioning
@@ -553,12 +585,13 @@ pub(crate) fn resolve_dense_with_limit<R: ResolutionReferenceFact>(
             .map_err(|_| ResolutionError::Capacity)?,
         ..ResolutionWork::default()
     };
-    let mut effective_imports = NameIndex::build(Vec::new())?;
+    let mut effective_imports = NameIndex::build(proposed_imports.to_vec())?;
     let mut exported_imports = NameIndex::build(Vec::new())?;
-    let mut ambiguous_candidates = Vec::new();
+    let mut ambiguous_candidates = settled_ambiguous_candidates.to_vec();
     let mut candidates = Vec::new();
     let mut next_candidates = Vec::new();
     let mut converged = false;
+    let mut import_cycle = crate::resolve::results::FeedbackCycle::default();
 
     for _ in 0..pass_limit {
         work.passes = work
@@ -566,6 +599,7 @@ pub(crate) fn resolve_dense_with_limit<R: ResolutionReferenceFact>(
             .checked_add(1)
             .ok_or(ResolutionError::Capacity)?;
         ambiguous_candidates.clear();
+        ambiguous_candidates.extend_from_slice(settled_ambiguous_candidates);
         for index in import_slots.iter().copied() {
             work.import_evaluations = work
                 .import_evaluations
@@ -580,9 +614,10 @@ pub(crate) fn resolve_dense_with_limit<R: ResolutionReferenceFact>(
                 ResolutionIndexes {
                     direct_names: &direct_names,
                     exported_names: &exported_names,
+                    memberships: Some(&memberships),
                     effective_imports: Some(&effective_imports),
                     exported_imports: Some(&exported_imports),
-                    inherited_names: None,
+                    inherited_names: inherited_import_scopes,
                 },
                 ResolutionScratch {
                     ambiguous_candidates: &mut ambiguous_candidates,
@@ -594,13 +629,20 @@ pub(crate) fn resolve_dense_with_limit<R: ResolutionReferenceFact>(
         }
         let (next_effective_imports, next_exported_imports) = build_effective_import_indexes(
             declarations,
+            declaration_facts,
             &memberships,
             references,
             &all_import_slots,
-            &exported_names,
-            &exported_imports,
+            ImportNameSources {
+                direct_names: &direct_names,
+                exported_names: &exported_names,
+                effective_imports: &effective_imports,
+                exported_imports: &exported_imports,
+                inherited_names: inherited_import_scopes,
+            },
             &outcomes,
         )?;
+        let next_effective_imports = next_effective_imports.with_additional(proposed_imports)?;
         if next_effective_imports == effective_imports && next_exported_imports == exported_imports
         {
             effective_imports = next_effective_imports;
@@ -608,8 +650,15 @@ pub(crate) fn resolve_dense_with_limit<R: ResolutionReferenceFact>(
             converged = true;
             break;
         }
+        let repeated = import_cycle.repeats((
+            next_effective_imports.clone(),
+            next_exported_imports.clone(),
+        ));
         effective_imports = next_effective_imports;
         exported_imports = next_exported_imports;
+        if repeated {
+            break;
+        }
     }
 
     let mut solver_status = if converged {
@@ -634,6 +683,7 @@ pub(crate) fn resolve_dense_with_limit<R: ResolutionReferenceFact>(
             outcomes[index] = ResolutionStatus::NonConverged;
         }
         ambiguous_candidates.clear();
+        ambiguous_candidates.extend_from_slice(settled_ambiguous_candidates);
         SolverStatus::NonConverged
     };
 
@@ -652,6 +702,7 @@ pub(crate) fn resolve_dense_with_limit<R: ResolutionReferenceFact>(
                 ResolutionIndexes {
                     direct_names: &direct_names,
                     exported_names: &exported_names,
+                    memberships: Some(&memberships),
                     effective_imports: Some(&effective_imports),
                     exported_imports: Some(&exported_imports),
                     inherited_names: None,
@@ -704,6 +755,7 @@ pub(crate) fn resolve_dense_with_limit<R: ResolutionReferenceFact>(
                 ResolutionIndexes {
                     direct_names: &direct_names,
                     exported_names: &exported_names,
+                    memberships: Some(&memberships),
                     effective_imports: Some(&effective_imports),
                     exported_imports: Some(&exported_imports),
                     inherited_names: Some(&inherited_names),
@@ -735,6 +787,7 @@ pub(crate) fn resolve_dense_with_limit<R: ResolutionReferenceFact>(
                 ResolutionIndexes {
                     direct_names: &direct_names,
                     exported_names: &exported_names,
+                    memberships: Some(&memberships),
                     effective_imports: Some(&effective_imports),
                     exported_imports: Some(&exported_imports),
                     inherited_names: Some(&inherited_names),
@@ -765,6 +818,7 @@ pub(crate) fn resolve_dense_with_limit<R: ResolutionReferenceFact>(
                 ResolutionIndexes {
                     direct_names: &direct_names,
                     exported_names: &exported_names,
+                    memberships: Some(&memberships),
                     effective_imports: Some(&effective_imports),
                     exported_imports: Some(&exported_imports),
                     inherited_names: Some(&inherited_names),
@@ -1013,6 +1067,7 @@ pub(crate) fn resolve_dense_with_limit<R: ResolutionReferenceFact>(
                     ResolutionIndexes {
                         direct_names: &direct_names,
                         exported_names: &exported_names,
+                        memberships: Some(&memberships),
                         effective_imports: Some(&effective_imports),
                         exported_imports: Some(&exported_imports),
                         inherited_names: Some(&inherited_names),
@@ -1051,6 +1106,7 @@ pub(crate) fn resolve_dense_with_limit<R: ResolutionReferenceFact>(
                     ResolutionIndexes {
                         direct_names: &direct_names,
                         exported_names: &exported_names,
+                        memberships: Some(&memberships),
                         effective_imports: Some(&effective_imports),
                         exported_imports: Some(&exported_imports),
                         inherited_names: Some(&inherited_names),
@@ -1149,6 +1205,7 @@ pub(crate) fn resolve_dense_with_limit<R: ResolutionReferenceFact>(
                     ResolutionIndexes {
                         direct_names: &direct_names,
                         exported_names: &exported_names,
+                        memberships: Some(&memberships),
                         effective_imports: Some(&effective_imports),
                         exported_imports: Some(&exported_imports),
                         inherited_names: Some(&inherited_names),
@@ -1185,6 +1242,7 @@ pub(crate) fn resolve_dense_with_limit<R: ResolutionReferenceFact>(
                 let indexes = ResolutionIndexes {
                     direct_names: &direct_names,
                     exported_names: &exported_names,
+                    memberships: Some(&memberships),
                     effective_imports: Some(&effective_imports),
                     exported_imports: Some(&exported_imports),
                     inherited_names: Some(&inherited_names),
@@ -1239,6 +1297,7 @@ pub(crate) fn resolve_dense_with_limit<R: ResolutionReferenceFact>(
                     ResolutionIndexes {
                         direct_names: &direct_names,
                         exported_names: &exported_names,
+                        memberships: Some(&memberships),
                         effective_imports: Some(&effective_imports),
                         exported_imports: Some(&exported_imports),
                         inherited_names: Some(&inherited_names),
@@ -1331,6 +1390,7 @@ pub(crate) fn resolve_dense_with_limit<R: ResolutionReferenceFact>(
                 ResolutionIndexes {
                     direct_names: &direct_names,
                     exported_names: &exported_names,
+                    memberships: Some(&memberships),
                     effective_imports: Some(&effective_imports),
                     exported_imports: Some(&exported_imports),
                     inherited_names: Some(&inherited_names),
@@ -1690,7 +1750,7 @@ fn build_member_inheritance_closures<R: ResolutionReferenceFact>(
     )
 }
 
-fn reference_target_domain(kind: ReferenceKind) -> DeclarationDomain {
+pub(crate) fn reference_target_domain(kind: ReferenceKind) -> DeclarationDomain {
     if kind == ReferenceKind::Conjugation {
         // `originalType` is any KerML Type, including a Feature (`feature g ~ B::f`).
         // `DeclarationDomain::Type` admits definition-like types only.
@@ -1915,6 +1975,7 @@ pub(crate) fn supported_import_domain(
         | ReferenceKind::ExitActionBinding
         | ReferenceKind::InitialState
         | ReferenceKind::ExpressionOperand
+        | ReferenceKind::QuantityUnit
         | ReferenceKind::TransitionSource
         | ReferenceKind::TransitionTarget
         | ReferenceKind::TransitionTrigger
@@ -2107,7 +2168,6 @@ pub(crate) fn is_usage_declaration(kind: DeclarationKind) -> bool {
             | DeclarationKind::DoActionBinding
             | DeclarationKind::ExitActionBinding
             | DeclarationKind::InitialState
-            | DeclarationKind::FinalState
             | DeclarationKind::PerformParameterBinding
     )
 }
@@ -2259,9 +2319,7 @@ pub(crate) fn definition_usage_candidate_matches(
         Collection::DefinitionOwnedState | Collection::UsageNestedState => {
             matches!(
                 kind,
-                DeclarationKind::StateUsage
-                    | DeclarationKind::ExhibitStateUsage
-                    | DeclarationKind::FinalState
+                DeclarationKind::StateUsage | DeclarationKind::ExhibitStateUsage
             )
         }
         Collection::DefinitionOwnedTransition | Collection::UsageNestedTransition => {
@@ -2385,6 +2443,9 @@ pub(crate) struct ResolutionIndexes<'a> {
     /// for the Subclassification pass itself (it is built from Subclassification's own settled
     /// outcomes) and present for reference kinds resolved afterward, such as FeatureTyping.
     pub(crate) inherited_names: Option<&'a InheritedNameIndex>,
+    /// Effective membership visibility. When present, a qualified-name segment resolves only
+    /// among the public memberships of the previous segment (KerML 8.2.3.5.3).
+    pub(crate) memberships: Option<&'a MembershipIndex>,
 }
 
 pub(crate) struct ResolutionScratch<'a> {
@@ -2483,6 +2544,7 @@ pub(crate) fn resolve_reference<R: ResolutionReferenceFact>(
         } else if matches!(
             reference.kind(),
             ReferenceKind::ExpressionOperand
+                | ReferenceKind::QuantityUnit
                 | ReferenceKind::SatisfySource
                 | ReferenceKind::SatisfyTarget
         ) {
@@ -2556,32 +2618,20 @@ pub(crate) fn resolve_reference<R: ResolutionReferenceFact>(
 
     for segment in &segments[1..] {
         scratch.next_candidates.clear();
+        // `import all` names a membership without regard to its visibility; a namespace import
+        // still reaches its namespace visibly and considers all of that namespace's memberships,
+        // which `build_effective_import_indexes` owns.
+        let regardless_of_visibility =
+            reference.kind() == ReferenceKind::MembershipImport && reference.flags().import_all;
         for candidate in scratch.candidates.iter().copied() {
-            record_lookup(scratch.work)?;
-            // KerML qualified-name traversal continues through the previous segment's visible
-            // memberships. For a Type, those are its directly owned memberships followed by its
-            // inherited memberships; a direct name shadows the inherited tier. The canonical
-            // `inherited_names` index also carries effective-type members for Features, so paths
-            // such as `ConeOrCylinder::faces::edges` traverse `faces` to the members of its type.
-            // Import fallback remains last for owners reached through an imported namespace.
-            let direct = indexes.direct_names.candidates(Some(candidate), *segment);
-            if !direct.is_empty() {
-                scratch.next_candidates.extend_from_slice(direct);
-                continue;
-            }
-            let inherited = indexes
-                .inherited_names
-                .map_or(&[][..], |names| names.candidates(Some(candidate), *segment));
-            if !inherited.is_empty() {
-                scratch.next_candidates.extend_from_slice(inherited);
-                continue;
-            }
-            if let Some(imports) = indexes.exported_imports {
-                record_lookup(scratch.work)?;
-                scratch
-                    .next_candidates
-                    .extend_from_slice(imports.candidates(Some(candidate), *segment));
-            }
+            visible_members_named(
+                &indexes,
+                candidate,
+                *segment,
+                regardless_of_visibility,
+                scratch.next_candidates,
+                scratch.work,
+            )?;
         }
         scratch.next_candidates.sort_unstable();
         scratch.next_candidates.dedup();
@@ -2831,6 +2881,63 @@ pub(crate) fn resolve_member_access_reference_with_path<R: ResolutionReferenceFa
         }
     }
     status_from_candidates(scratch.candidates, scratch.ambiguous_candidates)
+}
+
+/// The members named `segment` that a qualified name reaches through `owner`, appended to `out`.
+///
+/// KerML qualified-name traversal continues through the previous segment's visible memberships.
+/// For a Type, those are its directly owned memberships followed by its inherited memberships; a
+/// direct name shadows the inherited tier. The canonical `inherited_names` index also carries
+/// effective-type members for Features, so paths such as `ConeOrCylinder::faces::edges` traverse
+/// `faces` to the members of its type, and gives an alias a row to its member element. Import
+/// fallback remains last for owners reached through an imported namespace. Only public
+/// memberships are visible (KerML 8.2.3.5.3), wherever the reference is, unless
+/// `regardless_of_visibility` (an `import all`).
+pub(crate) fn visible_members_named(
+    indexes: &ResolutionIndexes<'_>,
+    owner: DeclarationId,
+    segment: crate::model::NameId,
+    regardless_of_visibility: bool,
+    out: &mut Vec<DeclarationId>,
+    work: &mut ResolutionWork,
+) -> Result<(), ResolutionError> {
+    record_lookup(work)?;
+    let visible = |member: &DeclarationId| {
+        regardless_of_visibility
+            || indexes.memberships.is_none_or(|memberships| {
+                memberships
+                    .get(*member)
+                    .is_none_or(|membership| membership.visibility == EffectiveVisibility::Public)
+            })
+    };
+    let before = out.len();
+    out.extend(
+        indexes
+            .direct_names
+            .candidates(Some(owner), segment)
+            .iter()
+            .copied()
+            .filter(visible),
+    );
+    if out.len() > before {
+        return Ok(());
+    }
+    out.extend(
+        indexes
+            .inherited_names
+            .map_or(&[][..], |names| names.candidates(Some(owner), segment))
+            .iter()
+            .copied()
+            .filter(visible),
+    );
+    if out.len() > before {
+        return Ok(());
+    }
+    if let Some(imports) = indexes.exported_imports {
+        record_lookup(work)?;
+        out.extend_from_slice(imports.candidates(Some(owner), segment));
+    }
+    Ok(())
 }
 
 pub(crate) fn record_lookup(work: &mut ResolutionWork) -> Result<(), ResolutionError> {

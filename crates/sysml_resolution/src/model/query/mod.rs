@@ -1,9 +1,20 @@
 //! Phase 9: the read-only query surface over a finished model.
 
+use std::collections::{BTreeMap, BTreeSet};
+
 pub(crate) mod ends;
+mod import_plan;
 mod redefinition;
+mod repair;
+pub use import_plan::{
+    CompletionImports, ImportChoice, ImportPlan, ImportRemainder, ImportRemainderReason,
+};
 mod visible;
 
+pub use repair::{
+    ImplicitRedefinitionRepair, ImportCandidate, QualificationCandidate, ReferenceRepair,
+    ReferenceRepairOutcome, RepairNamespace, RepairSlot,
+};
 pub use visible::VisibleMemberRef;
 pub use visible::VisibleMembers;
 
@@ -39,6 +50,7 @@ use crate::model::ReferenceKind;
 use crate::namespace_query::NamespaceDerivedElementCollection;
 use crate::namespace_query::NamespaceImportDerivedElement;
 use crate::projection::AdmittedSourceCounts;
+use crate::projection::LibraryElementInclusion;
 use crate::projection::ProjectedElement;
 use crate::projection::ProjectionEnvelope;
 use crate::projection::ProjectionPhase;
@@ -368,6 +380,10 @@ impl<D> SemanticModel<D> {
         self.qualified_names.qualified_name(id)
     }
 
+    pub(crate) fn symbol_element_qualified_name(&self, symbol: SymbolId) -> Option<String> {
+        self.normative_qualified_name(self.declaration_of(symbol)?, 0)
+    }
+
     /// The stable structural encoding of a handle, materialised for a boundary.
     ///
     /// The encoding is derived from the owner chain, so this allocates: it is what a consumer
@@ -686,6 +702,7 @@ impl<D> SemanticModel<D> {
                 effective_imports: Some(&self.effective_imports),
                 exported_imports: Some(&self.effective_imports),
                 inherited_names: Some(&self.resolution.inherited_names),
+                memberships: None,
             },
             owner,
             first,
@@ -925,6 +942,26 @@ impl ResolvedSemanticModel {
 
     pub(crate) fn diagnostics(&self) -> &[Diagnostic] {
         &self.diagnostics.diagnostics
+    }
+
+    pub(crate) fn document_unsupported_constructs(
+        &self,
+        document: DocumentId,
+    ) -> impl Iterator<Item = crate::UnsupportedConstructId> + '_ {
+        self.storage
+            .unsupported
+            .iter()
+            .enumerate()
+            .filter(move |(_, record)| record.document.index() == document.index())
+            .map(|(index, _)| crate::UnsupportedConstructId(index))
+    }
+
+    pub(crate) fn unsupported_construct(
+        &self,
+        id: crate::UnsupportedConstructId,
+    ) -> Option<crate::UnsupportedConstruct> {
+        self.unsupported_construct_fact(self.storage.unsupported.get(id.0)?)
+            .ok()
     }
     pub(crate) fn write_semantic_sexpr(
         &self,
@@ -1398,7 +1435,7 @@ impl<D> SemanticModel<D> {
             || self
                 .storage
                 .declaration(declaration)
-                .is_none_or(|value| !DeclarationDomain::Type.accepts(value.kind))
+                .is_none_or(|value| !DeclarationDomain::MetamodelType.accepts(value.kind))
         {
             return self.query_outcome(QueryAnswer::Unsupported);
         }
@@ -1691,19 +1728,23 @@ impl<D> SemanticModel<D> {
         let matched = self
             .feature_members(declaration)
             .into_iter()
-            .filter(|candidate_id| {
-                self.storage
-                    .declaration(*candidate_id)
-                    .is_some_and(|candidate| {
-                        element_kind::membership_role(candidate.kind) == Some(role)
-                    })
-            });
-        let values = if first_only {
+            .filter(|candidate_id| self.effective_membership_role(*candidate_id) == Some(role));
+        let values = if role == crate::MembershipRole::Subject {
+            self.symbols_in_order(self.subject_parameter(declaration).into_iter())
+        } else if first_only {
             self.symbols_in_order(matched.take(1))
         } else {
             self.symbols(matched)
         };
         self.resolved_outcome(RequirementDerivedFactOutcome::Elements(values))
+    }
+
+    /// SysML subjectParameter is the first effective SubjectMembership, including inherited
+    /// memberships after redefinition reduction. Checks and projections share this selection.
+    pub(crate) fn subject_parameter(&self, owner: DeclarationId) -> Option<DeclarationId> {
+        self.feature_members(owner).into_iter().find(|member| {
+            self.effective_membership_role(*member) == Some(crate::MembershipRole::Subject)
+        })
     }
 
     fn composite_viewpoint_usages(&self, owner: DeclarationId) -> Box<[SymbolId]> {
@@ -2410,7 +2451,7 @@ impl<D> SemanticModel<D> {
             ));
             return self.resolved_outcome(ActionDerivedFactOutcome::Values(values));
         }
-        let state_subaction = |kind: DeclarationKind| {
+        let first_owned_kind = |kind: DeclarationKind| {
             self.symbols_in_order(
                 self.child_declarations(declaration)
                     .iter()
@@ -2419,6 +2460,17 @@ impl<D> SemanticModel<D> {
                         self.storage
                             .declaration(*member)
                             .is_some_and(|member| member.kind == kind)
+                    })
+                    .take(1),
+            )
+        };
+        let state_subaction = |kind: crate::StateSubactionKind| {
+            self.symbols_in_order(
+                self.feature_members(declaration)
+                    .into_iter()
+                    .filter(|member| {
+                        self.effective_membership_role(*member)
+                            == Some(crate::MembershipRole::StateSubaction(kind))
                     })
                     .take(1),
             )
@@ -2439,21 +2491,21 @@ impl<D> SemanticModel<D> {
                 if source_kind == Some(DeclarationKind::StateDefinition) =>
             {
                 self.resolved_outcome(ActionDerivedFactOutcome::Values(state_subaction(
-                    DeclarationKind::EntryActionBinding,
+                    crate::StateSubactionKind::Entry,
                 )))
             }
             ActionDerivedFactCollection::StateDefinitionDoAction
                 if source_kind == Some(DeclarationKind::StateDefinition) =>
             {
                 self.resolved_outcome(ActionDerivedFactOutcome::Values(state_subaction(
-                    DeclarationKind::DoActionBinding,
+                    crate::StateSubactionKind::Do,
                 )))
             }
             ActionDerivedFactCollection::StateDefinitionExitAction
                 if source_kind == Some(DeclarationKind::StateDefinition) =>
             {
                 self.resolved_outcome(ActionDerivedFactOutcome::Values(state_subaction(
-                    DeclarationKind::ExitActionBinding,
+                    crate::StateSubactionKind::Exit,
                 )))
             }
             ActionDerivedFactCollection::StateUsageEntryAction
@@ -2463,7 +2515,7 @@ impl<D> SemanticModel<D> {
                 ) =>
             {
                 self.resolved_outcome(ActionDerivedFactOutcome::Values(state_subaction(
-                    DeclarationKind::EntryActionBinding,
+                    crate::StateSubactionKind::Entry,
                 )))
             }
             ActionDerivedFactCollection::StateUsageDoAction
@@ -2473,7 +2525,7 @@ impl<D> SemanticModel<D> {
                 ) =>
             {
                 self.resolved_outcome(ActionDerivedFactOutcome::Values(state_subaction(
-                    DeclarationKind::DoActionBinding,
+                    crate::StateSubactionKind::Do,
                 )))
             }
             ActionDerivedFactCollection::StateUsageExitAction
@@ -2483,7 +2535,7 @@ impl<D> SemanticModel<D> {
                 ) =>
             {
                 self.resolved_outcome(ActionDerivedFactOutcome::Values(state_subaction(
-                    DeclarationKind::ExitActionBinding,
+                    crate::StateSubactionKind::Exit,
                 )))
             }
             ActionDerivedFactCollection::StateDefinitionState
@@ -2492,7 +2544,6 @@ impl<D> SemanticModel<D> {
                 self.resolved_outcome(ActionDerivedFactOutcome::Values(usage_projection(&[
                     DeclarationKind::StateUsage,
                     DeclarationKind::ExhibitStateUsage,
-                    DeclarationKind::FinalState,
                 ])))
             }
             ActionDerivedFactCollection::CalculationDefinitionCalculation
@@ -2561,7 +2612,7 @@ impl<D> SemanticModel<D> {
             ActionDerivedFactCollection::PortDefinitionConjugatedPortDefinition
                 if source_kind == Some(DeclarationKind::PortDefinition) =>
             {
-                self.resolved_outcome(ActionDerivedFactOutcome::Values(state_subaction(
+                self.resolved_outcome(ActionDerivedFactOutcome::Values(first_owned_kind(
                     DeclarationKind::ConjugatedPortDefinition,
                 )))
             }
@@ -5030,6 +5081,7 @@ impl<D> SemanticModel<D> {
                         .unwrap_or(PublishedExpression {
                             element,
                             outcome: ExpressionOutcome::NotApplicable,
+                            result_typing: crate::ExpressionResultTyping::Unresolved,
                             nodes: Box::default(),
                             root: None,
                         }),
@@ -5121,7 +5173,96 @@ impl<D> SemanticModel<D> {
         }
     }
 
-    /// The whole-workspace projection: every workspace element with its full details and composed
+    fn elements_for_projection<'a>(
+        &self,
+        elements: &'a [crate::PublishedElement],
+        inclusion: LibraryElementInclusion,
+    ) -> Vec<&'a crate::PublishedElement> {
+        match inclusion {
+            LibraryElementInclusion::None => elements
+                .iter()
+                .filter(|element| element.source == ElementSource::Workspace)
+                .collect(),
+            LibraryElementInclusion::All => elements
+                .iter()
+                .filter(|element| element.source != ElementSource::StandardLibrary)
+                .collect(),
+            LibraryElementInclusion::Referenced => {
+                let selected = self.referenced_projection_symbols(elements);
+                elements
+                    .iter()
+                    .filter(|element| selected.contains(&element.entry.identity))
+                    .collect()
+            }
+        }
+    }
+
+    /// Workspace elements plus the transitive closure of their relationship targets.
+    ///
+    /// Owned members are included for library and external targets, so a referenced definition's
+    /// features are in the same projection. A named standard-library element is included alone:
+    /// following its owned members would pull the standard library into the export.
+    fn referenced_projection_symbols(
+        &self,
+        elements: &[crate::PublishedElement],
+    ) -> BTreeSet<SymbolId> {
+        let mut selected = elements
+            .iter()
+            .filter(|element| element.source == ElementSource::Workspace)
+            .map(|element| element.entry.identity)
+            .collect::<BTreeSet<_>>();
+        let source_of = elements
+            .iter()
+            .map(|element| (element.entry.identity, element.source))
+            .collect::<BTreeMap<_, _>>();
+        let mut pending = selected.iter().copied().collect::<Vec<_>>();
+        while let Some(symbol) = pending.pop() {
+            let QueryAnswer::Resolved(details) = self.element_details(symbol).answer else {
+                continue;
+            };
+            for family in [
+                &details.typing,
+                &details.specialization,
+                &details.subsetting,
+                &details.redefinition,
+            ] {
+                for target in &family.targets {
+                    let Some(source) = source_of.get(&target.identity).copied() else {
+                        continue;
+                    };
+                    if source == ElementSource::Workspace || !selected.insert(target.identity) {
+                        continue;
+                    }
+                    if matches!(source, ElementSource::Library | ElementSource::External) {
+                        pending.push(target.identity);
+                        if let Some(declaration) = self.declaration_of(target.identity) {
+                            self.collect_owned_symbols(declaration, &mut selected, &mut pending);
+                        }
+                    }
+                }
+            }
+        }
+        selected
+    }
+
+    fn collect_owned_symbols(
+        &self,
+        root: crate::model::DeclarationId,
+        into: &mut BTreeSet<SymbolId>,
+        referenced: &mut Vec<SymbolId>,
+    ) {
+        let mut pending = self.child_declarations(root).to_vec();
+        while let Some(child) = pending.pop() {
+            if let Some(symbol) = self.symbol_id(child) {
+                if into.insert(symbol) {
+                    referenced.push(symbol);
+                }
+            }
+            pending.extend(self.child_declarations(child).iter().copied());
+        }
+    }
+
+    /// The whole-workspace projection: every selected element with its full details and composed
     /// resolved facts, every connector, and a publication envelope.
     ///
     /// Adds no analysis -- it composes [`Self::all_elements`], [`Self::element_details`],
@@ -5136,20 +5277,19 @@ impl<D> SemanticModel<D> {
         max_nodes: usize,
         source_digest: RootDigest,
         model_digest: PublicationModelDigest,
+        inclusion: LibraryElementInclusion,
     ) -> QueryOutcome<PublishedModelProjection> {
-        let workspace_elements = match self.all_elements().answer {
+        let published_elements = match self.all_elements().answer {
             QueryAnswer::Resolved(elements) => elements,
             _ => return self.query_outcome(QueryAnswer::Incomplete),
         };
-        let workspace_elements = workspace_elements
-            .iter()
-            .filter(|element| element.source == ElementSource::Workspace)
-            .collect::<Vec<_>>();
-        let elements_total = workspace_elements.len();
+        let selected = self.elements_for_projection(&published_elements, inclusion);
+        let elements_total = selected.len();
 
         let mut elements = Vec::new();
+        let mut qualified_names = BTreeMap::new();
         let mut elements_incomplete = 0usize;
-        for published in workspace_elements.into_iter().take(max_nodes) {
+        for published in selected.into_iter().take(max_nodes) {
             let symbol = published.entry.identity;
             let details = match self.element_details(symbol).answer {
                 QueryAnswer::Resolved(details) => details,
@@ -5167,6 +5307,7 @@ impl<D> SemanticModel<D> {
                 _ => PublishedExpression {
                     element: symbol,
                     outcome: ExpressionOutcome::NotApplicable,
+                    result_typing: crate::ExpressionResultTyping::Unresolved,
                     nodes: Box::default(),
                     root: None,
                 },
@@ -5175,11 +5316,29 @@ impl<D> SemanticModel<D> {
                 QueryAnswer::Resolved(annotations) => annotations,
                 _ => Box::default(),
             };
+            let effective_name = self.effective_name_for_projection(symbol);
+            let effective_qualified_name =
+                self.effective_qualified_name_for_projection(symbol, &mut qualified_names);
+            let multiplicity_expressions = self.multiplicity_for_projection(symbol);
+            let exposure = self.declaration_of(symbol).and_then(|declaration| {
+                self.authored_references(declaration, &[ReferenceKind::ViewExpose])
+                    .first()
+                    .map(|(_, reference)| crate::projection::ProjectedExposure {
+                        namespace: reference.flags.wildcard,
+                        recursive: reference.flags.recursive,
+                        filtered: reference.flags.filtered,
+                    })
+            });
             elements.push(ProjectedElement {
                 identity: symbol,
-                source: ElementSource::Workspace,
+                source: published.source,
                 details,
+                effective_name,
+                effective_qualified_name,
+                multiplicity_expressions,
+                exposure,
                 expression,
+                contextual_evaluations: self.contextual_evaluations_for_projection(symbol),
                 metadata_annotations,
             });
         }
@@ -5209,19 +5368,145 @@ impl<D> SemanticModel<D> {
         })
     }
 
+    fn contextual_evaluations_for_projection(
+        &self,
+        symbol: SymbolId,
+    ) -> Box<[crate::ProjectedContextualEvaluation]> {
+        use crate::index::resolved_expressions::ContextualExpressionResult;
+        use crate::{ContextualEvaluationOutcome, ProjectedContextualEvaluation};
+        let Some(context) = self.declaration_of(symbol) else {
+            return Box::default();
+        };
+        self.resolved_expressions
+            .contextual
+            .range((context, DeclarationId(0))..=(context, DeclarationId(u32::MAX)))
+            .filter_map(|((_, element), contextual)| {
+                Some(ProjectedContextualEvaluation {
+                    element: self.symbol_id(*element)?,
+                    authored_element: self.symbol_id(contextual.authored)?,
+                    effective_element: self.symbol_id(contextual.effective)?,
+                    outcome: match &contextual.result {
+                        ContextualExpressionResult::Resolved(_) => {
+                            ContextualEvaluationOutcome::Resolved(contextual.evaluation.clone())
+                        }
+                        ContextualExpressionResult::Unresolved => {
+                            ContextualEvaluationOutcome::Unresolved
+                        }
+                        ContextualExpressionResult::Ambiguous(candidates) => {
+                            ContextualEvaluationOutcome::Ambiguous(
+                                candidates
+                                    .iter()
+                                    .map(|id| self.symbol_id(*id))
+                                    .collect::<Option<_>>()?,
+                            )
+                        }
+                    },
+                })
+            })
+            .collect()
+    }
+
+    fn effective_name_for_projection(&self, symbol: SymbolId) -> Option<Box<str>> {
+        let QueryAnswer::Resolved(identification) = self.effective_identification(symbol).answer
+        else {
+            return None;
+        };
+        match identification.name {
+            crate::EffectiveName::Resolved(name) => Some(name.into()),
+            _ => None,
+        }
+    }
+
+    fn effective_qualified_name_for_projection(
+        &self,
+        symbol: SymbolId,
+        cache: &mut BTreeMap<DeclarationId, Option<Box<str>>>,
+    ) -> Option<Box<str>> {
+        let declaration = self.declaration_of(symbol)?;
+        let mut current = declaration;
+        let mut pending = Vec::new();
+        while !cache.contains_key(&current) {
+            pending.push(current);
+            let Some(owner) = self.storage.declaration(current)?.owner else {
+                break;
+            };
+            current = owner;
+        }
+        // Owners precede their children in this local memo, including absent/unresolved names.
+        // The memo belongs to this immutable publication and this projection call only.
+        for current in pending.into_iter().rev() {
+            let name = self
+                .symbol_id(current)
+                .and_then(|symbol| self.effective_name_for_projection(symbol));
+            let qualified = name.and_then(|name| match self.storage.declaration(current)?.owner {
+                Some(owner) => cache
+                    .get(&owner)?
+                    .as_ref()
+                    .map(|prefix| format!("{prefix}::{name}").into_boxed_str()),
+                None => Some(name),
+            });
+            cache.insert(current, qualified);
+        }
+        cache.get(&declaration).cloned().flatten()
+    }
+    fn multiplicity_for_projection(
+        &self,
+        symbol: SymbolId,
+    ) -> Option<crate::projection::ProjectedMultiplicity> {
+        let QueryAnswer::Resolved(crate::TypeDerivedFactOutcome::Values(values)) = self
+            .type_derived_fact(symbol, TypeDerivedFactCollection::Multiplicity)
+            .answer
+        else {
+            return None;
+        };
+        let [crate::TypeDerivedFactValue::Multiplicity { element }] = values.as_ref() else {
+            return None;
+        };
+        let bound = |collection| match self.action_derived_fact(*element, collection).answer {
+            QueryAnswer::Resolved(crate::ActionDerivedFactOutcome::Values(values)) => {
+                values.first().copied()
+            }
+            _ => None,
+        };
+        Some(crate::projection::ProjectedMultiplicity {
+            range: *element,
+            lower: bound(ActionDerivedFactCollection::MultiplicityRangeLowerBound),
+            upper: bound(ActionDerivedFactCollection::MultiplicityRangeUpperBound),
+        })
+    }
+
     /// How many admitted documents are non-workspace, by provenance. Mirrors the tally
     /// `render::write_admitted_sources` renders for the SMG section.
     fn admitted_source_counts(&self) -> AdmittedSourceCounts {
         let mut counts = AdmittedSourceCounts::default();
         for document in self.storage.documents.iter() {
             match document.role {
-                SourceRole::Workspace => {}
+                SourceRole::Workspace => counts.workspace += 1,
                 SourceRole::StandardLibrary => counts.standard_library += 1,
                 SourceRole::Library => counts.library += 1,
                 SourceRole::External => counts.external += 1,
             }
         }
         counts
+    }
+
+    /// One workspace connector and its resolved ends, or `None` when `symbol` is not a connector.
+    ///
+    /// The same projection [`Self::all_connectors`] publishes for each connector. A named end that
+    /// reuses the connection-usage kind, and a connector outside the workspace, are not connectors
+    /// of this query.
+    pub(crate) fn connector(&self, symbol: SymbolId) -> QueryOutcome<Option<PublishedConnector>> {
+        let declaration = match self.single_declaration(symbol) {
+            Ok(declaration) => declaration,
+            Err(outcome) => return outcome,
+        };
+        let Some(record) = self.storage.declaration(declaration) else {
+            return self.query_outcome(QueryAnswer::Unresolved);
+        };
+        let Some(kind) = connector_kind(record.kind) else {
+            return self.resolved_outcome(None);
+        };
+        self.resolved_outcome(self.project_connector(declaration, record, kind))
     }
 
     /// The `connect` / `interface` topology reachable from one element: every connector it owns
